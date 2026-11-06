@@ -11,6 +11,7 @@ import type { D1Database, Env } from "../types.ts";
 import {
   getFacebookAccounts,
   getFacebookAccountById,
+  saveFacebookAccount,
   updateFacebookAccountStatus,
   upsertFacebookPage,
   removeStaleAccountPages,
@@ -28,6 +29,203 @@ import { parseVnScheduleToUtc } from "../utils/timezone.ts";
 // ==========================================
 // 1. SYNC FANPAGES (/me/accounts PAGINATION)
 // ==========================================
+
+export function extractAccessToken(raw: string): string {
+  if (!raw || typeof raw !== "string") return "";
+  let text = raw.trim();
+  // 1. Nếu paste URL từ Graph API Explorer hoặc Graph API endpoint:
+  if (text.includes("access_token=")) {
+    const match = /[?&]access_token=([^&,\s"']+)/.exec(text);
+    if (match) return decodeURIComponent(match[1]).trim();
+  }
+  // 2. Nếu paste JSON từ Explorer:
+  if (text.startsWith("{") && text.includes('"access_token"')) {
+    try {
+      const obj = JSON.parse(text);
+      if (obj.access_token) return String(obj.access_token).trim();
+      if (Array.isArray(obj.data) && obj.data[0]?.access_token) {
+        return String(obj.data[0].access_token).trim();
+      }
+    } catch {}
+  }
+  // 3. Match chuẩn Access Token Facebook (EAA...)
+  const matchEaa = /(EAA[A-Za-z0-9_-]{30,})/.exec(text);
+  if (matchEaa) return matchEaa[1].trim();
+
+  return text.replace(/^["']|["']$/g, "").trim();
+}
+
+export async function connectFacebookWithAccessToken(
+  db: D1Database,
+  env: Env,
+  rawTokenInput: string,
+  ownerUserId: string
+): Promise<{
+  success: boolean;
+  message: string;
+  account_id?: string;
+  user_id?: string;
+  user_name?: string;
+  synced_count?: number;
+  no_pages?: boolean;
+  is_long_lived?: boolean;
+  accounts?: unknown[];
+  pages?: unknown[];
+  missing_scopes?: string[];
+}> {
+  const token = extractAccessToken(rawTokenInput);
+  if (!token) {
+    return {
+      success: false,
+      message: "Vui lòng nhập Access Token từ Graph API Explorer."
+    };
+  }
+
+  const cfg = getMetaConfig(env);
+
+  // 1. Xác thực Access Token với Meta Graph API (/me?fields=id,name)
+  let fbUserId = "";
+  let fbUserName = "Facebook User";
+  try {
+    const meResp = await fetch(
+      `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(token)}`
+    );
+    const meData = (await meResp.json()) as Record<string, unknown>;
+    if (!meResp.ok || !meData.id) {
+      const err = (meData.error || {}) as Record<string, unknown>;
+      const code = Number(err.code || 0);
+      const subcode = Number(err.error_subcode || 0);
+      if (code === 190 || subcode === 463 || subcode === 467) {
+        return {
+          success: false,
+          message: "Access Token đã hết hạn hoặc không hợp lệ. Vui lòng bấm 'Generate Access Token' trên Graph API Explorer để lấy mã mới."
+        };
+      }
+      return {
+        success: false,
+        message: "Không thể xác thực Access Token với Facebook. Vui lòng kiểm tra lại token vừa dán."
+      };
+    }
+    fbUserId = String(meData.id);
+    fbUserName = String(meData.name || "Facebook User");
+  } catch {
+    return {
+      success: false,
+      message: "Lỗi kết nối tới Facebook Graph API. Vui lòng kiểm tra mạng và thử lại."
+    };
+  }
+
+  // 2. Kiểm tra danh sách quyền thực tế đã cấp qua /me/permissions
+  const grantedScopes: string[] = [];
+  const declinedScopes: string[] = [];
+  try {
+    const permResp = await fetch(
+      `${cfg.graphBase}/me/permissions?access_token=${encodeURIComponent(token)}`
+    );
+    if (permResp.ok) {
+      const permData = (await permResp.json()) as {
+        data?: Array<{ permission: string; status: string }>;
+      };
+      for (const item of permData.data || []) {
+        if (item.status === "granted") grantedScopes.push(item.permission);
+        else if (item.status === "declined") declinedScopes.push(item.permission);
+      }
+    }
+  } catch {}
+
+  // Kiểm tra các quyền cốt lõi cho Page & Reels
+  const essentialScopes = ["pages_show_list", "pages_read_engagement", "pages_manage_posts"];
+  const missingEssential = essentialScopes.filter(
+    (s) => declinedScopes.includes(s) || (grantedScopes.length > 0 && !grantedScopes.includes(s))
+  );
+  if (missingEssential.length > 0) {
+    return {
+      success: false,
+      missing_scopes: missingEssential,
+      message: `Token thiếu quyền bắt buộc để quản lý Fanpage (${missingEssential.join(", ")}). Vui lòng thêm các quyền này tại Bước 3 trên Graph API Explorer rồi tạo lại token.`
+    };
+  }
+
+  // 3. Tự động nâng cấp sang Long-Lived User Access Token (~60 ngày) nếu có App Secret
+  let finalToken = token;
+  let isLongLived = false;
+  let expiresIn = 60 * 86400;
+
+  if (cfg.appId && cfg.appSecret) {
+    try {
+      const llParams = new URLSearchParams({
+        grant_type: "fb_exchange_token",
+        client_id: cfg.appId,
+        client_secret: cfg.appSecret,
+        fb_exchange_token: token
+      });
+      const llResp = await fetch(`${cfg.graphBase}/oauth/access_token?${llParams.toString()}`);
+      if (llResp.ok) {
+        const llData = (await llResp.json()) as Record<string, unknown>;
+        if (llData.access_token) {
+          finalToken = String(llData.access_token);
+          expiresIn = Number(llData.expires_in || 60 * 86400);
+          isLongLived = true;
+        }
+      }
+    } catch {
+      // Giữ nguyên token gốc nếu không nâng cấp được
+    }
+  }
+
+  const expiresAtIso = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+  // 4. Lưu tài khoản an toàn vào D1 (Token được mã hóa AES-256-GCM, chống trùng lặp)
+  let accountId: string;
+  try {
+    accountId = await saveFacebookAccount(db, cfg.encryptionKey, {
+      facebookUserId: fbUserId,
+      facebookUserName: fbUserName,
+      facebookUserEmail: null,
+      accessToken: finalToken,
+      tokenType: isLongLived ? "long_lived_user" : "user_explorer",
+      scopes: grantedScopes,
+      missingScopes: [],
+      tokenExpiresAt: expiresAtIso,
+      status: "connected",
+      tokenStatus: "valid",
+      ownerUserId
+    });
+  } catch {
+    return {
+      success: false,
+      message: "Không thể lưu thông tin tài khoản vào hệ thống. Vui lòng thử lại."
+    };
+  }
+
+  // 5. Tự động gọi /me/accounts lấy toàn bộ Fanpage kèm Page Access Token (xử lý pagination)
+  const syncRes = await syncPagesForAccount(db, env, accountId, ownerUserId);
+
+  // 6. Truy vấn danh sách Fanpage và Admin cập nhật
+  const updatedAccounts = await getFacebookAccounts(db, cfg.encryptionKey, false, ownerUserId);
+  const updatedPages = await getFacebookPages(db, cfg.encryptionKey, {
+    includeToken: false,
+    ownerUserId
+  });
+
+  const syncedCount = syncRes.synced_count || 0;
+  const successMsg = syncRes.no_pages
+    ? `Đã liên kết tài khoản Facebook "${fbUserName}", nhưng tài khoản này chưa quản lý Fanpage nào.`
+    : `Đã liên kết tài khoản "${fbUserName}" và đồng bộ thành công ${syncedCount} Fanpage!`;
+
+  return {
+    success: true,
+    message: successMsg,
+    account_id: accountId,
+    user_id: fbUserId,
+    user_name: fbUserName,
+    synced_count: syncedCount,
+    no_pages: syncRes.no_pages || false,
+    is_long_lived: isLongLived,
+    accounts: updatedAccounts,
+    pages: updatedPages
+  };
+}
 
 export async function syncPagesForAccount(
   db: D1Database,

@@ -162,13 +162,6 @@
           <span>{{ isRunning ? 'Đang chạy' : 'Đang rảnh' }}</span>
         </div>
 
-        <!-- Nút RUN TEST: Chẩn đoán toàn diện KHÔNG upload -->
-        <button @click="handleRunTest" :disabled="isRunning || isRunningTest" class="flex items-center gap-1.5 bg-gradient-to-r from-amber-600 to-indigo-600 hover:from-amber-500 hover:to-indigo-500 text-white font-bold px-3 py-1.5 rounded-xl shadow-lg shadow-indigo-950/40 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-xs" title="Kiểm tra token, quyền Page, video và caption mà KHÔNG đăng hay tải video">
-          <svg v-if="isRunningTest" class="animate-spin w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-          <span v-else class="text-sm">🧪</span>
-          <span>Chạy Thử</span>
-        </button>
-
         <!-- Nút RUN TASK: Đăng thật lên Graph API -->
         <button @click="handleRunBatch" :disabled="isRunning || systemStats.selected_pages === 0" class="flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold px-3.5 py-1.5 rounded-xl shadow-lg shadow-emerald-950/40 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-xs" title="Upload và Đăng Reels thật cho các Fanpage đã chọn qua Meta Graph API">
           <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M4.5 3.5v13l11-6.5-11-6.5z"/></svg>
@@ -461,7 +454,9 @@
             <div class="flex items-center gap-1.5 text-xs text-slate-400">
               <select v-model="filterStatus" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
                 <option value="">Tất cả trạng thái</option>
-                <option value="pending">Chờ xử lý (Pending)</option>
+                <option value="scheduled">Đang chờ lịch (Scheduled)</option>
+                <option value="pending">Chờ đăng (Pending)</option>
+                <option value="queued">Hàng đợi (Queued)</option>
                 <option value="running">Đang đăng (Running)</option>
                 <option value="success">Thành công (Success)</option>
                 <option value="failed">Thất bại (Failed)</option>
@@ -560,10 +555,13 @@
 
                 <!-- Status -->
                 <td class="py-2.5 px-3 text-center whitespace-nowrap">
-                  <span v-if="t.status === 'pending'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Chờ xử lý</span>
+                  <span v-if="t.status === 'scheduled'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">🕒 Đang chờ lịch</span>
+                  <span v-else-if="t.status === 'queued'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">Hàng đợi</span>
+                  <span v-else-if="t.status === 'pending'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Chờ đăng</span>
                   <span v-else-if="t.status === 'running'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/30 animate-pulse">Đang đăng...</span>
                   <span v-else-if="t.status === 'success'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Thành công</span>
                   <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">Thất bại</span>
+                  <span v-else-if="t.status === 'cancelled'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">Đã hủy</span>
                 </td>
 
                 <!-- Link Reels / Log -->
@@ -609,146 +607,6 @@
       </section>
 
     </main>
-
-    <!-- ================= MODAL: CHẠY THỬ (RUN TEST DIAGNOSTIC) ================= -->
-    <div v-if="showRunTestModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
-        
-        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
-          <div class="flex items-center gap-2">
-            <span class="text-xl">🧪</span>
-            <div>
-              <h3 class="font-bold text-white text-base">Kết Quả Chẩn Đoán Hệ Thống (Run Test)</h3>
-              <p class="text-[11px] text-slate-400">Kiểm tra toàn diện trước khi đăng - Tuyệt đối không upload hay publish video</p>
-            </div>
-          </div>
-          <button @click="showRunTestModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
-        </div>
-
-        <div class="p-5 overflow-y-auto space-y-4">
-          <!-- Summary Banner -->
-          <div class="p-3.5 rounded-xl border flex items-center justify-between"
-               :class="{
-                 'bg-emerald-950/40 border-emerald-600/50 text-emerald-300': testResult.status === 'passed',
-                 'bg-amber-950/40 border-amber-600/50 text-amber-300': testResult.status === 'warning',
-                 'bg-rose-950/40 border-rose-600/50 text-rose-300': testResult.status === 'failed'
-               }">
-            <div class="flex items-center gap-2.5">
-              <span class="text-2xl font-bold">
-                {{ testResult.status === 'passed' ? '✅' : (testResult.status === 'warning' ? '⚠️' : '❌') }}
-              </span>
-              <div>
-                <div class="font-bold text-sm uppercase tracking-wide">
-                  {{ testResult.status === 'passed' ? 'Hệ thống sẵn sàng đăng Reels!' : (testResult.status === 'warning' ? 'Có cảnh báo cần lưu ý' : 'Chưa đủ điều kiện đăng bài') }}
-                </div>
-                <div class="text-xs opacity-90 mt-0.5">{{ testResult.message }}</div>
-              </div>
-            </div>
-            <span class="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-black/40">
-              {{ testResult.status }}
-            </span>
-          </div>
-
-          <!-- Step 1: Facebook Admin Connection -->
-          <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 font-bold text-xs text-white">
-                <span>1. Kết Nối Tài Khoản Facebook</span>
-              </div>
-              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
-                    :class="testResult.oauth_check?.connected ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'">
-                {{ testResult.oauth_check?.connected ? (testResult.oauth_check?.connected_count ? testResult.oauth_check.connected_count + ' tài khoản kết nối' : '✓ Đang kết nối') : '✗ Chưa kết nối' }}
-              </span>
-            </div>
-            <div class="text-xs text-slate-300 space-y-1 pl-4 border-l-2 border-slate-800 text-[11px]">
-              <div>• Tài khoản chính: <b>{{ testResult.oauth_check?.user_name || 'N/A' }}</b></div>
-              <div v-if="testResult.oauth_check?.accounts && testResult.oauth_check.accounts.length > 1" class="text-indigo-300">
-                • Các tài khoản đã kết nối ({{ testResult.oauth_check.accounts.length }}): {{ testResult.oauth_check.accounts.map(a => a.user_name).join(', ') }}
-              </div>
-              <div v-if="testResult.oauth_check?.missing_scopes?.length" class="text-rose-400">
-                • Trạng thái quyền: Facebook chưa cấp đủ quyền cần thiết
-              </div>
-            </div>
-          </div>
-
-          <!-- Step 2: Fanpage Permissions -->
-          <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 font-bold text-xs text-white">
-                <span>2. Quyền Đăng Bài Fanpage ({{ testResult.page_checks?.length || 0 }} Pages)</span>
-              </div>
-              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
-                    :class="testResult.valid_pages_count > 0 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'">
-                {{ testResult.valid_pages_count }}/{{ testResult.page_checks?.length || 0 }} Đủ quyền
-              </span>
-            </div>
-            <div class="space-y-1.5 max-h-36 overflow-y-auto">
-              <div v-for="p in testResult.page_checks" :key="p.facebook_page_id" class="flex items-center justify-between text-xs p-2 rounded-lg bg-slate-900 border border-slate-800/80">
-                <div class="truncate">
-                  <span class="font-bold text-slate-200">{{ p.name }}</span>
-                  <span class="text-[10px] text-slate-500 font-mono ml-1.5">({{ p.facebook_page_id }})</span>
-                </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <span v-if="p.can_post" class="text-emerald-400 text-[11px] font-bold">✓ Đủ quyền</span>
-                  <span v-else class="text-rose-400 text-[11px] font-bold">⚠ {{ p.error || 'Thiếu quyền' }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Step 3: Video Files Check -->
-          <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 font-bold text-xs text-white">
-                <span>3. Kiểm Tra File Video ({{ testResult.video_checks?.length || 0 }} files)</span>
-              </div>
-              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
-                    :class="testResult.valid_videos_count === testResult.video_checks?.length ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'">
-                {{ testResult.valid_videos_count }}/{{ testResult.video_checks?.length || 0 }} Tồn tại
-              </span>
-            </div>
-            <div class="space-y-1 max-h-36 overflow-y-auto font-mono text-[11px]">
-              <div v-for="(v, idx) in testResult.video_checks" :key="idx" class="flex items-center justify-between p-1.5 rounded bg-slate-900">
-                <div class="truncate text-slate-300" :title="v.path">{{ getFileName(v.path) }}</div>
-                <div class="shrink-0 flex items-center gap-2">
-                  <span class="text-slate-400">{{ v.size_mb ? v.size_mb + ' MB' : '' }}</span>
-                  <span v-if="v.exists" class="text-emerald-400 font-bold">✓ OK</span>
-                  <span v-else class="text-rose-400 font-bold">✗ Không tìm thấy!</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Step 4: Caption & Schedules Check -->
-          <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 font-bold text-xs text-white">
-                <span>4. Caption & Hẹn Giờ Meta</span>
-              </div>
-              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
-                    :class="testResult.invalid_schedules_count === 0 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'">
-                {{ testResult.invalid_schedules_count === 0 ? '✓ Chuẩn Meta' : '⚠ Cần điều chỉnh giờ' }}
-              </span>
-            </div>
-            <div class="text-xs text-slate-400 pl-4 border-l-2 border-slate-800 space-y-1">
-              <div>• Meta Graph API yêu cầu: Thời gian hẹn giờ phải cách thời điểm hiện tại từ <b>20 phút đến 75 ngày</b>.</div>
-              <div v-if="testResult.schedule_warnings?.length" class="text-amber-400 space-y-0.5 mt-1">
-                <div v-for="(w, idx) in testResult.schedule_warnings" :key="idx">• {{ w }}</div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-        <div class="px-5 py-3 border-t border-slate-800 bg-slate-900 flex justify-end gap-2.5">
-          <button @click="showRunTestModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
-          <button v-if="testResult.status === 'passed'" @click="showRunTestModal = false; handleRunBatch()" class="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md">
-            ▶ Tiến Hành Đăng Thật Ngay
-          </button>
-        </div>
-
-      </div>
-    </div>
 
     <!-- ================= MODAL: QUẢN LÝ NHIỀU TÀI KHOẢN FACEBOOK ADMIN ================= -->
     <div v-if="showAccountsModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -878,82 +736,142 @@
       </div>
     </div>
 
-    <!-- ================= MODAL: THÊM TÀI KHOẢN FACEBOOK (ĐƠN GIẢN - DUY NHẤT 1 NÚT) ================= -->
+    <!-- ================= MODAL: LIÊN KẾT TÀI KHOẢN FACEBOOK (GRAPH API EXPLORER) ================= -->
     <div v-if="showConnectModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         
         <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
-          <h3 class="font-bold text-white text-base">Thêm tài khoản Facebook</h3>
-          <button @click="showConnectModal = false" :disabled="isConnectingOAuth" class="text-slate-400 hover:text-white text-xl font-bold disabled:opacity-40">&times;</button>
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold text-sm">
+              f
+            </div>
+            <div>
+              <h3 class="font-bold text-white text-base">Liên kết tài khoản Facebook</h3>
+              <p class="text-[11px] text-slate-400">Tạo Access Token từ Graph API Explorer để kết nối Fanpage</p>
+            </div>
+          </div>
+          <button @click="showConnectModal = false" :disabled="isConnectingToken" class="text-slate-400 hover:text-white text-xl font-bold disabled:opacity-40">&times;</button>
         </div>
 
-        <div class="p-6 text-center space-y-5">
-          <div class="w-14 h-14 rounded-2xl bg-blue-600/15 border border-blue-500/30 text-blue-400 flex items-center justify-center mx-auto shadow-inner">
-            <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+        <div class="p-5 overflow-y-auto space-y-4 text-xs">
+          <!-- Hướng dẫn 6 bước -->
+          <div class="bg-slate-950/70 border border-slate-800/90 rounded-xl p-3.5 space-y-2.5 text-slate-300">
+            <div class="font-bold text-slate-200 text-xs flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <span>Hướng dẫn tạo token qua Graph API Explorer</span>
+              <a href="https://developers.facebook.com/tools/explorer/"
+                 target="_blank"
+                 rel="noopener noreferrer"
+                 class="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow transition active:scale-95">
+                <span>Mở Graph API Explorer</span>
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+              </a>
+            </div>
+
+            <div class="space-y-2 text-[12px] leading-relaxed">
+              <div class="flex items-start gap-2">
+                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">1</span>
+                <span>Nhấn nút <b>"Mở Graph API Explorer"</b> ở trên (sẽ mở tab mới).</span>
+              </div>
+              <div class="flex items-start gap-2">
+                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">2</span>
+                <span>Tại mục <b>Meta App</b>, chọn ứng dụng: <b class="text-white">Quản lý page</b> <span class="text-slate-400 text-[11px]">(App ID: <code class="text-amber-400 font-mono">1469615908436980</code>)</span>.</span>
+              </div>
+              <div class="flex items-start gap-2">
+                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">3</span>
+                <div class="space-y-1">
+                  <span>Tại mục <b>User or Page</b>, chọn <b>Get User Access Token</b> và thêm các quyền sau:</span>
+                  <div class="flex flex-wrap gap-1 mt-1">
+                    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_show_list</span>
+                    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">business_management</span>
+                    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_read_engagement</span>
+                    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_manage_metadata</span>
+                    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_read_user_content</span>
+                    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_manage_posts</span>
+                    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_manage_engagement</span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-start gap-2">
+                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">4</span>
+                <span>Nhấn <b>Generate Access Token</b> và chấp thuận các quyền trên cửa sổ Facebook hiện ra.</span>
+              </div>
+              <div class="flex items-start gap-2">
+                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">5</span>
+                <span>Sao chép toàn bộ mã trong ô <b>Access Token</b>, quay lại đây và dán vào ô bên dưới.</span>
+              </div>
+              <div class="flex items-start gap-2">
+                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">6</span>
+                <span>Nhấn nút <b>"Liên kết Facebook"</b> để hệ thống tự động đồng bộ tất cả Fanpage.</span>
+              </div>
+            </div>
           </div>
 
+          <!-- Ô nhập Access Token -->
           <div class="space-y-1.5">
-            <p class="text-sm text-slate-200 font-medium">
-              Kết nối tài khoản Facebook để quản lý các Fanpage của bạn.
-            </p>
+            <label class="block font-semibold text-slate-200 text-xs">
+              Mã Access Token:
+            </label>
+            <div class="relative">
+              <input :type="showToken ? 'text' : 'password'"
+                     v-model="directAccessToken"
+                     placeholder="Dán mã Access Token từ Graph API Explorer (bắt đầu bằng EAA...)"
+                     class="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none pr-14 font-mono">
+              <button type="button"
+                      @click="showToken = !showToken"
+                      class="absolute right-2 top-2 px-2 py-1 text-[11px] font-semibold text-slate-400 hover:text-white bg-slate-800/80 rounded-lg transition"
+                      tabindex="-1">
+                {{ showToken ? 'Ẩn' : 'Hiện' }}
+              </button>
+            </div>
           </div>
 
-          <!-- Trạng thái giao diện (Đang mở / Đang xử lý / Thành công / Từ chối / Không có Fanpage / Lỗi) -->
-          <div v-if="oauthFlowState === 'opening' || oauthFlowState === 'processing'"
-               class="p-3.5 rounded-xl bg-blue-950/40 border border-blue-700/50 text-xs text-blue-200 flex items-center justify-center gap-2.5">
+          <!-- Thông báo trạng thái -->
+          <div v-if="connectStatus === 'processing'"
+               class="p-3.5 rounded-xl bg-blue-950/40 border border-blue-700/50 text-xs text-blue-200 flex items-center gap-2.5">
             <svg class="animate-spin h-4 w-4 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="none">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
             </svg>
-            <span class="font-medium">{{ oauthFlowMessage || 'Đang kết nối với Facebook...' }}</span>
+            <span class="font-medium">Đang kiểm tra token và kết nối Facebook...</span>
           </div>
 
-          <div v-else-if="oauthFlowState === 'success'"
-               class="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-600/50 text-xs text-emerald-300 font-semibold">
-            ✓ {{ oauthFlowMessage || 'Đã kết nối tài khoản Facebook thành công' }}
+          <div v-else-if="connectStatus === 'success'"
+               class="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-600/50 text-xs text-emerald-300 space-y-1">
+            <div class="font-bold flex items-center gap-1.5">
+              <span>✓ Liên kết thành công!</span>
+            </div>
+            <div class="text-[11px] opacity-90">{{ connectMessage }}</div>
+            <div v-if="connectAccountInfo" class="text-[11px] text-emerald-400/90 font-medium">
+              • Tài khoản: <b>{{ connectAccountInfo.user_name }}</b> | Fanpage đồng bộ: <b>{{ connectAccountInfo.synced_count }}</b>
+            </div>
           </div>
 
-          <div v-else-if="oauthFlowState === 'denied'"
-               class="p-3.5 rounded-xl bg-amber-950/40 border border-amber-600/50 text-xs text-amber-300 font-semibold">
-            {{ oauthFlowMessage || 'Bạn chưa cấp quyền kết nối Facebook' }}
+          <div v-else-if="connectStatus === 'error'"
+               class="p-3.5 rounded-xl bg-rose-950/40 border border-rose-600/50 text-xs text-rose-300 space-y-1">
+            <div class="font-bold flex items-center gap-1.5">
+              <span>⚠ Kết nối không thành công</span>
+            </div>
+            <div class="text-[11px] opacity-90">{{ connectMessage }}</div>
           </div>
+        </div>
 
-          <div v-else-if="oauthFlowState === 'no_pages'"
-               class="p-3.5 rounded-xl bg-amber-950/40 border border-amber-600/50 text-xs text-amber-300 font-semibold">
-            {{ oauthFlowMessage || 'Tài khoản này chưa quản lý Fanpage nào' }}
-          </div>
-
-          <div v-else-if="oauthFlowState === 'missing_permissions'"
-               class="p-3.5 rounded-xl bg-rose-950/40 border border-rose-600/50 text-xs text-rose-300 font-semibold">
-            {{ oauthFlowMessage || 'Facebook chưa cấp đủ quyền cần thiết' }}
-          </div>
-
-          <div v-else-if="oauthFlowState === 'invalid_token'"
-               class="p-3.5 rounded-xl bg-rose-950/40 border border-rose-600/50 text-xs text-rose-300 font-semibold">
-            {{ oauthFlowMessage || 'Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại' }}
-          </div>
-
-          <div v-else-if="oauthFlowState === 'error'"
-               class="p-3.5 rounded-xl bg-rose-950/40 border border-rose-600/50 text-xs text-rose-300 font-semibold">
-            {{ oauthFlowMessage || 'Không thể kết nối Facebook lúc này, vui lòng thử lại' }}
-          </div>
-
-          <!-- Nút duy nhất: + Kết nối Facebook -->
-          <div class="space-y-3 pt-1">
-            <button @click="startMetaOAuthFlow()"
-                    :disabled="isConnectingOAuth"
-                    class="w-full py-3 px-6 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-lg shadow-blue-900/40 transition flex items-center justify-center gap-2 active:scale-95">
-              <svg v-if="isConnectingOAuth" class="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24" fill="none">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-              </svg>
-              <span>{{ isConnectingOAuth ? 'Đang kết nối...' : '+ Kết nối Facebook' }}</span>
-            </button>
-
-            <p class="text-xs text-slate-400 leading-relaxed">
-              Bạn sẽ được chuyển đến Facebook để đăng nhập và xác nhận quyền truy cập.
-            </p>
-          </div>
+        <div class="px-5 py-3.5 border-t border-slate-800 bg-slate-900 flex justify-end gap-2.5">
+          <button type="button"
+                  @click="showConnectModal = false"
+                  :disabled="isConnectingToken"
+                  class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold disabled:opacity-40 transition">
+            Đóng
+          </button>
+          <button type="button"
+                  @click="handleConnectToken"
+                  :disabled="isConnectingToken || !directAccessToken.trim()"
+                  class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-md shadow-blue-900/40 transition flex items-center gap-1.5 active:scale-95">
+            <svg v-if="isConnectingToken" class="animate-spin h-3.5 w-3.5 text-white" viewBox="0 0 24 24" fill="none">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span>{{ isConnectingToken ? 'Đang kiểm tra...' : 'Liên kết Facebook' }}</span>
+          </button>
         </div>
 
       </div>

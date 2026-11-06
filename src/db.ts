@@ -1858,9 +1858,18 @@ export async function deleteMediaFileRecord(
 // 6. TASKS, QUEUE LEASES & AUDIT LOGS
 // ==========================================
 
-function mapStatusForFrontend(status: string): string {
-  // Frontend expects 'pending' | 'running' | 'success' | 'failed'
-  if (status === "queued" || status === "processing") {
+function mapStatusForFrontend(status: string, scheduledAt?: number | null): string {
+  const now = nowUtcSeconds();
+  if (status === "pending") {
+    if (scheduledAt !== null && scheduledAt !== undefined && scheduledAt > now) {
+      return "scheduled"; // Đang chờ lịch
+    }
+    return "pending"; // Chờ đăng
+  }
+  if (status === "queued") {
+    return "queued"; // Trong hàng đợi
+  }
+  if (status === "processing" || status === "running") {
     return "running";
   }
   return status;
@@ -1880,11 +1889,23 @@ export async function addTask(
     objectKey?: string | null;
     status?: string;
     ownerUserId: string;
+  },
+  options?: {
+    allowPast?: boolean;
+    minLeadSeconds?: number;
+    referenceNowUtc?: number;
   }
 ): Promise<number> {
   const now = new Date().toISOString();
   const pageId = params.facebookPageId || params.profileId || null;
-  const parsedSchedule = parseVnScheduleToUtc(params.scheduleDate, params.scheduleTime);
+  const parsedSchedule = parseVnScheduleToUtc(params.scheduleDate, params.scheduleTime, {
+    minLeadSeconds: options?.minLeadSeconds ?? 60,
+    allowPast: options?.allowPast ?? false,
+    referenceNowUtc: options?.referenceNowUtc
+  });
+  if (!parsedSchedule.isValid) {
+    throw new Error(parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.");
+  }
   const scheduledAt = parsedSchedule.scheduledAtUtc;
   const status = params.status || "pending";
   const idempotencyKey = `task_${params.ownerUserId}_${pageId || "unassigned"}_${randomHex(8)}`;
@@ -2054,6 +2075,7 @@ export async function getTasks(
 
   return results.map((r) => {
     const rawStatus = String(r.status || "pending");
+    const schedAt = r.scheduled_at !== null && r.scheduled_at !== undefined ? Number(r.scheduled_at) : null;
     return {
       id: Number(r.id),
       owner_user_id: (r.owner_user_id as string) || null,
@@ -2066,10 +2088,11 @@ export async function getTasks(
       comment_text: String(r.comment_text || ""),
       schedule_date: String(r.schedule_date || ""),
       schedule_time: String(r.schedule_time || ""),
-      scheduled_at: r.scheduled_at !== null && r.scheduled_at !== undefined ? Number(r.scheduled_at) : null,
+      scheduled_at: schedAt,
       timezone: String(r.timezone || "Asia/Ho_Chi_Minh"),
-      status: mapStatusForFrontend(rawStatus),
+      status: mapStatusForFrontend(rawStatus, schedAt),
       raw_status: rawStatus,
+      is_future_schedule: schedAt !== null && schedAt > nowUtcSeconds(),
       idempotency_key: (r.idempotency_key as string) || null,
       attempt_count: Number(r.attempt_count || 0),
       max_attempts: Number(r.max_attempts || 3),
@@ -2115,6 +2138,11 @@ export async function updateTask(
     mediaId?: string | null;
     objectKey?: string | null;
     ownerUserId: string;
+  },
+  options?: {
+    allowPast?: boolean;
+    minLeadSeconds?: number;
+    referenceNowUtc?: number;
   }
 ): Promise<boolean> {
   const existing = await getTask(db, taskId, params.ownerUserId);
@@ -2129,7 +2157,14 @@ export async function updateTask(
   const newTime = params.scheduleTime !== undefined ? params.scheduleTime : existing.schedule_time;
   const newMediaId = params.mediaId !== undefined ? params.mediaId : existing.media_id;
   const newObjectKey = params.objectKey !== undefined ? params.objectKey : existing.object_key;
-  const parsedSchedule = parseVnScheduleToUtc(newDate, newTime);
+  const parsedSchedule = parseVnScheduleToUtc(newDate, newTime, {
+    minLeadSeconds: options?.minLeadSeconds ?? 60,
+    allowPast: options?.allowPast ?? false,
+    referenceNowUtc: options?.referenceNowUtc
+  });
+  if (!parsedSchedule.isValid) {
+    throw new Error(parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.");
+  }
   const now = new Date().toISOString();
 
   await db

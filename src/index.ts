@@ -52,7 +52,8 @@ import {
   syncPagesFromMeta,
   checkPagePermissionOnMeta,
   validateVideoSource,
-  runDiagnosticTest
+  runDiagnosticTest,
+  connectFacebookWithAccessToken
 } from "./services/metaGraphService.ts";
 import { deleteUserVideo, getR2Bucket } from "./services/r2MediaService.ts";
 import {
@@ -529,13 +530,28 @@ export async function handleWorkerRequest(
     }
 
     if (pathname === "/api/meta/connect-token" && method === "POST") {
-      return jsonResponse(
-        {
-          detail:
-            "Phương thức nhập Access Token thủ công đã được loại bỏ. Vui lòng sử dụng nút Kết nối Facebook."
-        },
-        410
-      );
+      const body = (await request.json().catch(() => ({}))) as {
+        access_token?: string;
+        token?: string;
+      };
+      const rawToken = (body.access_token || body.token || "").trim();
+      if (!rawToken) {
+        return jsonResponse(
+          { detail: "Vui lòng nhập Access Token từ Graph API Explorer." },
+          400
+        );
+      }
+      const res = await connectFacebookWithAccessToken(db, env, rawToken, ownerUserId);
+      if (!res.success) {
+        return jsonResponse(
+          {
+            detail: res.message,
+            missing_scopes: res.missing_scopes
+          },
+          400
+        );
+      }
+      return jsonResponse(res);
     }
 
     if (pathname === "/api/meta/sync-pages" && method === "POST") {
@@ -772,7 +788,9 @@ export async function handleWorkerRequest(
 
       // Kiểm tra hợp lệ lịch hẹn (nếu có nhập)
       if (body.schedule_date || body.schedule_time) {
-        const schedCheck = parseVnScheduleToUtc(body.schedule_date, body.schedule_time);
+        const schedCheck = parseVnScheduleToUtc(body.schedule_date, body.schedule_time, {
+          minLeadSeconds: 60
+        });
         if (!schedCheck.isValid) {
           return jsonResponse({ detail: schedCheck.error }, 400);
         }
@@ -794,18 +812,26 @@ export async function handleWorkerRequest(
         objectKey = mediaRecord.object_key;
       }
 
-      const taskId = await addTask(db, {
-        videoPath: vPath,
-        caption: body.caption || "",
-        commentText: body.comment_text || "",
-        scheduleDate: body.schedule_date || "",
-        scheduleTime: body.schedule_time || "",
-        facebookPageId: targetPageId,
-        profileId: body.profile_id || targetPageId,
-        mediaId,
-        objectKey,
-        ownerUserId
-      });
+      let taskId: number;
+      try {
+        taskId = await addTask(db, {
+          videoPath: vPath,
+          caption: body.caption || "",
+          commentText: body.comment_text || "",
+          scheduleDate: body.schedule_date || "",
+          scheduleTime: body.schedule_time || "",
+          facebookPageId: targetPageId,
+          profileId: body.profile_id || targetPageId,
+          mediaId,
+          objectKey,
+          ownerUserId
+        });
+      } catch (err: any) {
+        return jsonResponse(
+          { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
+          400
+        );
+      }
 
       const created = await getTask(db, taskId, ownerUserId);
       return jsonResponse({ success: true, id: taskId, task: created });
@@ -842,12 +868,19 @@ export async function handleWorkerRequest(
         assignIds = selectedPages.map((p) => p.facebook_page_id);
       }
 
-      const inserted = await addTasksBulk(db, tasksList, assignIds, ownerUserId);
-      return jsonResponse({
-        success: true,
-        inserted_count: inserted.length,
-        task_ids: inserted
-      });
+      try {
+        const inserted = await addTasksBulk(db, tasksList, assignIds, ownerUserId);
+        return jsonResponse({
+          success: true,
+          inserted_count: inserted.length,
+          task_ids: inserted
+        });
+      } catch (err: any) {
+        return jsonResponse(
+          { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
+          400
+        );
+      }
     }
 
     const taskLogsMatch = /^\/api\/tasks\/(\d+)\/logs$/.exec(pathname);
@@ -888,20 +921,27 @@ export async function handleWorkerRequest(
       };
       const pageId =
         body.facebook_page_id !== undefined ? body.facebook_page_id : body.profile_id;
-      const ok = await updateTask(db, taskId, {
-        facebookPageId: pageId,
-        videoPath: body.video_path,
-        caption: body.caption,
-        commentText: body.comment_text,
-        scheduleDate: body.schedule_date,
-        scheduleTime: body.schedule_time,
-        ownerUserId
-      });
-      if (!ok) {
-        return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+      try {
+        const ok = await updateTask(db, taskId, {
+          facebookPageId: pageId,
+          videoPath: body.video_path,
+          caption: body.caption,
+          commentText: body.comment_text,
+          scheduleDate: body.schedule_date,
+          scheduleTime: body.schedule_time,
+          ownerUserId
+        });
+        if (!ok) {
+          return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+        }
+        const updated = await getTask(db, taskId, ownerUserId);
+        return jsonResponse({ success: true, task: updated });
+      } catch (err: any) {
+        return jsonResponse(
+          { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
+          400
+        );
       }
-      const updated = await getTask(db, taskId, ownerUserId);
-      return jsonResponse({ success: true, task: updated });
     }
 
     if (taskItemMatch && method === "DELETE") {
@@ -956,7 +996,9 @@ export async function handleWorkerRequest(
       (pathname === "/api/runner/start" || pathname === "/api/run") &&
       method === "POST"
     ) {
-      const enqueueRes = await enqueueUserPendingTasks(db, env, ctx, ownerUserId);
+      const enqueueRes = await enqueueUserPendingTasks(db, env, ctx, ownerUserId, {
+        onlyDueOrUnscheduled: true
+      });
       if (!enqueueRes.success) {
         return jsonResponse({ detail: enqueueRes.message }, 400);
       }

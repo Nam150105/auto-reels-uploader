@@ -120,6 +120,12 @@
     });
 
     const showConnectModal = ref(false);
+    const directAccessToken = ref('');
+    const showToken = ref(false);
+    const isConnectingToken = ref(false);
+    const connectStatus = ref('idle'); // 'idle' | 'processing' | 'success' | 'error'
+    const connectMessage = ref('');
+    const connectAccountInfo = ref(null);
     const oauthFlowState = ref('idle'); // 'idle' | 'opening' | 'processing' | 'success' | 'denied' | 'no_pages' | 'missing_permissions' | 'invalid_token' | 'error'
     const oauthFlowMessage = ref('');
     const isConnectingOAuth = ref(false);
@@ -529,11 +535,59 @@
 
     function openConnectModal(accountId = null) {
       reconnectTargetAccountId.value = accountId && typeof accountId === 'string' ? accountId : null;
-      if (!isConnectingOAuth.value) {
-        oauthFlowState.value = 'idle';
-        oauthFlowMessage.value = '';
-      }
+      directAccessToken.value = '';
+      showToken.value = false;
+      isConnectingToken.value = false;
+      connectStatus.value = 'idle';
+      connectMessage.value = '';
+      connectAccountInfo.value = null;
+      oauthFlowState.value = 'idle';
+      oauthFlowMessage.value = '';
       showConnectModal.value = true;
+    }
+
+    async function handleConnectToken() {
+      const raw = (directAccessToken.value || '').trim();
+      if (!raw) {
+        connectStatus.value = 'error';
+        connectMessage.value = 'Vui lòng dán Access Token từ Graph API Explorer vào ô nhập.';
+        showToast('Vui lòng dán Access Token vào ô nhập.', 'warning');
+        return;
+      }
+      isConnectingToken.value = true;
+      connectStatus.value = 'processing';
+      connectMessage.value = 'Đang kiểm tra token và kết nối Facebook...';
+
+      try {
+        const res = await apiFetch('/api/meta/connect-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token: raw }),
+          timeoutMs: 30000
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          connectStatus.value = 'success';
+          connectAccountInfo.value = {
+            user_name: data.user_name || 'Facebook User',
+            synced_count: data.synced_count || 0
+          };
+          connectMessage.value = data.message || `Đã liên kết tài khoản "${data.user_name}" và đồng bộ ${data.synced_count || 0} Fanpage!`;
+          directAccessToken.value = '';
+          showToast(connectMessage.value, 'success');
+          await loadAll();
+        } else {
+          connectStatus.value = 'error';
+          connectMessage.value = data.detail || 'Không thể kết nối Facebook. Vui lòng kiểm tra lại token và các quyền được cấp.';
+          showToast(connectMessage.value, 'error');
+        }
+      } catch (err) {
+        connectStatus.value = 'error';
+        connectMessage.value = 'Lỗi kết nối khi gửi token: ' + (err.message || 'Mạng không ổn định');
+        showToast(connectMessage.value, 'error');
+      } finally {
+        isConnectingToken.value = false;
+      }
     }
 
     function openAccountsModal() {
@@ -1008,20 +1062,82 @@
       }
     }
 
+    function getVnDateString(offsetDays = 0) {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const now = new Date();
+      if (offsetDays !== 0) {
+        now.setDate(now.getDate() + offsetDays);
+      }
+      return formatter.format(now);
+    }
+
     function setDatePreset(offsetDays) {
-      const d = new Date();
-      d.setDate(d.getDate() + offsetDays);
-      singleTaskForm.value.schedule_date = d.toISOString().split('T')[0];
+      singleTaskForm.value.schedule_date = getVnDateString(offsetDays);
     }
 
     function setTimePreset(timeStr) {
       singleTaskForm.value.schedule_time = timeStr;
     }
 
+    function validateVnScheduleClient(scheduleDate, scheduleTime) {
+      const dStr = (scheduleDate || '').trim();
+      const tStr = (scheduleTime || '').trim();
+      if (!dStr && !tStr) return { valid: true };
+      if (!dStr || !tStr) {
+        return {
+          valid: false,
+          error: 'Phải nhập đầy đủ cả Ngày đăng (YYYY-MM-DD) và Giờ đăng (HH:MM) theo giờ Việt Nam.'
+        };
+      }
+      const dMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dStr);
+      const tMatch = /^(\d{1,2}):(\d{2})$/.exec(tStr);
+      if (!dMatch || !tMatch) {
+        return {
+          valid: false,
+          error: 'Định dạng ngày giờ không hợp lệ. Ngày phải có dạng YYYY-MM-DD và giờ HH:MM.'
+        };
+      }
+      const y = parseInt(dMatch[1], 10);
+      const m = parseInt(dMatch[2], 10);
+      const d = parseInt(dMatch[3], 10);
+      const h = parseInt(tMatch[1], 10);
+      const min = parseInt(tMatch[2], 10);
+      const schedUtcMillis = Date.UTC(y, m - 1, d, h, min, 0) - (7 * 3600 * 1000);
+      const nowUtcMillis = Date.now();
+      if (schedUtcMillis <= nowUtcMillis) {
+        return {
+          valid: false,
+          error: `Thời gian đặt lịch (${dStr} ${tStr} giờ VN) đã qua hoặc trùng với thời điểm hiện tại. Vui lòng chọn thời gian trong tương lai!`
+        };
+      }
+      if (schedUtcMillis < nowUtcMillis + 60000) {
+        return {
+          valid: false,
+          error: `Thời gian đặt lịch (${dStr} ${tStr} giờ VN) phải cách thời điểm hiện tại tối thiểu 1 phút!`
+        };
+      }
+      return { valid: true };
+    }
+
     async function handleCreateSingleTaskSubmit() {
       if (!singleTaskForm.value.video_path.trim()) {
         showToast("Đường dẫn video không được để trống!", "warning");
         return;
+      }
+      if (singleTaskForm.value.schedule_date || singleTaskForm.value.schedule_time) {
+        const val = validateVnScheduleClient(
+          singleTaskForm.value.schedule_date,
+          singleTaskForm.value.schedule_time
+        );
+        if (!val.valid) {
+          showToast(val.error, "error");
+          return;
+        }
       }
       try {
         const payload = {
@@ -1121,6 +1237,18 @@
         return;
       }
 
+      // Kiểm tra hợp lệ lịch hẹn của từng dòng (nếu có)
+      for (let i = 0; i < bulkParsedList.value.length; i++) {
+        const item = bulkParsedList.value[i];
+        if (item.schedule_date || item.schedule_time) {
+          const val = validateVnScheduleClient(item.schedule_date, item.schedule_time);
+          if (!val.valid) {
+            showToast(`Dòng ${i + 1}: ${val.error}`, "error");
+            return;
+          }
+        }
+      }
+
       // Xác định danh sách Page được gán
       let assignPageIds = [];
       if (bulkAssignMethod.value === 'specific') {
@@ -1184,6 +1312,16 @@
     }
 
     async function handleUpdateTaskSubmit() {
+      if (editTaskForm.value.schedule_date || editTaskForm.value.schedule_time) {
+        const val = validateVnScheduleClient(
+          editTaskForm.value.schedule_date,
+          editTaskForm.value.schedule_time
+        );
+        if (!val.valid) {
+          showToast(val.error, "error");
+          return;
+        }
+      }
       try {
         const payload = {
           facebook_page_id: editTaskForm.value.facebook_page_id,
@@ -1463,6 +1601,15 @@
       showRunTestModal,
       testResult,
       showConnectModal,
+      directAccessToken,
+      showToken,
+      isConnectingToken,
+      connectStatus,
+      connectMessage,
+      connectAccountInfo,
+      handleConnectToken,
+      getVnDateString,
+      validateVnScheduleClient,
       oauthFlowState,
       oauthFlowMessage,
       isConnectingOAuth,

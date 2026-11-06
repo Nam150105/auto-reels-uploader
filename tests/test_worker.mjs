@@ -24,6 +24,7 @@ import {
 } from "../src/utils/timezone.ts";
 import { sanitizeSensitiveText } from "../src/utils/sanitize.ts";
 import { consumeSingleTaskMessage } from "../src/queue/publishQueue.ts";
+import { addTask } from "../src/db.ts";
 
 // ============================================================================
 // MOCK CLOUDFLARE D1 & R2 BUCKET CHO MÔI TRƯỜNG TEST
@@ -471,6 +472,15 @@ async function runAll30Tests() {
 
     // 2. /me Profile
     if (u.includes("/me?fields=id,name")) {
+      if (u.includes("EAAB_EXPLORER_TOKEN_VALID")) {
+        return new Response(JSON.stringify({ id: "fb_uid_exp_1", name: "Nam Explorer Admin" }), { status: 200 });
+      }
+      if (u.includes("EAAB_EXPLORER_TOKEN_INVALID")) {
+        return new Response(JSON.stringify({ error: { message: "Invalid OAuth access token.", code: 190 } }), { status: 400 });
+      }
+      if (u.includes("EAAB_EXPLORER_TOKEN_MISSING_PERM")) {
+        return new Response(JSON.stringify({ id: "fb_uid_exp_missing", name: "Nam Missing Perm Admin" }), { status: 200 });
+      }
       if (u.includes("EAAB_TOKEN_A1")) {
         return new Response(JSON.stringify({ id: "fb_uid_a1", name: "Alice FB Admin 1" }), { status: 200 });
       }
@@ -490,7 +500,7 @@ async function runAll30Tests() {
 
     // 3. /me/permissions
     if (u.includes("/me/permissions")) {
-      if (u.includes("EAAB_TOKEN_MISSING_PERM")) {
+      if (u.includes("EAAB_TOKEN_MISSING_PERM") || u.includes("EAAB_EXPLORER_TOKEN_MISSING_PERM")) {
         return new Response(
           JSON.stringify({
             data: [
@@ -517,6 +527,28 @@ async function runAll30Tests() {
 
     // 4. /me/accounts (with multi-page cursor pagination for Alice Admin 1, and overlapping Page for Alice Admin 2)
     if (u.includes("/me/accounts")) {
+      if (u.includes("EAAB_EXPLORER_TOKEN_VALID")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page_exp_1",
+                name: "Hidden Chapters",
+                access_token: "EAAB_PAGE_TOKEN_EXP_1",
+                tasks: ["CREATE_CONTENT", "MANAGE"]
+              },
+              {
+                id: "page_exp_2",
+                name: "Zyntrix Vietnam",
+                access_token: "EAAB_PAGE_TOKEN_EXP_2",
+                tasks: ["CREATE_CONTENT", "MANAGE"]
+              }
+            ],
+            paging: {}
+          }),
+          { status: 200 }
+        );
+      }
       if (u.includes("EAAB_TOKEN_NOPAGES")) {
         return new Response(JSON.stringify({ data: [], paging: {} }), { status: 200 });
       }
@@ -744,16 +776,76 @@ async function runAll30Tests() {
   });
   assert.equal(cbA2Reconnect.status, 200);
 
-  // Kiểm tra endpoint nhập token thủ công cũ (/api/meta/connect-token) đã bị vô hiệu hóa hoàn toàn (410 Gone)
-  const directConnResp = await callWorker("/api/meta/connect-token", {
+  // Kiểm tra endpoint kết nối qua Access Token từ Graph API Explorer (/api/meta/connect-token)
+  // 1. Kiểm tra gửi token rỗng -> 400
+  const emptyTokenResp = await callWorker("/api/meta/connect-token", {
     method: "POST",
     headers: {
       Cookie: `session_token=${tokenA}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ access_token: "EAAB_MANUAL_TOKEN" })
+    body: JSON.stringify({ access_token: "   " })
   });
-  assert.equal(directConnResp.status, 410, "Phương thức nhập Access Token thủ công phải bị vô hiệu hóa (410 Gone)");
+  assert.equal(emptyTokenResp.status, 400);
+
+  // 2. Kiểm tra token không hợp lệ -> 400
+  const invalidTokenResp = await callWorker("/api/meta/connect-token", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ access_token: "EAAB_EXPLORER_TOKEN_INVALID" })
+  });
+  assert.equal(invalidTokenResp.status, 400);
+
+  // 3. Kiểm tra token thiếu quyền bắt buộc -> 400
+  const missingPermTokenResp = await callWorker("/api/meta/connect-token", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ access_token: "EAAB_EXPLORER_TOKEN_MISSING_PERM" })
+  });
+  assert.equal(missingPermTokenResp.status, 400);
+
+  // 4. Kiểm tra liên kết thành công với Access Token hợp lệ từ Graph API Explorer
+  const validTokenResp = await callWorker("/api/meta/connect-token", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ access_token: "EAAB_EXPLORER_TOKEN_VALID" })
+  });
+  assert.equal(validTokenResp.status, 200, "Liên kết Graph API Explorer Access Token phải thành công (200)");
+  const validTokenJson = await validTokenResp.json();
+  assert.equal(validTokenJson.success, true);
+  assert.equal(validTokenJson.user_name, "Nam Explorer Admin");
+  assert.equal(validTokenJson.synced_count, 2);
+
+  // 5. Kiểm tra kết nối lại với cùng token (hoặc URL chứa token) -> cập nhật, không trùng lặp account
+  const relinkUrlResp = await callWorker("/api/meta/connect-token", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      access_token: "https://graph.facebook.com/v27.0/me/accounts?access_token=EAAB_EXPLORER_TOKEN_VALID&fields=id"
+    })
+  });
+  assert.equal(relinkUrlResp.status, 200);
+
+  // 6. Xóa tài khoản Explorer vừa tạo -> kiểm tra cascade xóa cả 2 Fanpage tương ứng
+  const delExpResp = await callWorker(`/api/meta/accounts/${validTokenJson.account_id}`, {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(delExpResp.status, 200);
+  const delExpJson = await delExpResp.json();
+  assert.equal(delExpJson.deleted_pages_count, 2, "Xóa Admin tạo từ Explorer Token phải cascade xóa cả 2 Page liên kết");
 
   // Kiểm tra trường hợp người dùng bấm Hủy trên Facebook (?error=access_denied)
   const cbDenied = await callWorker("/api/meta/callback?error=access_denied&error_reason=user_denied", {
@@ -1068,9 +1160,9 @@ async function runAll30Tests() {
   console.log("  ✓ [Test 21] Queue Retry (Exponential Backoff) & Chặn Auto-Retry khi Ambiguous Publish");
 
   // --------------------------------------------------------------------------
-  // [TEST 23 & 24] Timezone Conversion (Asia/Ho_Chi_Minh <-> UTC) & Cron Scheduler
+  // [TEST 23 & 24] Timezone Conversion (Asia/Ho_Chi_Minh <-> UTC) & 10 Test Cases Scheduler
   // --------------------------------------------------------------------------
-  const parsedTz = parseVnScheduleToUtc("2026-11-10", "07:00");
+  const parsedTz = parseVnScheduleToUtc("2026-11-10", "07:00", { allowPast: true });
   assert.equal(parsedTz.isValid, true);
   // 2026-11-10 07:00:00+07:00 == 2026-11-10 00:00:00 UTC
   assert.equal(parsedTz.scheduledAtUtc, Math.floor(Date.UTC(2026, 10, 10, 0, 0, 0) / 1000));
@@ -1080,8 +1172,8 @@ async function runAll30Tests() {
   assert.equal(VN_OFFSET_SECONDS, 25200);
   console.log("  ✓ [Test 24] Timezone Asia/Ho_Chi_Minh (+07:00) <-> UTC chính xác tuyệt đối");
 
-  // Tạo 1 task đã đến hạn (quá khứ) và 1 task tương lai (năm 2029), sau đó chạy Cron Trigger
-  const dueTaskResp = await callWorker("/api/tasks", {
+  // [Case 1] Đặt lịch với thời gian quá khứ -> Bị từ chối ngay lập tức (lỗi 400)
+  const pastTaskResp = await callWorker("/api/tasks", {
     method: "POST",
     headers: {
       Cookie: `session_token=${tokenA}`,
@@ -1090,13 +1182,24 @@ async function runAll30Tests() {
     body: JSON.stringify({
       facebook_page_id: "page_102",
       video_path: compUploadData.video_path,
-      caption: "Task hẹn giờ đã đến hạn chạy qua Cron",
+      caption: "Task hẹn giờ quá khứ",
       schedule_date: "2020-01-01",
       schedule_time: "08:00"
     })
   });
-  const dueTask = (await dueTaskResp.json()).task;
+  assert.equal(pastTaskResp.status, 400, "Đặt lịch trong quá khứ phải trả về 400");
+  const pastErr = await pastTaskResp.json();
+  assert.ok(pastErr.detail.includes("đã qua hoặc trùng với thời điểm hiện tại"));
 
+  // [Case 2] Đặt lịch với thời gian quá gần/hiện tại (cách dưới 1 phút) -> Bị từ chối (400)
+  const nearPastCheck = parseVnScheduleToUtc("2026-11-07", "00:00", {
+    referenceNowUtc: Math.floor(Date.UTC(2026, 10, 6, 17, 0, 0) / 1000), // cùng thời điểm
+    minLeadSeconds: 60
+  });
+  assert.equal(nearPastCheck.isValid, false);
+  assert.ok(nearPastCheck.error.includes("đã qua hoặc trùng với thời điểm hiện tại"));
+
+  // [Case 3] Đặt lịch với thời gian tương lai hợp lệ -> Chấp nhận, trạng thái scheduled
   const futureTaskResp = await callWorker("/api/tasks", {
     method: "POST",
     headers: {
@@ -1111,7 +1214,39 @@ async function runAll30Tests() {
       schedule_time: "23:00"
     })
   });
+  assert.equal(futureTaskResp.status, 200);
   const futureTask = (await futureTaskResp.json()).task;
+  assert.equal(futureTask.status, "scheduled");
+  assert.equal(futureTask.is_future_schedule, true);
+
+  // [Case 10] Sửa lại giờ hẹn thành giờ quá khứ -> Bị từ chối (lỗi 400)
+  const updatePastResp = await callWorker(`/api/tasks/${futureTask.id}`, {
+    method: "PUT",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      schedule_date: "2020-01-01",
+      schedule_time: "08:00"
+    })
+  });
+  assert.equal(updatePastResp.status, 400, "Cập nhật lịch thành thời gian quá khứ phải trả về 400");
+
+  // [Case 4] Chèn một task đã đến hạn (quá khứ) trực tiếp vào DB để kiểm tra Cron Trigger
+  const dueTaskId = await addTask(
+    d1,
+    {
+      videoPath: compUploadData.video_path,
+      caption: "Task hẹn giờ đã đến hạn chạy qua Cron",
+      scheduleDate: "2020-01-01",
+      scheduleTime: "08:00",
+      facebookPageId: "page_102",
+      ownerUserId: futureTask.owner_user_id,
+      status: "pending"
+    },
+    { allowPast: true }
+  );
 
   const cronBg = [];
   const cronResult = await workerDefault.scheduled(
@@ -1121,14 +1256,31 @@ async function runAll30Tests() {
   );
   await Promise.all(cronBg);
 
-  assert.ok(cronResult.task_ids.includes(dueTask.id), "Cron phải claim task đã đến hạn");
+  assert.ok(cronResult.task_ids.includes(dueTaskId), "Cron phải claim task đã đến hạn");
   assert.ok(!cronResult.task_ids.includes(futureTask.id), "Cron không được chạy task chưa đến giờ hẹn");
 
   const tasksAfterCron = await (
     await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
   ).json();
-  assert.equal(tasksAfterCron.find((t) => t.id === dueTask.id).status, "success");
-  assert.equal(tasksAfterCron.find((t) => t.id === futureTask.id).status, "pending");
+  assert.equal(tasksAfterCron.find((t) => t.id === dueTaskId).status, "success");
+  assert.equal(tasksAfterCron.find((t) => t.id === futureTask.id).status, "scheduled");
+
+  // [Case 5] Chưa đến giờ hẹn -> Khi chạy runner thủ công, không đẩy task tương lai vào queue
+  const manualStartResp = await callWorker("/api/runner/start", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(manualStartResp.status, 400);
+  const manualStartJson = await manualStartResp.json();
+  assert.ok(manualStartJson.detail.includes("đang chờ đến giờ hẹn"), "Runner thủ công không được kích hoạt task tương lai");
+
+  // [Case 9] Hủy/Xóa lịch hẹn trước giờ chạy -> Chuyển xóa an toàn, không còn chạy khi đến giờ
+  const delSchedResp = await callWorker(`/api/tasks/${futureTask.id}`, {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(delSchedResp.status, 200);
+
   console.log("  ✓ [Test 23] Cron Trigger Scheduler kích hoạt chính xác task đến hạn & giữ nguyên task tương lai");
 
   // --------------------------------------------------------------------------
@@ -1272,15 +1424,18 @@ async function runAll30Tests() {
   assert.ok(!allDeps.includes("gemlogin"), "package.json không được chứa gemlogin");
   assert.ok(!fs.existsSync(path.join(process.cwd(), "requirements.txt")), "requirements.txt ở root phải được dời sang legacy/");
 
-  // Kiểm tra UI Thêm Admin mới (Mục II): Không còn Graph API Explorer / nhập token thủ công, có đủ UI OAuth đơn giản & Modal Xóa
+  // Kiểm tra UI Thêm Admin mới (Yêu cầu 1: Graph API Explorer 6 bước & Yêu cầu 2: Loại bỏ nút Chạy Thử)
   const indexHtmlContent = fs.readFileSync(path.join(process.cwd(), "static/index.html"), "utf8");
   const appJsContent = fs.readFileSync(path.join(process.cwd(), "static/js/app.js"), "utf8");
-  assert.ok(!indexHtmlContent.includes("Graph API Explorer"), "static/index.html không được chứa Graph API Explorer");
-  assert.ok(!appJsContent.includes("Graph API Explorer"), "static/js/app.js không được chứa Graph API Explorer");
-  assert.ok(!indexHtmlContent.includes("directAccessToken"), "static/index.html không được chứa ô nhập directAccessToken");
-  assert.ok(!appJsContent.includes("directAccessToken"), "static/js/app.js không được chứa biến directAccessToken");
-  assert.ok(indexHtmlContent.includes("Thêm tài khoản Facebook"), "static/index.html phải có tiêu đề Thêm tài khoản Facebook");
-  assert.ok(indexHtmlContent.includes("+ Kết nối Facebook"), "static/index.html phải có nút + Kết nối Facebook");
+  assert.ok(indexHtmlContent.includes("Graph API Explorer"), "static/index.html phải có hướng dẫn Graph API Explorer");
+  assert.ok(indexHtmlContent.includes("1469615908436980"), "static/index.html phải hiển thị Meta App ID 1469615908436980");
+  assert.ok(indexHtmlContent.includes("Liên kết Facebook"), "static/index.html phải có nút Liên kết Facebook");
+  assert.ok(indexHtmlContent.includes("directAccessToken"), "static/index.html phải có ô nhập directAccessToken");
+  assert.ok(appJsContent.includes("handleConnectToken"), "static/js/app.js phải có hàm handleConnectToken");
+  assert.ok(appJsContent.includes("validateVnScheduleClient"), "static/js/app.js phải có hàm validateVnScheduleClient");
+  // Yêu cầu 2: Loại bỏ hoàn toàn nút Chạy Thử và modal test diagnostic khỏi UI
+  assert.ok(!indexHtmlContent.includes(">Chạy Thử</span>"), "static/index.html không được chứa nút Chạy Thử");
+  assert.ok(!indexHtmlContent.includes("showRunTestModal"), "static/index.html không được chứa modal Chạy Thử (showRunTestModal)");
   assert.ok(indexHtmlContent.includes("Xóa tài khoản Facebook?"), "static/index.html phải có modal Xóa tài khoản Facebook?");
 
   console.log("  ✓ [Test 27] Không còn bất kỳ URL localhost:8000 / 127.0.0.1:8000 trong Production");

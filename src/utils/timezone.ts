@@ -14,13 +14,20 @@ export function nowUtcSeconds(): number {
 /**
  * Chuyển đổi schedule_date (YYYY-MM-DD) và schedule_time (HH:MM) theo giờ Việt Nam (Asia/Ho_Chi_Minh)
  * sang UTC Unix Timestamp (seconds) để lưu trong cột `scheduled_at` của D1.
+ * Bắt buộc kiểm tra: Thời gian đặt lịch KHÔNG được nằm trong quá khứ hoặc trùng thời điểm hiện tại.
  */
 export function parseVnScheduleToUtc(
   scheduleDate?: string | null,
-  scheduleTime?: string | null
+  scheduleTime?: string | null,
+  options?: {
+    minLeadSeconds?: number;
+    allowPast?: boolean;
+    referenceNowUtc?: number;
+  }
 ): {
   scheduledAtUtc: number | null;
   isValid: boolean;
+  isPast?: boolean;
   error?: string;
 } {
   const dStr = (scheduleDate || "").trim();
@@ -33,7 +40,7 @@ export function parseVnScheduleToUtc(
     return {
       scheduledAtUtc: null,
       isValid: false,
-      error: "Phải nhập đầy đủ cả Ngày đăng (YYYY-MM-DD) và Giờ đăng (HH:MM)."
+      error: "Phải nhập đầy đủ cả Ngày đăng (YYYY-MM-DD) và Giờ đăng (HH:MM) theo giờ Việt Nam."
     };
   }
 
@@ -43,7 +50,7 @@ export function parseVnScheduleToUtc(
     return {
       scheduledAtUtc: null,
       isValid: false,
-      error: `Định dạng lịch hẹn không hợp lệ (${dStr} ${tStr}). Yêu cầu YYYY-MM-DD và HH:MM.`
+      error: `Định dạng lịch hẹn không hợp lệ (${dStr} ${tStr}). Yêu cầu YYYY-MM-DD và HH:MM theo giờ Việt Nam.`
     };
   }
 
@@ -76,9 +83,33 @@ export function parseVnScheduleToUtc(
     };
   }
 
-  // Giờ người dùng nhập là Asia/Ho_Chi_Minh (UTC+7) -> Trừ 7 tiếng để ra UTC timestamp
+  // Giờ người dùng nhập là Asia/Ho_Chi_Minh (UTC+7) -> Trừ 7 tiếng để ra UTC timestamp chuẩn
   const utcMillis = Date.UTC(year, month - 1, day, hour, minute, second) - VN_OFFSET_SECONDS * 1000;
   const scheduledAtUtc = Math.floor(utcMillis / 1000);
+
+  // Kiểm tra thời gian đặt lịch so với hiện tại
+  if (!options?.allowPast) {
+    const currentNowUtc = options?.referenceNowUtc ?? nowUtcSeconds();
+    const minLead = options?.minLeadSeconds ?? 60; // tối thiểu 1 phút trong tương lai
+
+    if (scheduledAtUtc <= currentNowUtc) {
+      return {
+        scheduledAtUtc,
+        isValid: false,
+        isPast: true,
+        error: `Thời gian đặt lịch (${dStr} ${tStr} giờ VN) đã qua hoặc trùng với thời điểm hiện tại. Vui lòng chọn thời gian trong tương lai.`
+      };
+    }
+
+    if (scheduledAtUtc < currentNowUtc + minLead) {
+      return {
+        scheduledAtUtc,
+        isValid: false,
+        isPast: false,
+        error: `Thời gian đặt lịch (${dStr} ${tStr} giờ VN) phải cách thời điểm hiện tại tối thiểu 1 phút.`
+      };
+    }
+  }
 
   return { scheduledAtUtc, isValid: true };
 }

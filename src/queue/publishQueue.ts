@@ -71,9 +71,9 @@ export async function enqueueUserPendingTasks(
   let skippedFutureCount = 0;
 
   for (const task of pendingTasks) {
-    // Nếu chỉ chạy các task đến hạn nhưng user nhấn "Đăng Reels" thủ công:
-    // Nếu options.onlyDueOrUnscheduled === true thì bỏ qua task có scheduled_at trong tương lai
-    if (options?.onlyDueOrUnscheduled && task.scheduled_at && task.scheduled_at > now) {
+    // BẮT BUỘC: Tuyệt đối KHÔNG BAO GIỜ đưa các task có lịch hẹn tương lai (scheduled_at > now) vào Queue xuất bản ngay!
+    // Các task này phải ở trạng thái pending cho đến khi Cron Trigger kích hoạt đúng giờ hẹn.
+    if (task.scheduled_at && task.scheduled_at > now) {
       skippedFutureCount++;
       continue;
     }
@@ -153,7 +153,7 @@ export async function enqueueUserPendingTasks(
       messages: [],
       message:
         skippedFutureCount > 0
-          ? `Có ${skippedFutureCount} tác vụ đang chờ đến giờ hẹn lịch.`
+          ? `Có ${skippedFutureCount} tác vụ đang chờ đến giờ hẹn lịch (hệ thống sẽ tự động đăng khi đến hạn).`
           : "Không có tác vụ hợp lệ nào để đưa vào hàng đợi."
     };
   }
@@ -173,7 +173,10 @@ export async function enqueueUserPendingTasks(
     enqueued_count: messagesToEnqueue.length,
     skipped_future_count: skippedFutureCount,
     messages: messagesToEnqueue,
-    message: `Đã đưa ${messagesToEnqueue.length} tác vụ vào hàng đợi xử lý nền (Queue)!`
+    message:
+      skippedFutureCount > 0
+        ? `Đã đưa ${messagesToEnqueue.length} tác vụ vào hàng đợi xuất bản! (Giữ lại ${skippedFutureCount} tác vụ đang chờ đến giờ hẹn lịch).`
+        : `Đã đưa ${messagesToEnqueue.length} tác vụ vào hàng đợi xử lý nền (Queue)!`
   };
 }
 
@@ -238,6 +241,32 @@ export async function consumeSingleTaskMessage(
   if (!refreshed || refreshed.raw_status === "pending" || refreshed.raw_status === "cancelled") {
     await recordTaskAttemptFinish(db, attemptId, "failed", "cancelled", null, null, "Người dùng đã dừng tác vụ.");
     return { status: "ack", reason: "Task đã được dừng bởi người dùng." };
+  }
+
+  // 3. KIỂM TRA LẠI THỜI GIAN THỰC TẾ TRƯỚC KHI ĐĂNG
+  // Nếu scheduled_at > now: tác vụ chưa đến giờ hẹn! Tuyệt đối không upload video hay gọi API publish!
+  const currentNowUtc = nowUtcSeconds();
+  if (claimedTask.scheduled_at && claimedTask.scheduled_at > currentNowUtc) {
+    const diffSec = claimedTask.scheduled_at - currentNowUtc;
+    const diffMin = Math.ceil(diffSec / 60);
+    const holdMsg = `Chưa đến thời gian hẹn lịch (còn ${diffMin} phút - Lịch hẹn: ${claimedTask.schedule_date || ''} ${claimedTask.schedule_time || ''} Asia/Ho_Chi_Minh). Đã giữ lại chờ Cron.`;
+    await updateTaskExecutionState(
+      db,
+      claimedTask.id,
+      "pending",
+      holdMsg,
+      { clearLease: true }
+    );
+    await appendTaskStageLog(
+      db,
+      claimedTask.id,
+      msg.owner_user_id,
+      "INFO",
+      "awaiting_schedule",
+      holdMsg
+    );
+    await recordTaskAttemptFinish(db, attemptId, "failed", "awaiting_schedule", null, null, holdMsg);
+    return { status: "ack", reason: holdMsg };
   }
 
   if (!claimedTask.facebook_page_id) {
