@@ -945,7 +945,7 @@ export async function publishReelViaGraphApi(
   try {
     // GIAI ĐOẠN 1: Khởi tạo phiên upload Reels (upload_phase=start)
     if (onStageLog) {
-      await onStageLog("start_session", `Khởi tạo phiên upload Reels trên Page ${facebookPageId}...`);
+      await onStageLog("start_session", "Đang chuẩn bị video...");
     }
 
     const startResp = await fetch(`${cfg.graphBase}/${facebookPageId}/video_reels`, {
@@ -990,10 +990,7 @@ export async function publishReelViaGraphApi(
 
     // GIAI ĐOẠN 2: Upload dữ liệu binary lên rupload.facebook.com
     if (onStageLog) {
-      await onStageLog(
-        "upload_binary",
-        `Đang truyền dữ liệu video lên Meta (${videoId}, size=${videoSizeBytes} bytes)...`
-      );
+      await onStageLog("upload_binary", "Đang tải video lên Facebook...");
     }
 
     let uploadResp: Response;
@@ -1058,7 +1055,7 @@ export async function publishReelViaGraphApi(
 
     // GIAI ĐOẠN 3: Hoàn tất và xuất bản Reels (upload_phase=finish)
     if (onStageLog) {
-      await onStageLog("finish_publish", `Đang xác nhận xuất bản Reels (video_id=${videoId})...`);
+      await onStageLog("finish_publish", "Đang xuất bản thước phim...");
     }
 
     const finishParams = new URLSearchParams({
@@ -1148,13 +1145,13 @@ export async function publishReelViaGraphApi(
         const cmtData = (await cmtResp.json()) as Record<string, unknown>;
         if (cmtResp.ok && cmtData.id) {
           commentId = String(cmtData.id);
-          commentLog = ` | Đã đăng bình luận tự động (${commentId})`;
+          commentLog = " (Đã đăng bình luận tự động)";
         } else {
           const cErr = (cmtData.error || {}) as Record<string, unknown>;
-          commentLog = ` | Cảnh báo comment: ${sanitizeSensitiveText(cErr.message || "Không thể tạo bình luận")}`;
+          commentLog = ` (Lỗi comment: ${sanitizeSensitiveText(cErr.message || "Không thể tạo bình luận")})`;
         }
       } catch (cEx) {
-        commentLog = ` | Cảnh báo comment: ${sanitizeSensitiveText((cEx as Error).message)}`;
+        commentLog = ` (Lỗi comment: ${sanitizeSensitiveText((cEx as Error).message)})`;
       }
     }
 
@@ -1165,7 +1162,7 @@ export async function publishReelViaGraphApi(
       video_url: permalinkUrl,
       comment_id: commentId,
       stage: "completed",
-      message: `Đăng Reels thành công! Video ID: ${videoId}${commentLog}`
+      message: `Đã đăng Reels thành công!${commentLog}`
     };
   } catch (err) {
     return {

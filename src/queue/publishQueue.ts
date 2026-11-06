@@ -124,7 +124,7 @@ export async function enqueueUserPendingTasks(
       db,
       task.id,
       "queued",
-      "Đã đưa vào hàng đợi xuất bản Reels (Queued)...",
+      "Đang trong hàng đợi đăng...",
       { clearLease: true }
     );
     await appendTaskStageLog(
@@ -133,7 +133,7 @@ export async function enqueueUserPendingTasks(
       ownerUserId,
       "INFO",
       "queued",
-      `Đã xếp hàng đợi xuất bản (idempotency_key=${idempotencyKey}).`
+      "Đã đưa vào hàng đợi đăng Reels."
     );
 
     messagesToEnqueue.push({
@@ -249,7 +249,7 @@ export async function consumeSingleTaskMessage(
   if (claimedTask.scheduled_at && claimedTask.scheduled_at > currentNowUtc) {
     const diffSec = claimedTask.scheduled_at - currentNowUtc;
     const diffMin = Math.ceil(diffSec / 60);
-    const holdMsg = `Chưa đến thời gian hẹn lịch (còn ${diffMin} phút - Lịch hẹn: ${claimedTask.schedule_date || ''} ${claimedTask.schedule_time || ''} Asia/Ho_Chi_Minh). Đã giữ lại chờ Cron.`;
+    const holdMsg = `Đang chờ đến giờ hẹn: ${claimedTask.schedule_date || ''} ${claimedTask.schedule_time || ''} (còn ${diffMin} phút)`;
     await updateTaskExecutionState(
       db,
       claimedTask.id,
@@ -424,7 +424,8 @@ export async function processTaskQueueMessages(
   env: Env,
   messages: QueueTaskMessage[]
 ): Promise<void> {
-  const concurrency = 3;
+  // Tự động phân luồng tối ưu: 1 đến tối đa 5 luồng song song tuỳ theo số lượng tác vụ
+  const concurrency = Math.min(5, Math.max(1, Math.min(messages.length, 3)));
   let index = 0;
 
   async function workerLoop(): Promise<void> {

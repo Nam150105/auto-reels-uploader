@@ -74,7 +74,7 @@ export async function dispatchDueScheduledTasks(
              idempotency_key = ?,
              next_retry_at = NULL,
              locked_until = NULL,
-             log = 'Đến giờ hẹn lịch -> Đã đưa vào Queue xuất bản...',
+             log = 'Đến giờ hẹn lịch -> Đang đăng video...',
              updated_at = ?
          WHERE id = ?
            AND status = ?`

@@ -946,15 +946,21 @@
         const res = await fetch('/api/runner/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ threads: config.value.threads })
+          body: JSON.stringify({})
         });
         const data = await res.json();
         if (res.ok) {
           showToast(data.message || "Đã bắt đầu tiến trình đăng Reels!", "success");
           isRunning.value = true;
           await loadAll();
+          scheduleNextPoll();
         } else {
-          showToast(data.detail || data.message || "Không thể bắt đầu tiến trình.", "error");
+          const msg = data.detail || data.message || "Không thể bắt đầu tiến trình.";
+          if (msg.includes("hẹn lịch")) {
+            showToast(msg, "info");
+          } else {
+            showToast(msg, "warning");
+          }
         }
       } catch (err) {
         showToast("Lỗi kết nối runner: " + err.message, "error");
@@ -968,6 +974,7 @@
         showToast(data.message || "Đã gửi tín hiệu dừng khẩn cấp.", "info");
         isRunning.value = false;
         await loadAll();
+        scheduleNextPoll();
       } catch (err) {
         showToast("Lỗi dừng runner: " + err.message, "error");
       }
@@ -1381,10 +1388,65 @@
       }
     }
 
+    function formatFriendlyLog(t) {
+      if (!t) return '';
+      const raw = (t.log || t.error_message || '').trim();
+      const st = t.status || '';
+
+      if (st === 'success') {
+        if (raw.toLowerCase().includes('bình luận')) {
+          return 'Đã đăng Reels thành công! (Có bình luận)';
+        }
+        return 'Đã đăng Reels thành công!';
+      }
+
+      if (st === 'running' || st === 'processing') {
+        if (raw.includes('chuẩn bị')) return 'Đang chuẩn bị video...';
+        if (raw.includes('tải') || raw.includes('rupload')) return 'Đang tải video lên Facebook...';
+        if (raw.includes('xuất bản') || raw.includes('finish')) return 'Đang xuất bản thước phim...';
+        return raw || 'Đang đăng Reels lên Facebook...';
+      }
+
+      if (st === 'queued') {
+        return 'Đang trong hàng đợi đăng...';
+      }
+
+      if (st === 'scheduled' || st === 'pending') {
+        if (raw.startsWith('Đang chờ đến giờ hẹn') || raw.startsWith('Chưa đến thời gian')) {
+          return raw;
+        }
+        if (t.schedule_date || t.schedule_time) {
+          return `Hẹn giờ đăng: ${t.schedule_date || ''} ${t.schedule_time || ''}`;
+        }
+        return 'Chờ bấm Đăng Reels';
+      }
+
+      if (st === 'cancelled') {
+        return 'Đã hủy đăng';
+      }
+
+      if (st === 'failed') {
+        if (raw.includes('Session has expired') || raw.includes('Error validating access token') || raw.includes('190')) {
+          return 'Phiên Facebook hết hạn, vui lòng kết nối lại tài khoản';
+        }
+        if (raw.includes('CREATE_CONTENT') || raw.includes('không có quyền')) {
+          return 'Fanpage thiếu quyền tạo Reels';
+        }
+        if (raw.includes('E_FILE_NOT_FOUND') || raw.includes('không tìm thấy')) {
+          return 'Không tìm thấy file video';
+        }
+        return raw.replace(/https?:\/\/[^\s]+/g, '').replace(/video_id=[^\s,)]+/g, '').trim() || 'Lỗi đăng Reels';
+      }
+
+      return raw;
+    }
+
     async function openLogModal(t) {
+      const friendly = formatFriendlyLog(t);
       currentLogTask.value = {
         id: t.id,
         title: `Chi tiết Task #${t.id} - ${t.page_name || 'Fanpage'}`,
+        friendlyLog: friendly,
         log: t.log || t.error_message || '(Chưa có thông điệp log)',
         video_url: t.video_url || ''
       };
@@ -1455,7 +1517,43 @@
     // ==========================================
     // 11. LIFECYCLE, MULTI-TAB SYNC & POLLING
     // ==========================================
-    let pollInterval = null;
+    let pollTimer = null;
+    let isPollingTick = false;
+
+    async function triggerPoll() {
+      if (document.hidden || authState.value !== 'authenticated' || isPollingTick) return;
+      isPollingTick = true;
+      try {
+        await Promise.allSettled([loadStats(), loadTasks()]);
+        const hasActive = isRunning.value ||
+          systemStats.value.running_tasks > 0 ||
+          tasks.value.some(t => t.status === 'running' || t.status === 'queued');
+        if (!hasActive && isRunning.value) {
+          isRunning.value = false;
+        }
+      } finally {
+        isPollingTick = false;
+      }
+    }
+
+    function scheduleNextPoll() {
+      if (pollTimer) clearTimeout(pollTimer);
+      const hasActive = isRunning.value ||
+        systemStats.value.running_tasks > 0 ||
+        tasks.value.some(t => t.status === 'running' || t.status === 'queued');
+      const delay = hasActive ? 1500 : 3000;
+      pollTimer = setTimeout(async () => {
+        await triggerPoll();
+        scheduleNextPoll();
+      }, delay);
+    }
+
+    function onVisibilityChange() {
+      if (!document.hidden && authState.value === 'authenticated') {
+        triggerPoll();
+        scheduleNextPoll();
+      }
+    }
 
     function onPopState() {
       const p = window.location.pathname;
@@ -1536,27 +1634,14 @@
         });
       }
 
-      // 4. Smart Polling tối ưu cho Cloudflare Workers Free Plan:
-      // - Chỉ poll nhanh (5 giây) khi có tác vụ đang chạy/queued
-      // - Giãn cách 30 giây khi hệ thống rảnh và tạm dừng khi ẩn tab trình duyệt
-      let lastIdlePollTime = Date.now();
-      pollInterval = setInterval(async () => {
-        if (document.hidden || authState.value !== 'authenticated') return;
-        const hasActiveWork = isRunning.value || systemStats.value.running_tasks > 0;
-        const now = Date.now();
-        if (!hasActiveWork && now - lastIdlePollTime < 30000) {
-          return;
-        }
-        lastIdlePollTime = now;
-        await loadStats();
-        if (isRunning.value || systemStats.value.running_tasks > 0) {
-          await Promise.allSettled([loadTasks(), loadPages()]);
-        }
-      }, 5000);
+      // 4. Realtime Polling không cần tải lại trang
+      scheduleNextPoll();
+      document.addEventListener('visibilitychange', onVisibilityChange);
     });
 
     onUnmounted(() => {
-      if (pollInterval) clearInterval(pollInterval);
+      if (pollTimer) clearTimeout(pollTimer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       clearOAuthPopupWatcher();
       for (const ctrl of activeAbortControllers.values()) {
         try { ctrl.abort(); } catch (e) {}
@@ -1673,6 +1758,7 @@
       handleResetTask,
       handleDeleteTask,
       openLogModal,
+      formatFriendlyLog,
       copyToClipboard,
       getFileName,
       startResizeSplitter
