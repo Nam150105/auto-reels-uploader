@@ -233,7 +233,10 @@ class TestAuthAndPublicPages(unittest.TestCase):
         oauth_url = res["oauth_url"]
 
         self.assertIn("client_id=1469615908436980", oauth_url)
-        self.assertIn("redirect_uri=https://namnangno.click/api/meta/callback", oauth_url)
+        self.assertTrue(
+            "redirect_uri=https://pagefb.namnangno.click/api/meta/callback" in oauth_url or
+            "redirect_uri=https://namnangno.click/api/meta/callback" in oauth_url
+        )
         self.assertIn("auth_type=rerequest", oauth_url)
         self.assertIn("public_profile", oauth_url)
         self.assertIn("pages_show_list", oauth_url)

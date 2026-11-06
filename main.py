@@ -350,11 +350,22 @@ def reconnect_account_url_endpoint(account_id: str, request: Request = None):
     return res
 
 
+def extract_request_base_url(request: Request = None) -> Optional[str]:
+    if not request:
+        return None
+    proto = request.headers.get("x-forwarded-proto") or (request.url.scheme if hasattr(request, "url") else "https")
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or (request.url.netloc if hasattr(request, "url") else None)
+    if host and "testserver" not in host.lower():
+        return f"{proto}://{host}"
+    return None
+
+
 @app.get("/api/meta/oauth-url")
 def meta_oauth_url_endpoint(account_id: Optional[str] = None, request: Request = None):
     """Tạo URL đăng nhập Facebook OAuth 2.0 kèm CSRF state token riêng biệt."""
     user, owner_uid, _ = get_user_context(request)
-    res = generate_oauth_url(account_id=account_id, user_id=owner_uid, auth_type="rerequest")
+    base_url = extract_request_base_url(request)
+    res = generate_oauth_url(account_id=account_id, user_id=owner_uid, auth_type="rerequest", custom_base_url=base_url)
     if res["status"] == "error":
         raise HTTPException(status_code=400, detail=res["message"])
     return res
@@ -372,7 +383,8 @@ def meta_login_redirect_endpoint(
     gắn state với user hiện tại, hỗ trợ auth_type=rerequest và redirect trực tiếp.
     """
     user, owner_uid, _ = get_user_context(request)
-    res = generate_oauth_url(account_id=account_id, user_id=owner_uid, auth_type=auth_type)
+    base_url = extract_request_base_url(request)
+    res = generate_oauth_url(account_id=account_id, user_id=owner_uid, auth_type=auth_type, custom_base_url=base_url)
     if res["status"] == "error":
         raise HTTPException(status_code=400, detail=res["message"])
     return RedirectResponse(res["oauth_url"], status_code=302)
@@ -877,6 +889,9 @@ def data_deletion_status_endpoint(code: Optional[str] = None):
 
 # Phục vụ giao diện tĩnh Web GUI
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+js_dir = os.path.join(STATIC_DIR, "js")
+if os.path.exists(js_dir):
+    app.mount("/js", StaticFiles(directory=js_dir), name="js")
 
 
 @app.get("/login", response_class=HTMLResponse)

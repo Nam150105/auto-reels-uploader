@@ -4,10 +4,18 @@
  * Chế độ Chạy Thử (Run Test) vs Đăng Reels (Run Task), Phân bổ Bulk Task, Smart Date/Time Presets.
  */
 
-const { createApp, ref, computed, watch, onMounted, onUnmounted } = Vue;
+(function () {
+  function initMainDashboard() {
+    if (typeof Vue === 'undefined') {
+      console.warn("Vue 3 runtime chưa sẵn sàng, đang thử lại...");
+      setTimeout(initMainDashboard, 50);
+      return;
+    }
 
-createApp({
-  setup() {
+    const { createApp, ref, computed, watch, onMounted, onUnmounted } = Vue;
+
+    const app = createApp({
+      setup() {
     // ==========================================
     // 1. STATE DỮ LIỆU CHÍNH
     // ==========================================
@@ -1034,4 +1042,28 @@ createApp({
       startResizeSplitter
     };
   }
-}).mount('#app');
+});
+
+    app.mount('#app');
+
+    // Ẩn màn hình loading fallback
+    const loader = document.getElementById('app-loading-screen');
+    if (loader) {
+      loader.style.opacity = '0';
+      setTimeout(() => loader.remove(), 250);
+    }
+  }
+
+  // Khởi chạy khi DOM đã sẵn sàng
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initMainDashboard);
+  } else {
+    initMainDashboard();
+  }
+
+  // Cảnh báo timeout sau 6 giây nếu gặp sự cố mạng hoặc CDN
+  setTimeout(() => {
+    const hint = document.getElementById('app-timeout-hint');
+    if (hint) hint.classList.remove('hidden');
+  }, 6000);
+})();

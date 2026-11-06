@@ -25,12 +25,12 @@ DEFAULT_SCOPES = [
 _csrf_states: Dict[str, Any] = {}
 
 
-def get_meta_config() -> Dict[str, str]:
+def get_meta_config(custom_base_url: Optional[str] = None) -> Dict[str, str]:
     """Lấy thông số cấu hình Meta Developer App từ biến môi trường."""
     app_id = os.getenv("META_APP_ID", "1469615908436980").strip()
     app_secret = os.getenv("META_APP_SECRET", "").strip()
-    base_url = os.getenv("APP_BASE_URL", "https://namnangno.click").strip().rstrip("/")
-    redirect_uri = os.getenv("META_REDIRECT_URI", f"{base_url}/api/meta/callback").strip()
+    base_url = (custom_base_url or os.getenv("APP_BASE_URL", "https://pagefb.namnangno.click")).strip().rstrip("/")
+    redirect_uri = f"{base_url}/api/meta/callback" if custom_base_url else os.getenv("META_REDIRECT_URI", f"{base_url}/api/meta/callback").strip()
     api_version = os.getenv("META_GRAPH_VERSION", os.getenv("META_GRAPH_API_VERSION", DEFAULT_API_VERSION)).strip() or DEFAULT_API_VERSION
     if not api_version.startswith("v"):
         api_version = f"v{api_version}"
@@ -48,13 +48,14 @@ def generate_oauth_url(
     scopes: Optional[List[str]] = None,
     account_id: Optional[str] = None,
     user_id: Optional[str] = None,
-    auth_type: Optional[str] = "rerequest"
+    auth_type: Optional[str] = "rerequest",
+    custom_base_url: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Tạo URL đăng nhập Facebook OAuth 2.0 (Authorization Code Flow) kèm mã CSRF State riêng biệt.
     Mỗi lần gọi sẽ tạo một state mới độc lập gắn với user hiện tại, không ghi đè các tài khoản đã kết nối.
     """
-    cfg = get_meta_config()
+    cfg = get_meta_config(custom_base_url=custom_base_url)
     if not cfg["app_id"]:
         return {
             "status": "error",

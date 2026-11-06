@@ -4,15 +4,26 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Đăng Nhập - Hệ Thống Quản Lý Fanpage & Reels Scheduler</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
+  <!-- Vue 3 Production CDN (Multi-CDN: Cloudflare CDNJS -> jsDelivr -> unpkg) -->
+  <script data-cfasync="false" src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.4.21/vue.global.prod.js"></script>
+  <script data-cfasync="false">
+    if (typeof Vue === 'undefined') {
+      document.write('<script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"><\/script>');
+    }
+  </script>
+  <script data-cfasync="false">
+    if (typeof Vue === 'undefined') {
+      document.write('<script data-cfasync="false" src="https://unpkg.com/vue@3/dist/vue.global.prod.js"><\/script>');
+    }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Plus Jakarta Sans', sans-serif; }
     .font-mono { font-family: 'JetBrains Mono', monospace; }
-    [v-cloak] { display: none; }
+    [v-cloak] { display: none !important; }
   </style>
 </head>
 <body class="h-full flex items-center justify-center p-4 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 select-none">
@@ -170,9 +181,14 @@
 
   </div>
 
-  <script>
-    const { createApp, ref } = Vue;
-    createApp({
+  <script data-cfasync="false">
+    function initLoginApp() {
+      if (typeof Vue === 'undefined') {
+        setTimeout(initLoginApp, 50);
+        return;
+      }
+      const { createApp, ref } = Vue;
+      createApp({
       setup() {
         const activeTab = ref('login');
         const loading = ref(false);
@@ -266,6 +282,12 @@
         };
       }
     }).mount('#app');
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initLoginApp);
+    } else {
+      initLoginApp();
+    }
   </script>
 </body>
 </html>
