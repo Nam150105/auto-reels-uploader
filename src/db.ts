@@ -201,6 +201,10 @@ export async function ensureDatabaseInitialized(
       video_id TEXT DEFAULT '',
       post_id TEXT DEFAULT '',
       video_url TEXT DEFAULT '',
+      comment_id TEXT DEFAULT '',
+      comment_status TEXT DEFAULT 'none',
+      comment_log TEXT DEFAULT '',
+      comment_posted_at TEXT,
       created_at TEXT,
       updated_at TEXT
     )`,
@@ -299,6 +303,12 @@ export async function ensureDatabaseInitialized(
   ];
 
   await db.batch(statements.map((sql) => db.prepare(sql)));
+
+  // Tương thích với CSDL hiện có (Thêm các cột trạng thái comment nếu chưa có)
+  try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT ''"); } catch {}
+  try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none'"); } catch {}
+  try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_log TEXT DEFAULT ''"); } catch {}
+  try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_posted_at TEXT"); } catch {}
 
   // Khởi tạo tài khoản quản trị viên mặc định nếu hệ thống mới tinh
   const existingAdmin = await db
@@ -1909,6 +1919,8 @@ export async function addTask(
   const scheduledAt = parsedSchedule.scheduledAtUtc;
   const status = params.status || "pending";
   const idempotencyKey = `task_${params.ownerUserId}_${pageId || "unassigned"}_${randomHex(8)}`;
+  const cleanComment = (params.commentText || "").trim();
+  const initialCommentStatus = cleanComment ? "pending" : "none";
 
   const res = await db
     .prepare(
@@ -1916,8 +1928,9 @@ export async function addTask(
          owner_user_id, profile_id, facebook_page_id, media_id, object_key,
          video_path, caption, comment_text, schedule_date, schedule_time,
          scheduled_at, timezone, status, idempotency_key, attempt_count, max_attempts,
-         log, video_id, post_id, video_url, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Chờ xử lý', '', '', '', ?, ?)`
+         log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`
     )
     .bind(
       params.ownerUserId,
@@ -1933,6 +1946,7 @@ export async function addTask(
       scheduledAt,
       status,
       idempotencyKey,
+      initialCommentStatus,
       now,
       now
     )
@@ -2106,6 +2120,12 @@ export async function getTasks(
       video_id: String(r.video_id || ""),
       post_id: String(r.post_id || ""),
       video_url: String(r.video_url || ""),
+      comment_id: String(r.comment_id || ""),
+      comment_status: String(
+        r.comment_status || (r.comment_text ? "pending" : "none")
+      ),
+      comment_log: String(r.comment_log || ""),
+      comment_posted_at: (r.comment_posted_at as string) || null,
       created_at: (r.created_at as string) || null,
       updated_at: (r.updated_at as string) || null,
       page_name: (r.page_name as string) || null,
@@ -2167,6 +2187,15 @@ export async function updateTask(
   }
   const now = new Date().toISOString();
 
+  let newCommentStatus = existing.comment_status || "none";
+  if (params.commentText !== undefined) {
+    if (!newComment.trim()) {
+      newCommentStatus = "none";
+    } else if (existing.comment_text !== newComment) {
+      newCommentStatus = "pending";
+    }
+  }
+
   await db
     .prepare(
       `UPDATE tasks
@@ -2177,6 +2206,7 @@ export async function updateTask(
            video_path = ?,
            caption = ?,
            comment_text = ?,
+           comment_status = ?,
            schedule_date = ?,
            schedule_time = ?,
            scheduled_at = ?,
@@ -2191,6 +2221,7 @@ export async function updateTask(
       newVideo,
       newCaption,
       newComment,
+      newCommentStatus,
       newDate,
       newTime,
       parsedSchedule.scheduledAtUtc,
@@ -2254,6 +2285,40 @@ export async function updateTaskExecutionState(
       extra?.attemptCount !== undefined ? extra.attemptCount : null,
       extra?.clearLease ? 1 : 0,
       extra?.clearLease ? 1 : 0,
+      now,
+      taskId
+    )
+    .run();
+}
+
+export async function updateTaskCommentState(
+  db: D1Database,
+  taskId: number,
+  commentStatus: string,
+  commentLogMsg: string,
+  extra?: {
+    commentId?: string | null;
+    commentPostedAt?: string | null;
+  }
+): Promise<void> {
+  const now = new Date().toISOString();
+  const cleanLog = sanitizeSensitiveText(commentLogMsg);
+
+  await db
+    .prepare(
+      `UPDATE tasks
+       SET comment_status = ?,
+           comment_log = ?,
+           comment_id = COALESCE(?, comment_id),
+           comment_posted_at = COALESCE(?, comment_posted_at),
+           updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(
+      commentStatus,
+      cleanLog,
+      extra?.commentId !== undefined ? extra.commentId : null,
+      extra?.commentPostedAt !== undefined ? extra.commentPostedAt : null,
       now,
       taskId
     )
@@ -2383,6 +2448,10 @@ export async function resetTask(
            video_id = '',
            post_id = '',
            video_url = '',
+           comment_id = '',
+           comment_status = CASE WHEN comment_text != '' THEN 'pending' ELSE 'none' END,
+           comment_log = '',
+           comment_posted_at = NULL,
            updated_at = ?
        WHERE id = ? AND owner_user_id = ?`
     )

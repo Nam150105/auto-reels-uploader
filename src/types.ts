@@ -307,6 +307,10 @@ export interface TaskRecord {
   video_id: string;
   post_id: string;
   video_url: string;
+  comment_id?: string | null;
+  comment_status?: string | null;
+  comment_log?: string | null;
+  comment_posted_at?: string | null;
   created_at: string | null;
   updated_at: string | null;
   page_name?: string | null;

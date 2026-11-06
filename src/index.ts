@@ -25,6 +25,7 @@ import {
   deleteFacebookAccountWithPages,
   disconnectAllUserAccounts,
   getFacebookPages,
+  getFacebookPageByFbId,
   updatePageSelection,
   bulkUpdatePageSelection,
   deleteFacebookPageLocal,
@@ -38,7 +39,9 @@ import {
   resetTask,
   resetRunningTasks,
   getTaskLogs,
-  getTaskAttempts
+  getTaskAttempts,
+  updateTaskCommentState,
+  appendTaskStageLog
 } from "./db.ts";
 import {
   PRODUCTION_DOMAIN,
@@ -53,7 +56,8 @@ import {
   checkPagePermissionOnMeta,
   validateVideoSource,
   runDiagnosticTest,
-  connectFacebookWithAccessToken
+  connectFacebookWithAccessToken,
+  postReelCommentViaGraphApi
 } from "./services/metaGraphService.ts";
 import { deleteUserVideo, getR2Bucket } from "./services/r2MediaService.ts";
 import {
@@ -905,6 +909,99 @@ export async function handleWorkerRequest(
         return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
       }
       return jsonResponse({ success: true, id: taskId });
+    }
+
+    const taskRetryCommentMatch = /^\/api\/tasks\/(\d+)\/retry-comment$/.exec(pathname);
+    if (taskRetryCommentMatch && method === "POST") {
+      const taskId = parseInt(taskRetryCommentMatch[1], 10);
+      const task = await getTask(db, taskId, ownerUserId);
+      if (!task) {
+        return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+      }
+
+      if (task.status !== "success" || !task.post_id) {
+        return jsonResponse(
+          { detail: "Chỉ có thể đăng lại bình luận cho bài Reels đã xuất bản thành công." },
+          400
+        );
+      }
+
+      const cleanComment = (task.comment_text || "").trim();
+      if (!cleanComment) {
+        return jsonResponse({ detail: "Tác vụ này không có nội dung bình luận." }, 400);
+      }
+
+      if (task.comment_status === "success" && task.comment_id) {
+        return jsonResponse({
+          success: true,
+          message: "Bình luận này đã được đăng thành công trên Facebook.",
+          comment_id: task.comment_id
+        });
+      }
+
+      if (!task.facebook_page_id) {
+        return jsonResponse({ detail: "Tác vụ chưa được gán Fanpage." }, 400);
+      }
+
+      const page = await getFacebookPageByFbId(
+        db,
+        encryptionKey,
+        task.facebook_page_id,
+        true,
+        ownerUserId
+      );
+
+      if (!page || !page.page_access_token) {
+        return jsonResponse(
+          { detail: `Không tìm thấy Page Access Token hợp lệ cho Fanpage ${task.facebook_page_id}.` },
+          400
+        );
+      }
+
+      await updateTaskCommentState(db, task.id, "processing", "Đang thử đăng lại bình luận...");
+      await appendTaskStageLog(
+        db,
+        task.id,
+        ownerUserId,
+        "INFO",
+        "retry_comment",
+        "Người dùng yêu cầu thử đăng lại bình luận."
+      );
+
+      const cmtRes = await postReelCommentViaGraphApi(db, env, {
+        facebookPageId: task.facebook_page_id,
+        pageAccessToken: page.page_access_token,
+        postId: task.post_id,
+        commentText: cleanComment,
+        ownerUserId,
+        taskId: task.id
+      });
+
+      if (cmtRes.success) {
+        await updateTaskCommentState(db, task.id, "success", cmtRes.message, {
+          commentId: cmtRes.comment_id,
+          commentPostedAt: new Date().toISOString()
+        });
+        await appendTaskStageLog(db, task.id, ownerUserId, "INFO", "comment_success", cmtRes.message);
+        return jsonResponse({
+          success: true,
+          comment_id: cmtRes.comment_id,
+          comment_status: "success",
+          message: cmtRes.message
+        });
+      } else {
+        await updateTaskCommentState(db, task.id, "failed", cmtRes.message);
+        await appendTaskStageLog(db, task.id, ownerUserId, "WARN", "comment_failed", cmtRes.message);
+        return jsonResponse(
+          {
+            success: false,
+            comment_status: "failed",
+            detail: cmtRes.message,
+            message: cmtRes.message
+          },
+          400
+        );
+      }
     }
 
     const taskItemMatch = /^\/api\/tasks\/(\d+)$/.exec(pathname);

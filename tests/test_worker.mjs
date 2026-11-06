@@ -439,6 +439,10 @@ async function runAll30Tests() {
   let simulateUpload500Once = false;
   let simulateAmbiguousFinishError = false;
   let simulateExpiredTokenPageId = "";
+  let simulateCommentPermissionError = false;
+  let simulateCommentNetworkError = false;
+  let simulateCommentTimeout = false;
+  let commentsCreatedOnFacebook = [];
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
@@ -706,7 +710,42 @@ async function runAll30Tests() {
     }
 
     if (u.includes("/comments")) {
-      return new Response(JSON.stringify({ id: "cmt_888999" }), { status: 200 });
+      const method = (init?.method || "GET").toUpperCase();
+      if (method === "GET") {
+        return new Response(JSON.stringify({ data: commentsCreatedOnFacebook }), { status: 200 });
+      }
+      if (simulateCommentPermissionError) {
+        simulateCommentPermissionError = false;
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "(#200) Requires pages_manage_engagement and MODERATE permission",
+              code: 200
+            }
+          }),
+          { status: 403 }
+        );
+      }
+      if (simulateCommentNetworkError) {
+        simulateCommentNetworkError = false;
+        throw new Error("Failed to fetch: Connection reset by peer");
+      }
+      if (simulateCommentTimeout) {
+        simulateCommentTimeout = false;
+        let cBody = {};
+        try { cBody = JSON.parse(init?.body || "{}"); } catch {}
+        commentsCreatedOnFacebook.push({ id: "cmt_timeout_recovered", message: cBody.message || "" });
+        throw new Error("Gateway timeout 504 on comment publish");
+      }
+      let cBody = {};
+      try { cBody = JSON.parse(init?.body || "{}"); } catch {}
+      const cId = `cmt_${Math.random().toString(36).substring(2, 9)}`;
+      commentsCreatedOnFacebook.push({ id: cId, message: cBody.message || "" });
+      return new Response(JSON.stringify({ id: cId }), { status: 200 });
+    }
+
+    if (u.match(/\/cmt_[a-zA-Z0-9]+/)) {
+      return new Response(JSON.stringify({ id: "cmt_verified" }), { status: 200 });
     }
 
     return originalFetch(input, init);
@@ -1442,6 +1481,230 @@ async function runAll30Tests() {
   console.log("  ✓ [Test 28] Không lộ META_APP_SECRET hoặc Access Token trong Frontend & Config");
   console.log("  ✓ [Test 29] Không còn đường dẫn ổ đĩa Windows (D:\\Videos) trong Production Flow");
   console.log("  ✓ [Test 30] Không có dependency Playwright/GemLogin/FastAPI trong Worker Production");
+
+  // --------------------------------------------------------------------------
+  // [TEST 31] BỔ SUNG API TỰ ĐỘNG COMMENT SAU KHI ĐĂNG REELS (9 KỊCH BẢN BẮT BUỘC)
+  // --------------------------------------------------------------------------
+  console.log("\n  --- BẮT ĐẦU KIỂM THỬ 9 KỊCH BẢN TỰ ĐỘNG COMMENT SAU KHI ĐĂNG REELS ---");
+
+  // Kết nối lại Fanpage cho Alice để kiểm thử các kịch bản bình luận
+  await callWorker("/api/meta/connect-token", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      access_token: "EAAB_EXPLORER_TOKEN_VALID"
+    })
+  });
+
+  // [Kịch bản 1] Đăng Reels không có comment:
+  // Bỏ qua hoàn toàn bước comment, Reels thành công, comment_status = 'none'
+  const taskNoCmtResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Reel không có comment",
+      comment_text: ""
+    })
+  });
+  const taskNoCmt = (await taskNoCmtResp.json()).task;
+  const resNoCmt = await consumeSingleTaskMessage(d1, env, {
+    task_id: taskNoCmt.id,
+    owner_user_id: taskNoCmt.owner_user_id,
+    idempotency_key: `idem_nocmt_${taskNoCmt.id}`,
+    attempt: 1,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  assert.equal(resNoCmt.status, "ack");
+  const taskNoCmtDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const finishedNoCmt = taskNoCmtDb.find(t => t.id === taskNoCmt.id);
+  assert.equal(finishedNoCmt.status, "success");
+  assert.equal(finishedNoCmt.comment_status, "none");
+  assert.equal(finishedNoCmt.comment_id, "");
+  console.log("    ✓ [Scenario 1] Đăng Reels không có comment: Bỏ qua comment, Reels thành công");
+
+  // [Kịch bản 2 & 3] Đăng Reels có comment: Reels thành công, comment thành công
+  // Lưu riêng: video_id, post_id, comment_id
+  const taskWithCmtResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Reel có comment",
+      comment_text: "Bình luận kịch bản 2 & 3"
+    })
+  });
+  const taskWithCmt = (await taskWithCmtResp.json()).task;
+  const resWithCmt = await consumeSingleTaskMessage(d1, env, {
+    task_id: taskWithCmt.id,
+    owner_user_id: taskWithCmt.owner_user_id,
+    idempotency_key: `idem_withcmt_${taskWithCmt.id}`,
+    attempt: 1,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  assert.equal(resWithCmt.status, "ack");
+  const taskWithCmtDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const finishedWithCmt = taskWithCmtDb.find(t => t.id === taskWithCmt.id);
+  assert.equal(finishedWithCmt.status, "success");
+  assert.equal(finishedWithCmt.comment_status, "success");
+  assert.ok(finishedWithCmt.comment_id);
+  assert.ok(finishedWithCmt.video_id);
+  assert.ok(finishedWithCmt.post_id);
+  assert.notEqual(finishedWithCmt.video_id, finishedWithCmt.post_id, "Video ID và Post ID phải riêng biệt");
+  assert.notEqual(finishedWithCmt.post_id, finishedWithCmt.comment_id, "Post ID và Comment ID phải riêng biệt");
+  console.log("    ✓ [Scenario 2 & 3] Đăng Reels có comment: Cả 2 thành công, lưu 3 ID riêng biệt");
+
+  // [Kịch bản 4] Reels thành công, comment thiếu quyền (pages_manage_engagement / MODERATE)
+  // Reels KHÔNG bị đánh dấu thất bại! Giữ status = 'success', comment_status = 'failed'
+  simulateCommentPermissionError = true;
+  const taskPermResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Reel comment thiếu quyền",
+      comment_text: "Comment thiếu quyền MODERATE"
+    })
+  });
+  const taskPerm = (await taskPermResp.json()).task;
+  await consumeSingleTaskMessage(d1, env, {
+    task_id: taskPerm.id,
+    owner_user_id: taskPerm.owner_user_id,
+    idempotency_key: `idem_perm_${taskPerm.id}`,
+    attempt: 1,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  const taskPermDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const finishedPerm = taskPermDb.find(t => t.id === taskPerm.id);
+  assert.equal(finishedPerm.status, "success", "Reels vẫn phải thành công khi comment thiếu quyền");
+  assert.equal(finishedPerm.comment_status, "failed");
+  assert.ok(finishedPerm.comment_log.includes("pages_manage_engagement") || finishedPerm.comment_log.includes("MODERATE"));
+  console.log("    ✓ [Scenario 4] Reels thành công, comment thiếu quyền: Reels giữ success, comment_status = failed");
+
+  // [Kịch bản 5] Reels thành công, comment lỗi mạng
+  // Reels vẫn giữ status = 'success', comment_status = 'failed'
+  simulateCommentNetworkError = true;
+  const taskNetResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Reel comment lỗi mạng",
+      comment_text: "Comment lỗi mạng"
+    })
+  });
+  const taskNet = (await taskNetResp.json()).task;
+  await consumeSingleTaskMessage(d1, env, {
+    task_id: taskNet.id,
+    owner_user_id: taskNet.owner_user_id,
+    idempotency_key: `idem_net_${taskNet.id}`,
+    attempt: 1,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  const taskNetDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const finishedNet = taskNetDb.find(t => t.id === taskNet.id);
+  assert.equal(finishedNet.status, "success", "Reels vẫn phải thành công khi comment lỗi mạng");
+  assert.equal(finishedNet.comment_status, "failed");
+  console.log("    ✓ [Scenario 5] Reels thành công, comment lỗi mạng: Reels giữ success, comment_status = failed");
+
+  // [Kịch bản 6] Comment timeout: Khôi phục và phát hiện comment đã tồn tại trên Facebook
+  simulateCommentTimeout = true;
+  const taskTimeoutResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Reel comment timeout",
+      comment_text: "Comment timeout tự khôi phục"
+    })
+  });
+  const taskTimeout = (await taskTimeoutResp.json()).task;
+  await consumeSingleTaskMessage(d1, env, {
+    task_id: taskTimeout.id,
+    owner_user_id: taskTimeout.owner_user_id,
+    idempotency_key: `idem_timeout_${taskTimeout.id}`,
+    attempt: 1,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  const taskTimeoutDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const finishedTimeout = taskTimeoutDb.find(t => t.id === taskTimeout.id);
+  assert.equal(finishedTimeout.status, "success");
+  assert.equal(finishedTimeout.comment_status, "success", "Comment phải khôi phục thành công sau timeout");
+  assert.equal(finishedTimeout.comment_id, "cmt_timeout_recovered");
+  console.log("    ✓ [Scenario 6] Comment timeout: Tự động phát hiện comment đã tạo và xác nhận thành công");
+
+  // [Kịch bản 7] Worker khởi động lại giữa 2 bước (Reels đã thành công, comment chưa thành công)
+  // Chỉ thực hiện comment, tuyệt đối KHÔNG đăng lại Reels video!
+  const callsBeforeRestart = graphApiReelsCalled;
+  const taskRestartResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Reel restart",
+      comment_text: "Comment sau restart"
+    })
+  });
+  const taskRestart = (await taskRestartResp.json()).task;
+  // Cập nhật thủ công giả lập video_id và post_id đã hoàn thành trước khi worker crash
+  await d1.prepare("UPDATE tasks SET status = 'success', video_id = 'vid_prior_1', post_id = 'post_prior_1', comment_status = 'pending' WHERE id = ?")
+    .bind(taskRestart.id)
+    .run();
+  await consumeSingleTaskMessage(d1, env, {
+    task_id: taskRestart.id,
+    owner_user_id: taskRestart.owner_user_id,
+    idempotency_key: `idem_restart_${taskRestart.id}`,
+    attempt: 2,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  assert.equal(graphApiReelsCalled, callsBeforeRestart, "Worker restart giữa 2 bước tuyệt đối KHÔNG được upload lại video Reels");
+  const taskRestartDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const finishedRestart = taskRestartDb.find(t => t.id === taskRestart.id);
+  assert.equal(finishedRestart.status, "success");
+  assert.equal(finishedRestart.comment_status, "success");
+  console.log("    ✓ [Scenario 7] Worker restart giữa 2 bước: CHỈ đăng comment, không đăng lại video");
+
+  // [Kịch bản 8] Thử đăng lại comment qua API POST /api/tasks/:id/retry-comment
+  // Lấy taskNet (bị lỗi ở Kịch bản 5) và gọi API retry-comment
+  const callsBeforeRetry = graphApiReelsCalled;
+  const retryCommentResp = await callWorker(`/api/tasks/${finishedNet.id}/retry-comment`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(retryCommentResp.status, 200);
+  const retryCommentData = await retryCommentResp.json();
+  assert.equal(retryCommentData.success, true);
+  assert.equal(retryCommentData.comment_status, "success");
+  assert.ok(retryCommentData.comment_id);
+  assert.equal(graphApiReelsCalled, callsBeforeRetry, "API retry comment tuyệt đối KHÔNG đăng lại video");
+
+  const taskNetRetriedDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const finishedNetRetried = taskNetRetriedDb.find(t => t.id === finishedNet.id);
+  assert.equal(finishedNetRetried.comment_status, "success");
+  assert.equal(finishedNetRetried.comment_id, retryCommentData.comment_id);
+  console.log("    ✓ [Scenario 8] Thử đăng lại comment qua API retry-comment: Thành công, không đăng lại video");
+
+  // [Kịch bản 9] Đảm bảo không đăng trùng Reels và comment
+  // Gọi lại API retry-comment khi comment đã thành công -> Phải báo đã thành công và không gọi lại
+  const duplicateRetryResp = await callWorker(`/api/tasks/${finishedNet.id}/retry-comment`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(duplicateRetryResp.status, 200);
+  const duplicateRetryData = await duplicateRetryResp.json();
+  assert.ok(duplicateRetryData.message.includes("đã được đăng thành công"));
+  assert.equal(duplicateRetryData.comment_id, finishedNetRetried.comment_id);
+  console.log("    ✓ [Scenario 9] Chống đăng trùng Reels & Comment: Idempotency bảo vệ toàn vẹn");
+  console.log("  ✓ [Test 31] Bổ sung API tự động Comment sau khi đăng Reels (Pass toàn bộ 9 kịch bản)");
 
   globalThis.fetch = originalFetch;
 

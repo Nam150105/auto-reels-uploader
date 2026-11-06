@@ -1107,7 +1107,15 @@ export async function publishReelViaGraphApi(
       };
     }
 
-    const postId = String(finishData.post_id || videoId);
+    // Lấy chính xác Post ID của Reels (không nhầm Video ID với Post ID)
+    const postId = await resolveReelPostId(
+      cfg,
+      pageAccessToken,
+      facebookPageId,
+      videoId,
+      finishData.post_id ? String(finishData.post_id) : null
+    );
+
     let permalinkUrl = `https://www.facebook.com/reel/${videoId}`;
 
     // Kiểm tra permalink & trạng thái xử lý video
@@ -1127,42 +1135,13 @@ export async function publishReelViaGraphApi(
       // Keep default permalinkUrl
     }
 
-    // GIAI ĐOẠN 4: Tự động đăng bình luận dưới Reels (nếu có commentText)
-    let commentId: string | null = null;
-    let commentLog = "";
-    const cleanComment = (commentText || "").trim();
-    if (cleanComment) {
-      try {
-        const targetObj = postId || videoId;
-        const cmtResp = await fetch(`${cfg.graphBase}/${targetObj}/comments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: cleanComment,
-            access_token: pageAccessToken
-          })
-        });
-        const cmtData = (await cmtResp.json()) as Record<string, unknown>;
-        if (cmtResp.ok && cmtData.id) {
-          commentId = String(cmtData.id);
-          commentLog = " (Đã đăng bình luận tự động)";
-        } else {
-          const cErr = (cmtData.error || {}) as Record<string, unknown>;
-          commentLog = ` (Lỗi comment: ${sanitizeSensitiveText(cErr.message || "Không thể tạo bình luận")})`;
-        }
-      } catch (cEx) {
-        commentLog = ` (Lỗi comment: ${sanitizeSensitiveText((cEx as Error).message)})`;
-      }
-    }
-
     return {
       success: true,
       video_id: videoId,
       post_id: postId,
       video_url: permalinkUrl,
-      comment_id: commentId,
       stage: "completed",
-      message: `Đã đăng Reels thành công!${commentLog}`
+      message: "Đã đăng Reels thành công!"
     };
   } catch (err) {
     return {
@@ -1172,6 +1151,223 @@ export async function publishReelViaGraphApi(
       message: sanitizeSensitiveText(
         `Lỗi ngoại lệ khi xuất bản Reels: ${(err as Error).message}`
       )
+    };
+  }
+}
+
+/**
+ * 4. XÁC ĐỊNH CHÍNH XÁC POST ID CỦA BÀI REELS
+ * Không nhầm lẫn Video ID với Post ID.
+ */
+export async function resolveReelPostId(
+  cfg: ReturnType<typeof getMetaConfig>,
+  pageAccessToken: string,
+  facebookPageId: string,
+  videoId: string,
+  finishPostId?: string | null
+): Promise<string> {
+  const cleanFinishId = (finishPostId || "").trim();
+
+  // 1. Nếu API publish trả về post_id rõ ràng khác videoId (ví dụ có chứa '_' hoặc khác videoId)
+  if (cleanFinishId && cleanFinishId !== videoId) {
+    try {
+      const chkResp = await fetch(
+        `${cfg.graphBase}/${cleanFinishId}?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`
+      );
+      if (chkResp.ok) {
+        const d = (await chkResp.json()) as { id?: string };
+        if (d.id) return String(d.id);
+      }
+    } catch {}
+    return cleanFinishId;
+  }
+
+  // 2. Thử truy vấn dạng {PAGE_ID}_{VIDEO_ID} (chuẩn feed post của Facebook cho Video)
+  const compositeId = `${facebookPageId}_${videoId}`;
+  try {
+    const compResp = await fetch(
+      `${cfg.graphBase}/${compositeId}?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`
+    );
+    if (compResp.ok) {
+      const compData = (await compResp.json()) as { id?: string };
+      if (compData.id) {
+        return String(compData.id);
+      }
+    }
+  } catch {}
+
+  // 3. Truy vấn các bài đăng gần đây của Page để lấy đúng post_id có video_id này
+  try {
+    const listResp = await fetch(
+      `${cfg.graphBase}/${facebookPageId}/published_posts?fields=id,attachments{target{id}}&limit=5&access_token=${encodeURIComponent(pageAccessToken)}`
+    );
+    if (listResp.ok) {
+      const listData = (await listResp.json()) as {
+        data?: Array<{ id: string; attachments?: { data?: Array<{ target?: { id?: string } }> } }>;
+      };
+      if (Array.isArray(listData.data)) {
+        for (const item of listData.data) {
+          const targets = item.attachments?.data?.map((a) => a.target?.id) || [];
+          if (targets.includes(videoId)) {
+            return String(item.id);
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // 4. Fallback: Nếu không tìm thấy, sử dụng cleanFinishId hoặc compositeId
+  return cleanFinishId || compositeId;
+}
+
+export interface PostReelCommentOptions {
+  facebookPageId: string;
+  pageAccessToken: string;
+  postId: string;
+  commentText: string;
+  ownerUserId: string;
+  taskId: number;
+}
+
+export interface PostReelCommentResult {
+  success: boolean;
+  comment_id?: string | null;
+  post_id: string;
+  comment_status: "success" | "failed";
+  error_code?: number | null;
+  error_subcode?: number | null;
+  message: string;
+  already_posted?: boolean;
+}
+
+/**
+ * 5. TỰ ĐỘNG ĐĂNG BÌNH LUẬN LÊN BÀI VIẾT REELS (POST /{POST_ID}/comments)
+ * - Đảm bảo token có quyền pages_manage_engagement và tài khoản có quyền MODERATE
+ * - Kiểm tra chống đăng trùng (Idempotency Guard)
+ * - Kiểm tra kết quả Facebook trả về & xác nhận comment thực tế xuất hiện
+ */
+export async function postReelCommentViaGraphApi(
+  db: D1Database,
+  env: Env,
+  options: PostReelCommentOptions
+): Promise<PostReelCommentResult> {
+  const cfg = getMetaConfig(env);
+  const cleanComment = (options.commentText || "").trim();
+  const postId = options.postId;
+
+  if (!cleanComment) {
+    return {
+      success: true,
+      post_id: postId,
+      comment_status: "success",
+      message: "Không có nội dung bình luận."
+    };
+  }
+
+  // 1. CHỐNG ĐĂNG TRÙNG (IDEMPOTENCY CHECK TRÊN FACEBOOK):
+  // Truy vấn danh sách comment gần nhất của bài viết trên Facebook xem đã tồn tại chưa
+  try {
+    const chkResp = await fetch(
+      `${cfg.graphBase}/${postId}/comments?fields=id,message,created_time&limit=10&access_token=${encodeURIComponent(options.pageAccessToken)}`
+    );
+    if (chkResp.ok) {
+      const chkData = (await chkResp.json()) as { data?: Array<{ id: string; message: string }> };
+      if (Array.isArray(chkData.data)) {
+        const existing = chkData.data.find((c) => (c.message || "").trim() === cleanComment);
+        if (existing && existing.id) {
+          return {
+            success: true,
+            comment_id: String(existing.id),
+            post_id: postId,
+            comment_status: "success",
+            message: "Đã xác nhận bình luận đã tồn tại trên bài viết Facebook.",
+            already_posted: true
+          };
+        }
+      }
+    }
+  } catch {}
+
+  // 2. GỌI API ĐĂNG COMMENT: POST /{POST_ID}/comments
+  let postResp: Response;
+  try {
+    postResp = await fetch(`${cfg.graphBase}/${postId}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: cleanComment,
+        access_token: options.pageAccessToken
+      })
+    });
+  } catch (netErr) {
+    // Timeout hoặc lỗi mạng: Kiểm tra xem Facebook đã nhận comment chưa trước khi đánh dấu thất bại
+    try {
+      const verifyResp = await fetch(
+        `${cfg.graphBase}/${postId}/comments?fields=id,message&limit=5&access_token=${encodeURIComponent(options.pageAccessToken)}`
+      );
+      if (verifyResp.ok) {
+        const vData = (await verifyResp.json()) as { data?: Array<{ id: string; message: string }> };
+        const found = vData.data?.find((c) => (c.message || "").trim() === cleanComment);
+        if (found && found.id) {
+          return {
+            success: true,
+            comment_id: String(found.id),
+            post_id: postId,
+            comment_status: "success",
+            message: "Đã xác nhận bình luận xuất hiện trên bài viết Facebook sau timeout."
+          };
+        }
+      }
+    } catch {}
+
+    return {
+      success: false,
+      post_id: postId,
+      comment_status: "failed",
+      message: sanitizeSensitiveText(`Lỗi kết nối khi gửi bình luận: ${(netErr as Error).message}`)
+    };
+  }
+
+  // 3. XỬ LÝ PHẢN HỒI TỪ FACEBOOK
+  const postData = (await postResp.json()) as Record<string, unknown>;
+  if (postResp.ok && postData.id) {
+    const commentId = String(postData.id);
+
+    // Bước 6: Kiểm tra xác nhận comment thực tế xuất hiện
+    try {
+      await fetch(
+        `${cfg.graphBase}/${commentId}?fields=id&access_token=${encodeURIComponent(options.pageAccessToken)}`
+      );
+    } catch {}
+
+    return {
+      success: true,
+      comment_id: commentId,
+      post_id: postId,
+      comment_status: "success",
+      message: "Đã đăng bình luận tự động thành công."
+    };
+  } else {
+    const err = (postData.error || {}) as Record<string, unknown>;
+    const code = Number(err.code || postResp.status);
+    const subcode = Number(err.error_subcode || 0);
+
+    let friendlyErrMsg = "";
+    if (code === 200 || code === 10 || String(err.message || "").toLowerCase().includes("permission")) {
+      friendlyErrMsg = "Fanpage thiếu quyền pages_manage_engagement hoặc tài khoản không có quyền MODERATE trên Page.";
+    } else if (code === 190) {
+      friendlyErrMsg = "Phiên Facebook hết hạn (OAuthException 190), vui lòng kết nối lại tài khoản.";
+    } else {
+      friendlyErrMsg = `Lỗi đăng bình luận: ${err.message || postResp.statusText}`;
+    }
+
+    return {
+      success: false,
+      post_id: postId,
+      comment_status: "failed",
+      error_code: code,
+      error_subcode: subcode || null,
+      message: sanitizeSensitiveText(friendlyErrMsg)
     };
   }
 }

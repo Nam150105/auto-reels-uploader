@@ -137,6 +137,7 @@
     const showBulkTaskModal = ref(false);
     const showEditTaskModal = ref(false);
     const showLogModal = ref(false);
+    const retryingCommentTaskId = ref(null);
 
     // Single Task Form
     const singleTaskForm = ref({
@@ -1394,8 +1395,11 @@
       const st = t.status || '';
 
       if (st === 'success') {
-        if (raw.toLowerCase().includes('bình luận')) {
-          return 'Đã đăng Reels thành công! (Có bình luận)';
+        if (t.comment_status === 'failed') {
+          return 'Đã đăng Reels (Bình luận lỗi)';
+        }
+        if (t.comment_status === 'success') {
+          return 'Đã đăng Reels (Đã bình luận)';
         }
         return 'Đã đăng Reels thành công!';
       }
@@ -1445,10 +1449,17 @@
       const friendly = formatFriendlyLog(t);
       currentLogTask.value = {
         id: t.id,
+        status: t.status,
         title: `Chi tiết Task #${t.id} - ${t.page_name || 'Fanpage'}`,
         friendlyLog: friendly,
         log: t.log || t.error_message || '(Chưa có thông điệp log)',
-        video_url: t.video_url || ''
+        video_id: t.video_id || '',
+        post_id: t.post_id || '',
+        video_url: t.video_url || '',
+        comment_text: t.comment_text || '',
+        comment_status: t.comment_status || 'none',
+        comment_id: t.comment_id || '',
+        comment_log: t.comment_log || ''
       };
       showLogModal.value = true;
       try {
@@ -1466,6 +1477,50 @@
         }
       } catch (e) {
         // Giữ nguyên log tóm tắt nếu không lấy được chi tiết
+      }
+    }
+
+    async function handleRetryComment(taskId) {
+      if (!taskId || retryingCommentTaskId.value) return;
+      retryingCommentTaskId.value = taskId;
+      try {
+        const res = await fetch(`/api/tasks/${taskId}/retry-comment`, {
+          method: 'POST'
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(data.message || "Đã đăng bình luận thành công!", "success");
+          await loadTasks();
+          if (showLogModal.value && currentLogTask.value.id === taskId) {
+            const updated = tasks.value.find(t => t.id === taskId);
+            if (updated) {
+              currentLogTask.value = {
+                ...currentLogTask.value,
+                comment_status: updated.comment_status,
+                comment_id: updated.comment_id,
+                comment_log: updated.comment_log,
+                log: updated.log
+              };
+            }
+          }
+        } else {
+          showToast(data.detail || data.message || "Lỗi khi thử đăng lại bình luận.", "error");
+          await loadTasks();
+          if (showLogModal.value && currentLogTask.value.id === taskId) {
+            const updated = tasks.value.find(t => t.id === taskId);
+            if (updated) {
+              currentLogTask.value = {
+                ...currentLogTask.value,
+                comment_status: updated.comment_status,
+                comment_log: updated.comment_log
+              };
+            }
+          }
+        }
+      } catch (err) {
+        showToast("Lỗi kết nối khi thử đăng lại bình luận: " + err.message, "error");
+      } finally {
+        retryingCommentTaskId.value = null;
       }
     }
 
@@ -1759,6 +1814,8 @@
       handleDeleteTask,
       openLogModal,
       formatFriendlyLog,
+      retryingCommentTaskId,
+      handleRetryComment,
       copyToClipboard,
       getFileName,
       startResizeSplitter

@@ -19,6 +19,7 @@ import {
   getFacebookPageByFbId,
   claimTaskLease,
   updateTaskExecutionState,
+  updateTaskCommentState,
   appendTaskStageLog,
   recordTaskAttemptStart,
   recordTaskAttemptFinish
@@ -26,7 +27,8 @@ import {
 import {
   getMetaConfig,
   validateVideoSource,
-  publishReelViaGraphApi
+  publishReelViaGraphApi,
+  postReelCommentViaGraphApi
 } from "../services/metaGraphService.ts";
 import { randomHex } from "../utils/crypto.ts";
 import { nowUtcSeconds } from "../utils/timezone.ts";
@@ -195,24 +197,70 @@ export async function consumeSingleTaskMessage(
     return { status: "ack", reason: "Task không tồn tại." };
   }
 
-  // 1. Kiểm tra Idempotency: Nếu task đã thành công hoặc đã bị hủy hoặc đã có video_id xuất bản
-  if (
-    existingTask.raw_status === "success" ||
-    existingTask.status === "success" ||
-    existingTask.raw_status === "cancelled"
-  ) {
-    return { status: "ack", reason: "Task đã hoàn tất hoặc đã hủy trước đó." };
+  // 1. Kiểm tra Idempotency & Trạng thái hoàn thành từng phần
+  if (existingTask.raw_status === "cancelled") {
+    return { status: "ack", reason: "Task đã hủy trước đó." };
   }
 
-  if (existingTask.video_id && existingTask.post_id) {
-    await updateTaskExecutionState(
-      db,
-      existingTask.id,
-      "success",
-      existingTask.log || `Đã xuất bản Reels (Video ID: ${existingTask.video_id})`,
-      { clearLease: true }
-    );
-    return { status: "ack", reason: "Idempotency guard: Task đã có video_id & post_id." };
+  const isReelPublished =
+    Boolean(existingTask.video_id && existingTask.post_id) ||
+    existingTask.status === "success" ||
+    existingTask.raw_status === "success";
+
+  if (isReelPublished) {
+    // Reels đã xuất bản thành công!
+    const cleanComment = (existingTask.comment_text || "").trim();
+    const needsComment =
+      cleanComment &&
+      !existingTask.comment_id &&
+      existingTask.comment_status !== "success" &&
+      Boolean(existingTask.facebook_page_id);
+
+    if (needsComment) {
+      // Worker bị restart hoặc retry giữa hai bước: CHỈ đăng comment, tuyệt đối KHÔNG đăng lại video!
+      const page = await getFacebookPageByFbId(
+        db,
+        cfg.encryptionKey,
+        existingTask.facebook_page_id!,
+        true,
+        msg.owner_user_id
+      );
+      if (page && page.page_access_token) {
+        await updateTaskCommentState(db, existingTask.id, "processing", "Đang xử lý đăng bình luận...");
+        const cmtRes = await postReelCommentViaGraphApi(db, env, {
+          facebookPageId: existingTask.facebook_page_id!,
+          pageAccessToken: page.page_access_token,
+          postId: existingTask.post_id || existingTask.video_id,
+          commentText: cleanComment,
+          ownerUserId: msg.owner_user_id,
+          taskId: existingTask.id
+        });
+        if (cmtRes.success) {
+          await updateTaskCommentState(db, existingTask.id, "success", cmtRes.message, {
+            commentId: cmtRes.comment_id,
+            commentPostedAt: new Date().toISOString()
+          });
+          await updateTaskExecutionState(
+            db,
+            existingTask.id,
+            "success",
+            "Đã đăng Reels thành công! (Đã đăng bình luận tự động)",
+            { clearLease: true }
+          );
+        } else {
+          await updateTaskCommentState(db, existingTask.id, "failed", cmtRes.message);
+        }
+      }
+    } else {
+      await updateTaskExecutionState(
+        db,
+        existingTask.id,
+        "success",
+        existingTask.log || "Đã đăng Reels thành công!",
+        { clearLease: true }
+      );
+    }
+    return { status: "ack", reason: "Idempotency guard: Video đã đăng thành công." };
   }
 
   // 2. Atomic Lease Claim: Tránh 2 consumer xử lý cùng 1 task
@@ -322,9 +370,10 @@ export async function consumeSingleTaskMessage(
   });
 
   if (pubRes.success) {
+    const rawPostId = pubRes.post_id || "";
     await updateTaskExecutionState(db, claimedTask.id, "success", pubRes.message, {
       videoId: pubRes.video_id || "",
-      postId: pubRes.post_id || "",
+      postId: rawPostId,
       videoUrl: pubRes.video_url || "",
       errorCode: null,
       errorSubcode: null,
@@ -341,6 +390,71 @@ export async function consumeSingleTaskMessage(
       pubRes.message
     );
     await recordTaskAttemptFinish(db, attemptId, "success", "completed");
+
+    // BƯỚC 5, 6, 7: XỬ LÝ ĐĂNG BÌNH LUẬN RIÊNG BIỆT (TÁCH BIỆT VỚI REELS)
+    const cleanComment = (claimedTask.comment_text || "").trim();
+    if (!cleanComment) {
+      await updateTaskCommentState(db, claimedTask.id, "none", "");
+    } else {
+      await updateTaskCommentState(db, claimedTask.id, "processing", "Đang đăng bình luận tự động...");
+      await appendTaskStageLog(
+        db,
+        claimedTask.id,
+        msg.owner_user_id,
+        "INFO",
+        "commenting",
+        "Đang đăng bình luận lên bài viết Reels..."
+      );
+
+      const cmtRes = await postReelCommentViaGraphApi(db, env, {
+        facebookPageId: claimedTask.facebook_page_id,
+        pageAccessToken: page.page_access_token,
+        postId: rawPostId,
+        commentText: cleanComment,
+        ownerUserId: msg.owner_user_id,
+        taskId: claimedTask.id
+      });
+
+      if (cmtRes.success) {
+        await updateTaskCommentState(db, claimedTask.id, "success", cmtRes.message, {
+          commentId: cmtRes.comment_id,
+          commentPostedAt: new Date().toISOString()
+        });
+        await updateTaskExecutionState(
+          db,
+          claimedTask.id,
+          "success",
+          "Đã đăng Reels thành công! (Đã đăng bình luận tự động)",
+          { clearLease: true }
+        );
+        await appendTaskStageLog(
+          db,
+          claimedTask.id,
+          msg.owner_user_id,
+          "INFO",
+          "comment_success",
+          cmtRes.message
+        );
+      } else {
+        await updateTaskCommentState(db, claimedTask.id, "failed", cmtRes.message);
+        await updateTaskExecutionState(
+          db,
+          claimedTask.id,
+          "success",
+          `Đã đăng Reels thành công! (Lỗi bình luận: ${cmtRes.message})`,
+          { clearLease: true }
+        );
+        await appendTaskStageLog(
+          db,
+          claimedTask.id,
+          msg.owner_user_id,
+          "WARN",
+          "comment_failed",
+          cmtRes.message
+        );
+      }
+    }
+
     return { status: "ack" };
   }
 
