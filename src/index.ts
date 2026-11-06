@@ -24,6 +24,7 @@ import {
   disconnectFacebookAccount,
   deleteFacebookAccountLocal,
   disconnectAllUserAccounts,
+  upsertFacebookPage,
   getFacebookPages,
   updatePageSelection,
   bulkUpdatePageSelection,
@@ -281,6 +282,7 @@ export async function handleWorkerRequest(
     const errorDesc = url.searchParams.get("error_description");
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
+    const directToken = url.searchParams.get("access_token");
 
     if (error) {
       return renderOAuthCallbackHtml({
@@ -290,11 +292,36 @@ export async function handleWorkerRequest(
       });
     }
 
+    if (directToken && currentUser) {
+      const connRes = await connectWithAccessToken(
+        db,
+        env,
+        directToken,
+        currentUser.id,
+        null
+      );
+      if (connRes.success && connRes.account_id) {
+        const syncRes = await syncPagesForAccount(
+          db,
+          env,
+          connRes.account_id,
+          currentUser.id
+        );
+        return renderOAuthCallbackHtml({
+          success: true,
+          title: "Kết Nối Tài Khoản Facebook Thành Công!",
+          subtitle: `${connRes.user_name || ""} (ID: ${connRes.user_id || ""})`,
+          message: `Đã tự động đồng bộ ${syncRes.synced_count || 0} Fanpage từ Meta Graph API. Đang chuyển về trang Quản Lý Fanpage...`
+        });
+      }
+    }
+
     if (!code || !state) {
       return renderOAuthCallbackHtml({
         success: false,
         title: "Thiếu Tham Số Xác Thực OAuth",
-        message: "Yêu cầu callback không hợp lệ (thiếu code hoặc state)."
+        message:
+          "Yêu cầu callback không hợp lệ (thiếu code hoặc state). Bạn có thể dán trực tiếp Access Token / URL / JSON Graph API Explorer ở khung bên dưới để kết nối ngay:"
       });
     }
 
@@ -422,12 +449,40 @@ export async function handleWorkerRequest(
           );
         }
 
-        const syncRes = await syncPagesForAccount(
-          db,
-          env,
-          connRes.account_id,
-          ownerUserId
-        );
+        let directSyncedCount = 0;
+        if (Array.isArray(connRes.extracted_pages) && connRes.extracted_pages.length > 0) {
+          for (const p of connRes.extracted_pages) {
+            await upsertFacebookPage(db, encryptionKey, {
+              facebookPageId: p.id,
+              pageName: p.name,
+              category: p.category || "Brand / Page",
+              avatarUrl: p.avatar_url || "",
+              pageAccessToken: p.access_token,
+              tasks: p.tasks || ["CREATE_CONTENT", "MANAGE"],
+              canPost: true,
+              isPublished: p.is_published !== false,
+              connectedAccountId: connRes.account_id,
+              tokenStatus: "valid",
+              ownerUserId
+            });
+            directSyncedCount++;
+          }
+        }
+
+        let apiSyncedCount = 0;
+        let syncMessage = "";
+        if (connRes.has_user_token !== false) {
+          const syncRes = await syncPagesForAccount(
+            db,
+            env,
+            connRes.account_id,
+            ownerUserId
+          );
+          apiSyncedCount = syncRes.synced_count || 0;
+          syncMessage = syncRes.message || "";
+        }
+
+        const totalSynced = Math.max(directSyncedCount, apiSyncedCount);
         const pages = await getFacebookPages(db, encryptionKey, {
           includeToken: false,
           ownerUserId
@@ -440,10 +495,10 @@ export async function handleWorkerRequest(
           user_name: connRes.user_name,
           token_expires_at: connRes.token_expires_at,
           is_long_lived: connRes.is_long_lived,
-          synced_count: syncRes.synced_count || 0,
-          sync_message: syncRes.message,
+          synced_count: totalSynced,
+          sync_message: syncMessage,
           pages,
-          message: `${connRes.message}. Đã đồng bộ ${syncRes.synced_count || 0} Fanpage.`
+          message: `${connRes.message}. Đã đồng bộ ${totalSynced} Fanpage.`
         });
       } catch (err) {
         return jsonResponse(

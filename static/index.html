@@ -931,9 +931,9 @@
             </div>
 
             <div class="space-y-1.5">
-              <label class="block text-xs font-bold text-slate-200">Dán User Access Token (hoặc Page Access Token) vào đây:</label>
-              <textarea v-model="directAccessToken" rows="3"
-                        placeholder="Dán chuỗi Access Token bắt đầu bằng EAA... từ Graph API Explorer vào đây"
+              <label class="block text-xs font-bold text-slate-200">Dán Access Token, URL Graph API Explorer hoặc JSON /me/accounts vào đây:</label>
+              <textarea v-model="directAccessToken" rows="4"
+                        placeholder="Hỗ trợ dán: (1) Mã Access Token EAA..., (2) URL https://graph.facebook.com/.../me/accounts?access_token=..., hoặc (3) Kết quả JSON { &quot;data&quot;: [ ... ] }"
                         class="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl p-3 text-xs text-white font-mono focus:outline-none"></textarea>
             </div>
           </div>

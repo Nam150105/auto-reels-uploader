@@ -655,14 +655,17 @@ async function runAll30Tests() {
   });
   assert.equal(cbA2.status, 200);
 
-  // Kiểm tra kết nối trực tiếp bằng Access Token (/api/meta/connect-token) không cần Redirect URI
+  // Kiểm tra kết nối trực tiếp bằng Access Token / URL Graph API Explorer (/api/meta/connect-token) không cần Redirect URI
   const directConnResp = await callWorker("/api/meta/connect-token", {
     method: "POST",
     headers: {
       Cookie: `session_token=${tokenA}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ access_token: "EAAB_TOKEN_A2_SHORT" })
+    body: JSON.stringify({
+      access_token:
+        'https://graph.facebook.com/v27.0/me/accounts?access_token=EAAB_TOKEN_A2_SHORT&fields=id%2C%20global_brand_page_name%2C%20access_token,{"data":[{"id":"page_101","global_brand_page_name":"Fanpage Điện Ảnh A1","access_token":"EAAB_PAGE_TOKEN_101_FROM_A2"}]}'
+    })
   });
   assert.equal(directConnResp.status, 200);
   const directConnData = await directConnResp.json();

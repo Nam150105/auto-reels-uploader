@@ -77,15 +77,31 @@ export async function syncPagesForAccount(
 
   try {
     let nextUrl: string | null =
-      `${cfg.graphBase}/me/accounts?fields=id,name,access_token,category,picture{url},tasks,is_published&limit=100&access_token=${encodeURIComponent(userToken)}`;
+      `${cfg.graphBase}/me/accounts?fields=id,name,global_brand_page_name,access_token,category,picture{url},tasks,is_published&limit=100&access_token=${encodeURIComponent(userToken)}`;
 
     let syncedCount = 0;
     let pageGuard = 0;
 
     while (nextUrl && pageGuard < 20) {
       pageGuard++;
-      const resp = await fetch(nextUrl);
-      const data = (await resp.json()) as Record<string, unknown>;
+      let resp = await fetch(nextUrl);
+      let data = (await resp.json()) as Record<string, unknown>;
+
+      // Nếu một số field mở rộng (như tasks, is_published) bị từ chối quyền trên Brand Page, tự động fallback sang fields tối giản giống Graph API Explorer
+      if ((!resp.ok || data.error) && pageGuard === 1 && nextUrl.includes("is_published")) {
+        const err = (data.error || {}) as Record<string, unknown>;
+        const code = Number(err.code || 0);
+        const rawErrMsg = String(err.message || "");
+        if (code !== 190 && !/node type \(Page\)/i.test(rawErrMsg)) {
+          const fallbackUrl = `${cfg.graphBase}/me/accounts?fields=id,name,global_brand_page_name,access_token&limit=100&access_token=${encodeURIComponent(userToken)}`;
+          const fbResp = await fetch(fallbackUrl);
+          const fbData = (await fbResp.json()) as Record<string, unknown>;
+          if (fbResp.ok && !fbData.error) {
+            resp = fbResp;
+            data = fbData;
+          }
+        }
+      }
 
       if (!resp.ok || data.error) {
         const err = (data.error || {}) as Record<string, unknown>;
@@ -96,7 +112,7 @@ export async function syncPagesForAccount(
         // Trường hợp người dùng dán trực tiếp Page Access Token (node type Page không có /accounts)
         if (code === 100 && /node type \(Page\)/i.test(rawErrMsg)) {
           const pageMeResp = await fetch(
-            `${cfg.graphBase}/me?fields=id,name,category,picture{url},tasks,is_published&access_token=${encodeURIComponent(userToken)}`
+            `${cfg.graphBase}/me?fields=id,name,global_brand_page_name,category,picture{url},tasks,is_published&access_token=${encodeURIComponent(userToken)}`
           );
           if (pageMeResp.ok) {
             const pageMe = (await pageMeResp.json()) as Record<string, unknown>;
@@ -107,7 +123,9 @@ export async function syncPagesForAccount(
                 : ["CREATE_CONTENT", "MANAGE"];
               await upsertFacebookPage(db, cfg.encryptionKey, {
                 facebookPageId: String(pageMe.id),
-                pageName: String(pageMe.name || account.facebook_user_name || "Fanpage"),
+                pageName: String(
+                  pageMe.name || pageMe.global_brand_page_name || account.facebook_user_name || "Fanpage"
+                ),
                 category: String(pageMe.category || "Page"),
                 avatarUrl: String(picObj.data?.url || ""),
                 pageAccessToken: userToken,
@@ -145,21 +163,27 @@ export async function syncPagesForAccount(
       const items = (data.data as Array<Record<string, unknown>>) || [];
       for (const item of items) {
         const pageId = String(item.id || "");
-        const pageName = String(item.name || "Unnamed Page");
+        const pageName = String(
+          item.name || item.global_brand_page_name || "Unnamed Page"
+        );
         const pageToken = String(item.access_token || "");
         if (!pageId || !pageToken) continue;
 
-        const category = String(item.category || "");
+        const category = String(item.category || "Brand / Page");
         const picObj = (item.picture as { data?: { url?: string } }) || {};
         const avatarUrl = String(picObj.data?.url || "");
         const tasksList = Array.isArray(item.tasks) ? item.tasks.map(String) : [];
         const isPublished = item.is_published !== false;
 
-        const upperTasks = tasksList.map((t) => t.toUpperCase());
+        const upperTasks =
+          tasksList.length > 0
+            ? tasksList.map((t) => t.toUpperCase())
+            : ["CREATE_CONTENT", "MANAGE"];
         const canPost =
           upperTasks.includes("CREATE_CONTENT") ||
           upperTasks.includes("MANAGE") ||
-          upperTasks.includes("MODERATE");
+          upperTasks.includes("MODERATE") ||
+          Boolean(pageToken);
 
         await upsertFacebookPage(db, cfg.encryptionKey, {
           facebookPageId: pageId,

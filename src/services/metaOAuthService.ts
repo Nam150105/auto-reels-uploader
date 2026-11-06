@@ -283,6 +283,101 @@ export async function exchangeCodeForToken(
   }
 }
 
+export interface ParsedPageItem {
+  id: string;
+  name: string;
+  access_token: string;
+  category?: string;
+  avatar_url?: string;
+  tasks?: string[];
+  is_published?: boolean;
+}
+
+export function parseFlexibleMetaInput(rawInput: string): {
+  extractedToken: string;
+  extractedPages: ParsedPageItem[];
+} {
+  const input = (rawInput || "").trim();
+  const extractedPages: ParsedPageItem[] = [];
+  let extractedToken = "";
+
+  // 1. Kiểm tra nếu người dùng dán kèm JSON từ Graph API Explorer ({ "data": [...] } hoặc object Page)
+  const firstBrace = input.indexOf("{");
+  const lastBrace = input.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const jsonCandidate = input.slice(firstBrace, lastBrace + 1);
+    try {
+      const parsed = JSON.parse(jsonCandidate) as Record<string, unknown>;
+      if (Array.isArray(parsed.data)) {
+        for (const item of parsed.data as Array<Record<string, unknown>>) {
+          const pid = String(item.id || "").trim();
+          const ptoken = String(item.access_token || "").trim();
+          const pname = String(
+            item.name || item.global_brand_page_name || item.username || `Fanpage ${pid}`
+          ).trim();
+          if (pid && ptoken) {
+            const picObj = (item.picture as { data?: { url?: string } }) || {};
+            extractedPages.push({
+              id: pid,
+              name: pname,
+              access_token: ptoken,
+              category: String(item.category || "Brand / Page"),
+              avatar_url: String(picObj.data?.url || ""),
+              tasks: Array.isArray(item.tasks)
+                ? item.tasks.map((t) => String(t).toUpperCase())
+                : ["CREATE_CONTENT", "MANAGE"],
+              is_published: item.is_published !== false
+            });
+          }
+        }
+      } else if (parsed.id && parsed.access_token) {
+        const pid = String(parsed.id).trim();
+        const ptoken = String(parsed.access_token).trim();
+        const pname = String(
+          parsed.name || parsed.global_brand_page_name || `Fanpage ${pid}`
+        ).trim();
+        extractedPages.push({
+          id: pid,
+          name: pname,
+          access_token: ptoken,
+          category: String(parsed.category || "Brand / Page"),
+          tasks: ["CREATE_CONTENT", "MANAGE"],
+          is_published: true
+        });
+      } else if (parsed.access_token && typeof parsed.access_token === "string") {
+        extractedToken = parsed.access_token.trim();
+      }
+    } catch {
+      // Không phải JSON hợp lệ thì tiếp tục tách URL/Token
+    }
+  }
+
+  // 2. Kiểm tra nếu người dùng dán URL Graph API Explorer có chứa ?access_token=... hoặc &access_token=...
+  const textOutsideJson =
+    firstBrace !== -1 ? input.slice(0, firstBrace) + " " + input.slice(lastBrace + 1) : input;
+  const urlTokenMatch = /(?:[?&#]|^)access_token=([^&#\s,"']+)/i.exec(textOutsideJson);
+  if (urlTokenMatch && urlTokenMatch[1]) {
+    try {
+      extractedToken = decodeURIComponent(urlTokenMatch[1].trim());
+    } catch {
+      extractedToken = urlTokenMatch[1].trim();
+    }
+  }
+
+  // 3. Nếu chưa có token từ URL, tìm chuỗi token EAA... hoặc chuỗi token trần bên ngoài khối JSON
+  if (!extractedToken) {
+    const cleanOutside = textOutsideJson.trim().replace(/^["',]+|["',]+$/g, "");
+    const eaaMatch = /\b(EAA[A-Za-z0-9_-]{12,})\b/.exec(cleanOutside);
+    if (eaaMatch && eaaMatch[1]) {
+      extractedToken = eaaMatch[1];
+    } else if (cleanOutside.length >= 15 && !cleanOutside.includes("{") && !cleanOutside.includes(" ")) {
+      extractedToken = cleanOutside;
+    }
+  }
+
+  return { extractedToken, extractedPages };
+}
+
 export async function connectWithAccessToken(
   db: D1Database,
   env: Env,
@@ -299,21 +394,60 @@ export async function connectWithAccessToken(
   scopes?: string[];
   missing_scopes?: string[];
   is_long_lived?: boolean;
+  has_user_token?: boolean;
+  extracted_pages?: ParsedPageItem[];
   message?: string;
 }> {
-  const cleanedToken = (rawAccessToken || "").trim().replace(/^["']|["']$/g, "");
-  if (!cleanedToken || cleanedToken.length < 15) {
+  const { extractedToken, extractedPages } = parseFlexibleMetaInput(rawAccessToken);
+
+  if ((!extractedToken || extractedToken.length < 15) && extractedPages.length === 0) {
     return {
       success: false,
-      message: "Vui lòng nhập chuỗi Access Token hợp lệ từ Meta Graph API Explorer."
+      message:
+        "Vui lòng dán Access Token (EAA...), URL Graph API Explorer hoặc JSON /me/accounts hợp lệ."
     };
   }
 
   const cfg = getMetaConfig(env);
 
   try {
+    // Trường hợp người dùng chỉ dán trực tiếp JSON danh sách Page ({ "data": [...] }) mà không kèm User Token
+    if (!extractedToken && extractedPages.length > 0) {
+      const firstPage = extractedPages[0];
+      const expiresAtIso = new Date(Date.now() + 60 * 86400 * 1000).toISOString();
+      const accountId = await saveFacebookAccount(db, cfg.encryptionKey, {
+        facebookUserId: `admin_${firstPage.id}`,
+        facebookUserName: `Admin (${firstPage.name})`,
+        facebookUserEmail: null,
+        accessToken: firstPage.access_token,
+        tokenType: "json_imported",
+        scopes: REQUIRED_SCOPES,
+        missingScopes: [],
+        tokenExpiresAt: expiresAtIso,
+        status: "connected",
+        tokenStatus: "valid",
+        accountId: reconnectAccountId,
+        ownerUserId
+      });
+
+      return {
+        success: true,
+        account_id: accountId,
+        owner_user_id: ownerUserId,
+        user_id: `admin_${firstPage.id}`,
+        user_name: `Admin (${firstPage.name})`,
+        token_expires_at: expiresAtIso,
+        scopes: REQUIRED_SCOPES,
+        missing_scopes: [],
+        is_long_lived: true,
+        has_user_token: false,
+        extracted_pages: extractedPages,
+        message: `Đã nhập trực tiếp ${extractedPages.length} Fanpage từ dữ liệu JSON Graph API Explorer`
+      };
+    }
+
     // Bước 1: Nếu có META_APP_ID và META_APP_SECRET, tự động nâng cấp sang Long-Lived User Token (~60 ngày)
-    let finalToken = cleanedToken;
+    let finalToken = extractedToken;
     let expiresIn = 60 * 86400;
     let isLongLived = false;
 
@@ -323,7 +457,7 @@ export async function connectWithAccessToken(
           grant_type: "fb_exchange_token",
           client_id: cfg.appId,
           client_secret: cfg.appSecret,
-          fb_exchange_token: cleanedToken
+          fb_exchange_token: extractedToken
         });
         const llResp = await fetch(
           `${cfg.graphBase}/oauth/access_token?${llParams.toString()}`
@@ -337,28 +471,45 @@ export async function connectWithAccessToken(
           }
         }
       } catch {
-        // Nếu token đã là System User / Long-Lived hoặc không cần exchange, tiếp tục dùng cleanedToken
+        // Nếu token thuộc App Graph API Explorer hoặc đã là System User / Long-Lived thì giữ nguyên extractedToken
       }
     }
 
-    // Bước 2: Xác thực Token với Meta Graph API (/me)
+    // Bước 2: Xác thực Token với Meta Graph API (/me) với fallback nếu thiếu quyền email/name
+    let fbUserId = "";
+    let fbUserName = "Facebook Admin";
+    let fbUserEmail: string | null = null;
+
     const meResp = await fetch(
       `${cfg.graphBase}/me?fields=id,name,email&access_token=${encodeURIComponent(finalToken)}`
     );
     const meData = (await meResp.json()) as Record<string, unknown>;
-    if (!meResp.ok || !meData.id) {
-      const errObj = (meData.error || {}) as Record<string, unknown>;
-      return {
-        success: false,
-        message: sanitizeSensitiveText(
-          `Access Token không hợp lệ hoặc đã hết hạn: ${errObj.message || "Lỗi xác thực /me trên Graph API"}`
-        )
-      };
+    if (meResp.ok && meData.id) {
+      fbUserId = String(meData.id);
+      fbUserName = String(meData.name || meData.global_brand_page_name || "Facebook Admin");
+      fbUserEmail = meData.email ? String(meData.email) : null;
+    } else {
+      // Fallback gọi /me?fields=id,name (phòng trường hợp token không cấp quyền email)
+      const meFallbackResp = await fetch(
+        `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(finalToken)}`
+      );
+      const meFallbackData = (await meFallbackResp.json()) as Record<string, unknown>;
+      if (meFallbackResp.ok && meFallbackData.id) {
+        fbUserId = String(meFallbackData.id);
+        fbUserName = String(meFallbackData.name || "Facebook Admin");
+      } else if (extractedPages.length > 0) {
+        fbUserId = `admin_${extractedPages[0].id}`;
+        fbUserName = `Admin (${extractedPages[0].name})`;
+      } else {
+        const errObj = (meData.error || {}) as Record<string, unknown>;
+        return {
+          success: false,
+          message: sanitizeSensitiveText(
+            `Access Token không hợp lệ hoặc đã hết hạn: ${errObj.message || "Lỗi xác thực /me trên Graph API"}`
+          )
+        };
+      }
     }
-
-    const fbUserId = String(meData.id);
-    const fbUserName = String(meData.name || "Facebook Admin");
-    const fbUserEmail = meData.email ? String(meData.email) : null;
 
     // Bước 3: Kiểm tra danh sách quyền đã cấp (/me/permissions)
     const grantedScopes: string[] = [];
@@ -411,6 +562,8 @@ export async function connectWithAccessToken(
       scopes: grantedScopes,
       missing_scopes: missingScopes,
       is_long_lived: isLongLived,
+      has_user_token: true,
+      extracted_pages: extractedPages,
       message: `Kết nối thành công tài khoản Facebook Admin: ${fbUserName} (ID: ${fbUserId})`
     };
   } catch (err) {
