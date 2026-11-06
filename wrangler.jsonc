@@ -1,0 +1,70 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "auto-reels-uploader",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-11-01",
+
+  // Phục vụ giao diện Frontend từ thư mục ./static kết hợp Worker xử lý API và Auth routing
+  "assets": {
+    "directory": "./static",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+
+  // Liên kết trực tiếp Custom Domain chính thức trên Cloudflare
+  "routes": [
+    {
+      "pattern": "pagefb.namnangno.click",
+      "custom_domain": true
+    }
+  ],
+
+  // Cloudflare Cron Trigger: Kiểm tra và kích hoạt các tác vụ hẹn lịch đến hạn (UTC)
+  "triggers": {
+    "crons": ["*/1 * * * *"]
+  },
+
+  // Biến môi trường Public cho Production (Tuyệt đối KHÔNG đặt META_APP_SECRET hay khóa mã hóa ở đây)
+  "vars": {
+    "META_APP_ID": "1469615908436980",
+    "APP_BASE_URL": "https://pagefb.namnangno.click",
+    "META_REDIRECT_URI": "https://pagefb.namnangno.click/api/meta/callback",
+    "META_GRAPH_VERSION": "v19.0",
+    "MAX_VIDEO_SIZE_MB": "200"
+  },
+
+  // Cloudflare D1 Database (Serverless SQLite)
+  // Lưu ý: scripts/ci_prepare_cloudflare.mjs hoặc deploy_cloudflare.ps1 sẽ tự động điền database_id thật
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "auto-reels-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Cloudflare R2 Object Storage cho file Video Reels (Free 10GB/tháng)
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "auto-reels-media"
+    }
+  ]
+
+  // (Tùy chọn khi nâng cấp Workers Paid) Cloudflare Queues cho Background Publishing:
+  // Trên gói Cloudflare Free, Worker tự động sử dụng D1 Queue Engine + Cron + ctx.waitUntil.
+  // "queues": {
+  //   "producers": [
+  //     { "binding": "REELS_QUEUE", "queue": "reels-publish-queue" }
+  //   ],
+  //   "consumers": [
+  //     {
+  //       "queue": "reels-publish-queue",
+  //       "max_batch_size": 5,
+  //       "max_batch_timeout": 5,
+  //       "max_retries": 3
+  //     }
+  //   ]
+  // }
+}

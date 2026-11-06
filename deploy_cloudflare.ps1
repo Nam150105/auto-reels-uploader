@@ -1,54 +1,75 @@
-# ============================================================================
-# SCRIPT TRIỂN KHAI TỰ ĐỘNG CLOUDFLARE WORKERS + D1 (WINDOWS POWERSHELL)
-# Domain : https://pagefb.namnangno.click
-# App ID : 1469615908436980
-# ============================================================================
+# ==============================================================================
+# KỊCH BẢN TỰ ĐỘNG HÓA DEPLOY LÊN CLOUDFLARE WORKERS + D1 + R2 (POWERSHELL)
+# Worker Name : auto-reels-uploader
+# Domain      : https://pagefb.namnangno.click
+# Meta App ID : 1469615908436980
+# ==============================================================================
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " TRIỂN KHAI HỆ THỐNG QUẢN LÝ FANPAGE LÊN CLOUDFLARE EDGE  " -ForegroundColor Cyan
-Write-Host " Domain: https://pagefb.namnangno.click                   " -ForegroundColor Cyan
-Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host "  DEPLOY CLOUDFLARE WORKER + D1 + R2: auto-reels-uploader       " -ForegroundColor Cyan
+Write-Host "  Production URL: https://pagefb.namnangno.click                " -ForegroundColor Cyan
+Write-Host "================================================================" -ForegroundColor Cyan
 
-# 1. Cài đặt dependencies nếu chưa có
-if (-not (Test-Path "node_modules")) {
-    Write-Host "`n[1/5] Đang cài đặt gói phụ thuộc (typescript, wrangler)..." -ForegroundColor Yellow
-    npm.cmd install
-} else {
-    Write-Host "`n[1/5] Đã có node_modules." -ForegroundColor Green
+# Bước 1: Kiểm tra đăng nhập Cloudflare
+Write-Host "`n[1/6] Kiểm tra tài khoản Cloudflare Wrangler..." -ForegroundColor Yellow
+npx.cmd wrangler whoami
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Chưa đăng nhập Cloudflare. Đang mở trình duyệt để xác thực..." -ForegroundColor Yellow
+    npx.cmd wrangler login
 }
 
-# 2. Kiểm tra TypeScript Typecheck
-Write-Host "`n[2/5] Đang kiểm tra TypeScript (tsc --noEmit)..." -ForegroundColor Yellow
-npx.cmd tsc --noEmit
-Write-Host "✓ TypeScript hợp lệ 100%!" -ForegroundColor Green
+# Bước 2: Khởi tạo hoặc lấy ID của D1 Database (auto-reels-db)
+Write-Host "`n[2/6] Kiểm tra / Tạo cơ sở dữ liệu Cloudflare D1 (auto-reels-db)..." -ForegroundColor Yellow
+$wranglerContent = Get-Content -Path "wrangler.jsonc" -Raw
 
-# 3. Kiểm tra / Khởi tạo Cloudflare D1 Database
-$wranglerContent = Get-Content "wrangler.toml" -Raw
-if ($wranglerContent -match "00000000-0000-0000-0000-000000000000") {
-    Write-Host "`n[3/5] Đang khởi tạo Cloudflare D1 Database 'pagefb-db'..." -ForegroundColor Yellow
-    $d1Output = npx.cmd wrangler d1 create pagefb-db 2>&1 | Out-String
+if ($wranglerContent -match '00000000-0000-0000-0000-000000000000') {
+    Write-Host "Đang tạo D1 Database 'auto-reels-db'..." -ForegroundColor Cyan
+    $d1Output = npx.cmd wrangler d1 create auto-reels-db 2>&1 | Out-String
     Write-Host $d1Output
-    if ($d1Output -match 'database_id\s*=\s*"([a-f0-9\-]{36})"') {
-        $newDbId = $Matches[1]
-        Write-Host "✓ Đã nhận database_id: $newDbId. Đang cập nhật vào wrangler.toml..." -ForegroundColor Green
-        $updatedToml = $wranglerContent -replace "00000000-0000-0000-0000-000000000000", $newDbId
-        Set-Content -Path "wrangler.toml" -Value $updatedToml -Encoding UTF8
+
+    if ($d1Output -match '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})') {
+        $realDbId = $Matches[1]
+        Write-Host "-> Đã lấy được database_id: $realDbId. Đang cập nhật wrangler.jsonc..." -ForegroundColor Green
+        $wranglerContent = $wranglerContent -replace '00000000-0000-0000-0000-000000000000', $realDbId
+        Set-Content -Path "wrangler.jsonc" -Value $wranglerContent -Encoding UTF8
     } else {
-        Write-Host "⚠ Nếu database 'pagefb-db' đã tồn tại trên tài khoản của bạn, hãy chạy: npx.cmd wrangler d1 list và điền database_id vào wrangler.toml" -ForegroundColor Yellow
+        Write-Host "Lưu ý: Nếu database 'auto-reels-db' đã tồn tại trước đó, đang tra cứu danh sách D1..." -ForegroundColor Yellow
+        $d1List = npx.cmd wrangler d1 list 2>&1 | Out-String
+        if ($d1List -match '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})') {
+            $realDbId = $Matches[1]
+            Write-Host "-> Đã tìm thấy database_id: $realDbId. Đang cập nhật wrangler.jsonc..." -ForegroundColor Green
+            $wranglerContent = $wranglerContent -replace '00000000-0000-0000-0000-000000000000', $realDbId
+            Set-Content -Path "wrangler.jsonc" -Value $wranglerContent -Encoding UTF8
+        }
     }
 }
 
-# 4. Chạy Migration lên Cloudflare D1 Remote
-Write-Host "`n[4/5] Đang áp dụng Database Schema (migrations/0001_init.sql) lên Cloudflare D1..." -ForegroundColor Yellow
-npx.cmd wrangler d1 migrations apply pagefb-db --remote
+# Bước 3: Khởi tạo R2 Bucket (auto-reels-media)
+Write-Host "`n[3/6] Kiểm tra / Tạo Cloudflare R2 Bucket (auto-reels-media)..." -ForegroundColor Yellow
+try {
+    npx.cmd wrangler r2 bucket create auto-reels-media 2>&1 | Out-Null
+    Write-Host "-> R2 Bucket 'auto-reels-media' đã sẵn sàng!" -ForegroundColor Green
+} catch {
+    Write-Host "-> R2 Bucket 'auto-reels-media' đã tồn tại hoặc chưa bật R2 trên Dashboard." -ForegroundColor Gray
+}
 
-# 5. Deploy Worker + Static Assets lên https://pagefb.namnangno.click
-Write-Host "`n[5/5] Đang deploy ứng dụng lên Cloudflare Workers (https://pagefb.namnangno.click)..." -ForegroundColor Yellow
+# Bước 4: Chạy D1 Schema Migrations trên Remote Cloudflare
+Write-Host "`n[4/6] Áp dụng Schema Migrations (0001, 0002, 0003) lên Cloudflare D1 Remote..." -ForegroundColor Yellow
+npx.cmd wrangler d1 migrations apply auto-reels-db --remote
+
+# Bước 5: Kiểm tra bộ 30 bài test tự động trước khi Deploy
+Write-Host "`n[5/6] Chạy bộ 30 bài kiểm thử tự động (Unit & Integration Tests)..." -ForegroundColor Yellow
+node tests/test_worker.mjs
+
+# Bước 6: Deploy Worker & Static Assets lên Cloudflare Edge
+Write-Host "`n[6/6] Đang Deploy Worker + Static Assets lên https://pagefb.namnangno.click ..." -ForegroundColor Yellow
 npx.cmd wrangler deploy
 
-Write-Host "`n==========================================================" -ForegroundColor Green
-Write-Host " HOÀN TẤT DEPLOY LÊN https://pagefb.namnangno.click !     " -ForegroundColor Green
-Write-Host "==========================================================" -ForegroundColor Green
-
+Write-Host "`n================================================================" -ForegroundColor Green
+Write-Host "  HOÀN TẤT DEPLOY LÊN CLOUDFLARE!                               " -ForegroundColor Green
+Write-Host "  - Trang chủ     : https://pagefb.namnangno.click              " -ForegroundColor Green
+Write-Host "  - Đăng nhập     : https://pagefb.namnangno.click/login        " -ForegroundColor Green
+Write-Host "  - OAuth Callback: https://pagefb.namnangno.click/api/meta/callback" -ForegroundColor Green
+Write-Host "================================================================" -ForegroundColor Green

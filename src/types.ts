@@ -1,24 +1,19 @@
 /**
- * Cloudflare Worker Bindings & Domain Types
- * Domain: https://pagefb.namnangno.click
- * Meta App ID: 1469615908436980
+ * Cloudflare Worker TypeScript Definitions (D1, R2, Queues, Cron, Env & Domain Models)
+ * Production Domain : https://pagefb.namnangno.click
+ * Meta App ID       : 1469615908436980
  */
-
-export interface D1Meta {
-  duration: number;
-  size_after: number;
-  rows_read: number;
-  rows_written: number;
-  last_row_id: number;
-  changed_db: boolean;
-  changes: number;
-}
 
 export interface D1Result<T = Record<string, unknown>> {
   results: T[];
   success: boolean;
-  meta: D1Meta;
-  error?: string;
+  meta?: {
+    changes?: number;
+    last_row_id?: number;
+    duration?: number;
+    rows_read?: number;
+    rows_written?: number;
+  };
 }
 
 export interface D1ExecResult {
@@ -41,26 +36,98 @@ export interface D1Database {
   exec(query: string): Promise<D1ExecResult>;
 }
 
-export interface R2ObjectBody {
+export interface R2HTTPMetadata {
+  contentType?: string;
+  contentLanguage?: string;
+  contentDisposition?: string;
+  contentEncoding?: string;
+  cacheControl?: string;
+}
+
+export interface R2PutOptions {
+  httpMetadata?: R2HTTPMetadata;
+  customMetadata?: Record<string, string>;
+  sha256?: ArrayBuffer | string;
+}
+
+export interface R2Object {
   key: string;
+  version: string;
   size: number;
-  httpMetadata?: { contentType?: string };
+  etag: string;
+  httpEtag: string;
+  uploaded: Date;
+  httpMetadata?: R2HTTPMetadata;
+  customMetadata?: Record<string, string>;
+}
+
+export interface R2ObjectBody extends R2Object {
+  body: ReadableStream<Uint8Array>;
+  bodyUsed: boolean;
   arrayBuffer(): Promise<ArrayBuffer>;
-  body: ReadableStream;
+  text(): Promise<string>;
+  json<T = unknown>(): Promise<T>;
+  blob(): Promise<Blob>;
+}
+
+export interface R2UploadedPart {
+  partNumber: number;
+  etag: string;
+}
+
+export interface R2MultipartUpload {
+  key: string;
+  uploadId: string;
+  uploadPart(
+    partNumber: number,
+    value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob
+  ): Promise<R2UploadedPart>;
+  abort(): Promise<void>;
+  complete(uploadedParts: R2UploadedPart[]): Promise<R2Object>;
 }
 
 export interface R2Bucket {
+  head(key: string): Promise<R2Object | null>;
+  get(key: string): Promise<R2ObjectBody | null>;
   put(
     key: string,
-    value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob | null,
-    options?: { httpMetadata?: { contentType?: string } }
-  ): Promise<unknown>;
-  get(key: string): Promise<R2ObjectBody | null>;
+    value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null | Blob,
+    options?: R2PutOptions
+  ): Promise<R2Object | null>;
   delete(keys: string | string[]): Promise<void>;
+  createMultipartUpload?(key: string, options?: R2PutOptions): Promise<R2MultipartUpload>;
+  resumeMultipartUpload?(key: string, uploadId: string): R2MultipartUpload;
+}
+
+export interface QueueMessage<T = unknown> {
+  readonly id: string;
+  readonly timestamp: Date;
+  readonly body: T;
+  readonly attempts: number;
+  ack(): void;
+  retry(options?: { delaySeconds?: number }): void;
+}
+
+export interface MessageBatch<T = unknown> {
+  readonly queue: string;
+  readonly messages: readonly QueueMessage<T>[];
+  ackAll(): void;
+  retryAll(options?: { delaySeconds?: number }): void;
+}
+
+export interface Queue<T = unknown> {
+  send(message: T, options?: { contentType?: "json" | "text" | "bytes" | "v8"; delaySeconds?: number }): Promise<void>;
+  sendBatch(messages: Iterable<{ body: T; delaySeconds?: number }>): Promise<void>;
 }
 
 export interface Fetcher {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+}
+
+export interface ScheduledEvent {
+  cron: string;
+  type: string;
+  scheduledTime: number;
 }
 
 export interface ExecutionContext {
@@ -68,105 +135,165 @@ export interface ExecutionContext {
   passThroughOnException(): void;
 }
 
+export interface QueueTaskMessage {
+  task_id: number;
+  owner_user_id: string;
+  idempotency_key: string;
+  attempt: number;
+  enqueued_at: number;
+}
+
 export interface Env {
-  /** Cloudflare D1 Serverless SQLite Database */
   DB?: D1Database;
-  /** Optional Cloudflare R2 Bucket for Video Reels staging */
+  MEDIA_BUCKET?: R2Bucket;
   VIDEOS_BUCKET?: R2Bucket;
-  /** Cloudflare Workers Static Assets Fetcher */
+  REELS_QUEUE?: Queue<QueueTaskMessage>;
   ASSETS?: Fetcher;
 
-  /** Public Environment Variables */
   META_APP_ID?: string;
-  APP_BASE_URL?: string;
+  META_APP_SECRET?: string;
   META_REDIRECT_URI?: string;
   META_GRAPH_VERSION?: string;
+  APP_BASE_URL?: string;
 
-  /** Cloudflare Secrets (Sensitive - configured via `wrangler secret put`) */
-  META_APP_SECRET?: string;
+  SESSION_SECRET?: string;
   SECRET_KEY?: string;
+  TOKEN_ENCRYPTION_KEY?: string;
   ENCRYPTION_KEY?: string;
+  MAX_VIDEO_SIZE_MB?: string;
 }
 
 export interface UserRecord {
   id: string;
   username: string;
-  full_name: string;
-  email: string;
+  email: string | null;
+  password_hash?: string;
+  full_name: string | null;
   role: string;
-  status: string;
-  created_at?: string;
+  is_active: number;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface SessionRecord {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  csrf_token: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  expires_at: number;
+  revoked_at: string | null;
+  created_at: string;
 }
 
 export interface FacebookAccountRecord {
   id: string;
-  user_id: string;
-  user_name: string;
-  encrypted_user_access_token?: string;
-  token_expires_at: string | null;
+  owner_user_id: string | null;
+  facebook_user_id: string;
+  facebook_user_name: string | null;
+  facebook_user_email: string | null;
+  access_token?: string;
+  token_version?: string;
+  token_type: string;
   scopes: string[];
+  missing_scopes: string[];
   status: string;
-  owner_user_id: string;
-  avatar_url: string | null;
-  connected_at: string;
-  last_synced_at: string;
-  managed_pages_count: number;
-  postable_pages_count: number;
-  days_remaining: number | null;
+  token_status: string;
+  connected_at: string | null;
+  token_expires_at: string | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  page_count?: number;
+  days_remaining?: number | null;
+  is_expired?: boolean;
 }
 
 export interface AdminAccountLink {
   account_id: string;
-  user_id: string;
-  user_name: string;
-  owner_user_id: string;
-  avatar_url: string | null;
+  facebook_user_id: string;
+  facebook_user_name: string | null;
   account_status: string;
-  can_post: number;
   token_status: string;
-  synced_at: string;
+  tasks: string[];
+  can_post: boolean;
+  is_published: boolean;
+  last_synced_at: string | null;
 }
 
 export interface FacebookPageRecord {
   id: string;
+  owner_user_id: string | null;
   facebook_page_id: string;
+  page_name: string;
   name: string;
-  category: string | null;
-  avatar_url: string | null;
-  tasks: string;
-  can_post: number;
-  is_selected: number;
+  category: string;
+  avatar_url: string;
+  tasks: string[];
+  can_post: boolean;
+  is_published: boolean;
+  is_selected: boolean;
   status: string;
   token_status: string;
-  owner_user_id: string;
-  last_synced_at: string;
-  created_at: string;
+  connected_account_id: string | null;
+  last_synced_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
   pending_count: number;
-  total_tasks: number;
   admin_accounts: AdminAccountLink[];
-  admin_names: string;
+  admin_names: string[];
+}
+
+export interface MediaFileRecord {
+  id: string;
+  owner_user_id: string;
+  object_key: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256_checksum: string | null;
+  upload_status: string;
+  r2_upload_id: string | null;
+  storage_backend: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TaskRecord {
   id: number;
+  owner_user_id: string | null;
   profile_id: string | null;
   facebook_page_id: string | null;
-  page_name: string | null;
+  media_id?: string | null;
+  object_key?: string | null;
   video_path: string;
   caption: string;
-  link_ac: string;
   comment_text: string;
   schedule_date: string;
   schedule_time: string;
+  scheduled_at?: number | null;
+  timezone?: string;
   status: string;
-  video_url: string | null;
-  meta_video_id: string | null;
-  meta_post_id: string | null;
-  publish_mode: string;
-  error_message: string | null;
-  log: string | null;
-  done_time: string | null;
-  owner_user_id: string;
-  created_at: string;
+  raw_status?: string;
+  idempotency_key?: string | null;
+  attempt_count?: number;
+  max_attempts?: number;
+  next_retry_at?: number | null;
+  locked_until?: number | null;
+  lease_owner?: string | null;
+  error_code?: number | null;
+  error_subcode?: number | null;
+  retryable?: number;
+  log: string;
+  video_id: string;
+  post_id: string;
+  video_url: string;
+  created_at: string | null;
+  updated_at: string | null;
+  page_name?: string | null;
+  page_avatar?: string | null;
+  page_category?: string | null;
+  profile_name?: string | null;
 }
-

@@ -1,10 +1,13 @@
 # ============================================================================
-# .dev.vars.example - Biến bí mật dùng khi chạy thử nghiệm `npx wrangler dev`
-# Khi deploy lên Cloudflare Production, sử dụng `npx wrangler secret put <KEY>`
-# TUYỆT ĐỐI KHÔNG COMMIT FILE .dev.vars CHỨA SECRET THẬT LÊN GIT!
+# BIẾN MÔI TRƯỜNG & SECRETS CHO WRANGLER DEV LOCAL (.dev.vars)
+# Sao chép file này thành `.dev.vars` khi chạy `npx wrangler dev`
+# TUYỆT ĐỐI KHÔNG COMMIT FILE `.dev.vars` LÊN GIT!
 # ============================================================================
 
-META_APP_SECRET=your_meta_app_secret_here
-SECRET_KEY=replace_with_32_byte_random_hmac_session_secret
-ENCRYPTION_KEY=replace_with_32_byte_random_aes_256_gcm_key
-
+META_APP_ID=1469615908436980
+META_APP_SECRET=replace_with_your_meta_app_secret
+APP_BASE_URL=https://pagefb.namnangno.click
+META_REDIRECT_URI=https://pagefb.namnangno.click/api/meta/callback
+META_GRAPH_VERSION=v19.0
+SESSION_SECRET=replace_with_strong_random_64_hex_session_secret
+TOKEN_ENCRYPTION_KEY=replace_with_strong_random_64_hex_aes_256_gcm_key

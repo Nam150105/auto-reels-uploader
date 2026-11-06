@@ -173,6 +173,14 @@ export class FallbackMemoryD1 implements D1Database {
 
 const fallbackInstance = new FallbackMemoryD1();
 
-export function getD1Database(envDb?: D1Database): D1Database {
-  return envDb || fallbackInstance;
+export function getD1Database(envOrDb?: D1Database | { DB?: D1Database }): D1Database {
+  if (!envOrDb) return fallbackInstance;
+  if (typeof (envOrDb as D1Database).prepare === "function") {
+    return envOrDb as D1Database;
+  }
+  const maybeDb = (envOrDb as { DB?: D1Database }).DB;
+  if (maybeDb && typeof maybeDb.prepare === "function") {
+    return maybeDb;
+  }
+  return fallbackInstance;
 }

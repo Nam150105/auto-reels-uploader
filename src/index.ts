@@ -1,20 +1,22 @@
 /**
- * Cloudflare Worker Entrypoint - Facebook Fanpage & Reels Scheduler
+ * Cloudflare Worker Entrypoint - Facebook Fanpage & Reels Scheduler (auto-reels-uploader)
  * Production Domain : https://pagefb.namnangno.click
  * Facebook App ID   : 1469615908436980
  * OAuth Callback    : https://pagefb.namnangno.click/api/meta/callback
+ * Architecture      : Cloudflare Workers + D1 + R2 + Queues + Cron Triggers (Free-Plan Optimized)
  */
 
-import type { Env, ExecutionContext, UserRecord, D1Database } from "./types.ts";
-import {
-  generateSessionToken,
-  verifySessionToken,
-  randomHex,
-  bytesToBase64Url
-} from "./crypto.ts";
+import type {
+  Env,
+  ExecutionContext,
+  ScheduledEvent,
+  MessageBatch,
+  QueueTaskMessage
+} from "./types.ts";
+import { getEncryptionKeyMaterial } from "./utils/crypto.ts";
+import { parseVnScheduleToUtc } from "./utils/timezone.ts";
 import {
   ensureDatabaseInitialized,
-  getUserById,
   verifyUserCredentials,
   createUser,
   getFacebookAccounts,
@@ -26,6 +28,7 @@ import {
   updatePageSelection,
   bulkUpdatePageSelection,
   deleteFacebookPageLocal,
+  getMediaFileById,
   getTasks,
   getTask,
   addTask,
@@ -34,719 +37,689 @@ import {
   deleteTask,
   resetTask,
   resetRunningTasks,
-  getPendingTasks,
-  saveUploadedVideo
+  getTaskLogs,
+  getTaskAttempts
 } from "./db.ts";
 import {
   PRODUCTION_DOMAIN,
   generateOAuthUrl,
   exchangeCodeForToken,
-  getConnectionStatus,
+  getConnectionStatus
+} from "./services/metaOAuthService.ts";
+import {
+  syncPagesForAccount,
   syncPagesFromMeta,
   checkPagePermissionOnMeta,
   validateVideoSource,
-  runDiagnosticTest,
-  executeTasksBatch
-} from "./meta.ts";
+  runDiagnosticTest
+} from "./services/metaGraphService.ts";
+import { deleteUserVideo, getR2Bucket } from "./services/r2MediaService.ts";
+import {
+  makeSessionCookie,
+  clearSessionCookie,
+  issueUserSession,
+  authenticateRequest,
+  revokeRequestSession,
+  verifyCsrfProtection,
+  enforceAuthRateLimit
+} from "./middleware/auth.ts";
+import {
+  enqueueUserPendingTasks,
+  handleNativeQueueBatch
+} from "./queue/publishQueue.ts";
+import { dispatchDueScheduledTasks } from "./scheduler/cronDispatcher.ts";
+import {
+  jsonResponse,
+  serveStaticHtmlAsset,
+  renderOAuthCallbackHtml
+} from "./routes/responseHelpers.ts";
+import { handleComplianceRoutes } from "./routes/complianceRoutes.ts";
+import { handleMediaRoutes } from "./routes/mediaRoutes.ts";
 import { getD1Database } from "./fallback_d1.ts";
-
-function jsonResponse(
-  data: unknown,
-  status = 200,
-  extraHeaders: Record<string, string> = {}
-): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...extraHeaders
-    }
-  });
-}
-
-function htmlResponse(
-  html: string,
-  status = 200,
-  extraHeaders: Record<string, string> = {}
-): Response {
-  return new Response(html, {
-    status,
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      ...extraHeaders
-    }
-  });
-}
-
-function escapeHtml(str: string): string {
-  return String(str || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function parseCookies(cookieHeader: string | null): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!cookieHeader) return out;
-  for (const pair of cookieHeader.split(";")) {
-    const idx = pair.indexOf("=");
-    if (idx > 0) {
-      const k = pair.slice(0, idx).trim();
-      const v = pair.slice(idx + 1).trim();
-      out[k] = decodeURIComponent(v);
-    }
-  }
-  return out;
-}
-
-function makeSessionCookie(token: string, isHttps: boolean, maxAgeSeconds = 7 * 86400): string {
-  const parts = [
-    `session_token=${encodeURIComponent(token)}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    `Max-Age=${maxAgeSeconds}`
-  ];
-  if (isHttps) {
-    parts.push("Secure");
-  }
-  return parts.join("; ");
-}
-
-function clearSessionCookie(isHttps: boolean): string {
-  const parts = [
-    "session_token=",
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    "Max-Age=0"
-  ];
-  if (isHttps) {
-    parts.push("Secure");
-  }
-  return parts.join("; ");
-}
-
-async function getCurrentUser(
-  request: Request,
-  db: D1Database,
-  env: Env
-): Promise<UserRecord | null> {
-  const cookies = parseCookies(request.headers.get("Cookie"));
-  let token = cookies["session_token"] || "";
-
-  if (!token) {
-    const authHeader = request.headers.get("Authorization");
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.slice(7).trim();
-    }
-  }
-  if (!token) return null;
-
-  const secretKey = env.SECRET_KEY || "meta_scheduler_secret_key_2026";
-  const userId = await verifySessionToken(token, secretKey);
-  if (!userId) return null;
-
-  return getUserById(db, userId);
-}
-
-async function serveStaticHtmlAsset(
-  request: Request,
-  env: Env,
-  assetPath: string
-): Promise<Response | null> {
-  if (!env.ASSETS) return null;
-  const url = new URL(request.url);
-  url.pathname = assetPath;
-  const assetReq = new Request(url.toString(), {
-    method: "GET",
-    headers: request.headers
-  });
-  const resp = await env.ASSETS.fetch(assetReq);
-  if (resp.ok) {
-    return new Response(resp.body, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-cache"
-      }
-    });
-  }
-  return null;
-}
-
-function renderOAuthCallbackHtml(options: {
-  success: boolean;
-  title: string;
-  subtitle?: string;
-  message: string;
-}): Response {
-  const badgeClass = options.success
-    ? "bg-emerald-500/20 text-emerald-400"
-    : "bg-rose-500/20 text-rose-400";
-  const icon = options.success ? "✓" : "✕";
-  const metaRefresh = options.success
-    ? `<meta http-equiv="refresh" content="2;url=/pages" />`
-    : "";
-
-  return htmlResponse(
-    `<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  ${metaRefresh}
-  <title>${escapeHtml(options.title)}</title>
-  <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100 p-4">
-  <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center shadow-2xl">
-    <div class="h-14 w-14 rounded-full ${badgeClass} flex items-center justify-center mx-auto mb-4 text-3xl font-bold">${icon}</div>
-    <h2 class="text-xl font-bold text-white mb-2">${escapeHtml(options.title)}</h2>
-    ${
-      options.subtitle
-        ? `<p class="text-sm text-slate-300 mb-1">Tài khoản: <b>${escapeHtml(options.subtitle)}</b></p>`
-        : ""
-    }
-    <p class="text-xs ${options.success ? "text-slate-400" : "text-rose-400"} mb-6 whitespace-pre-line">${escapeHtml(options.message)}</p>
-    ${
-      options.success
-        ? `<p class="text-xs text-slate-500 mb-4 animate-pulse">Đang tự động chuyển hướng về trang Quản lý Fanpage...</p>`
-        : ""
-    }
-    <a href="/pages" class="inline-block py-2.5 px-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg transition">
-      Về Bảng Điều Khiển Ngay
-    </a>
-  </div>
-</body>
-</html>`,
-    options.success ? 200 : 400
-  );
-}
 
 export async function handleWorkerRequest(
   request: Request,
   env: Env,
-  ctx?: ExecutionContext
+  ctx: ExecutionContext
 ): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.pathname.replace(/\/+$/, "") || "/";
+  const pathname = url.pathname;
   const method = request.method.toUpperCase();
   const isHttps =
     url.protocol === "https:" ||
-    request.headers.get("x-forwarded-proto") === "https";
+    request.headers.get("X-Forwarded-Proto") === "https";
 
-  // Handle CORS preflight strictly for production domain / same-origin
+  const encryptionKey = getEncryptionKeyMaterial(env);
+  const db = getD1Database(env);
+  await ensureDatabaseInitialized(db, encryptionKey);
+
+  // ==========================================
+  // 0. CORS PREFLIGHT (Strict Same-Origin / Production Domain)
+  // ==========================================
   if (method === "OPTIONS") {
     const origin = request.headers.get("Origin") || PRODUCTION_DOMAIN;
+    const allowedOrigin =
+      origin === PRODUCTION_DOMAIN || origin === url.origin
+        ? origin
+        : PRODUCTION_DOMAIN;
     return new Response(null, {
       status: 204,
       headers: {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Credentials": "true"
+        "Access-Control-Allow-Origin": allowedOrigin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-File-Name, X-CSRF-Token"
       }
     });
   }
 
-  const db = getD1Database(env.DB);
-  await ensureDatabaseInitialized(db);
+  // ==========================================
+  // 1. TRANG CÔNG KHAI BẮT BUỘC CỦA META (/privacy, /terms, /data-deletion, /api/meta/data-deletion)
+  // ==========================================
+  const complianceResp = await handleComplianceRoutes(request, url, db, env);
+  if (complianceResp) return complianceResp;
 
-  // =========================================================================
-  // PUBLIC META COMPLIANCE ROUTES (No Authentication Required)
-  // =========================================================================
+  // ==========================================
+  // 2. XÁC THỰC PHIÊN NGƯỜI DÙNG & CHỐNG CSRF
+  // ==========================================
+  const { user: currentUser, session: currentSession } = await authenticateRequest(
+    request,
+    db,
+    env
+  );
 
-  if (method === "GET" && path === "/privacy") {
-    const asset = await serveStaticHtmlAsset(request, env, "/privacy.html");
-    if (asset) return asset;
-    return htmlResponse(
-      `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Chính Sách Quyền Riêng Tư - Quản lý fanpage</title></head><body><h1>Chính Sách Quyền Riêng Tư - Quản lý fanpage (App ID: 1469615908436980)</h1><p>Website: https://pagefb.namnangno.click</p></body></html>`
-    );
+  if (pathname.startsWith("/api/")) {
+    const csrfCheck = verifyCsrfProtection(request, env);
+    if (!csrfCheck.valid) {
+      return jsonResponse({ detail: csrfCheck.reason || "CSRF validation failed." }, 403);
+    }
   }
 
-  if (method === "GET" && path === "/terms") {
-    const asset = await serveStaticHtmlAsset(request, env, "/terms.html");
-    if (asset) return asset;
-    return htmlResponse(
-      `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Điều Khoản Dịch Vụ - Quản lý fanpage</title></head><body><h1>Điều Khoản Dịch Vụ - Quản lý fanpage (App ID: 1469615908436980)</h1><p>Website: https://pagefb.namnangno.click</p></body></html>`
-    );
+  // ==========================================
+  // 3. ĐIỀU HƯỚNG GIAO DIỆN HTML FRONTEND (/, /login, /pages, /schedules)
+  // ==========================================
+  if (pathname === "/login" && method === "GET") {
+    if (currentUser) {
+      return Response.redirect(`${url.origin}/pages`, 302);
+    }
+    const staticResp = await serveStaticHtmlAsset(request, env, "/login.html");
+    if (staticResp) return staticResp;
   }
 
-  if (method === "GET" && path === "/data-deletion") {
-    const asset = await serveStaticHtmlAsset(request, env, "/data-deletion.html");
-    if (asset) return asset;
-    return htmlResponse(
-      `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Hướng Dẫn Xóa Dữ Liệu - Quản lý fanpage</title></head><body><h1>Hướng Dẫn Xóa Dữ Liệu Người Dùng - Quản lý fanpage (App ID: 1469615908436980)</h1><p>Callback: https://pagefb.namnangno.click/api/meta/data-deletion</p></body></html>`
-    );
+  if (
+    (pathname === "/" || pathname === "/pages" || pathname === "/schedules") &&
+    method === "GET"
+  ) {
+    if (!currentUser) {
+      return Response.redirect(`${url.origin}/login`, 302);
+    }
+    const staticResp = await serveStaticHtmlAsset(request, env, "/index.html");
+    if (staticResp) return staticResp;
   }
 
-  if (path === "/api/meta/data-deletion" && (method === "POST" || method === "GET")) {
-    const confirmationCode = `DEL_${randomHex(8).toUpperCase()}`;
-    const baseUrl = (env.APP_BASE_URL || PRODUCTION_DOMAIN).replace(/\/+$/, "");
-    const statusUrl = `${baseUrl}/data-deletion-status?code=${confirmationCode}`;
-    return jsonResponse({
-      url: statusUrl,
-      confirmation_code: confirmationCode
-    });
-  }
+  // ==========================================
+  // 4. API XÁC THỰC (/api/auth/*)
+  // ==========================================
+  if (pathname === "/api/auth/login" && method === "POST") {
+    const rl = await enforceAuthRateLimit(request, db, "login");
+    if (!rl.allowed) {
+      return jsonResponse(
+        {
+          detail: `Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau ${rl.retryAfterSeconds} giây.`
+        },
+        429,
+        { "Retry-After": String(rl.retryAfterSeconds) }
+      );
+    }
 
-  if (method === "GET" && path === "/data-deletion-status") {
-    const code = url.searchParams.get("code") || "DEL_CONFIRMED";
-    return htmlResponse(`<!DOCTYPE html>
-<html lang="vi" class="h-full bg-slate-950 text-slate-100">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Trạng Thái Xóa Dữ Liệu - Quản lý fanpage</title>
-  <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="h-full flex items-center justify-center p-4">
-  <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-7 text-center shadow-2xl">
-    <div class="h-12 w-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-4 text-2xl font-bold">✓</div>
-    <h2 class="text-lg font-bold text-white mb-2">Yêu Cầu Xóa Dữ Liệu Đã Được Ghi Nhận</h2>
-    <p class="text-xs text-slate-400 mb-4">Mã xác nhận: <code class="font-mono text-emerald-400 font-bold">${escapeHtml(code)}</code></p>
-    <p class="text-xs text-slate-300 mb-6 leading-relaxed">Toàn bộ dữ liệu phiên kết nối, token truy cập và liên kết Fanpage của bạn đã được xóa sạch hoàn toàn khỏi cơ sở dữ liệu Cloudflare D1.</p>
-    <a href="/login" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold inline-block transition">
-      Về Trang Đăng Nhập
-    </a>
-  </div>
-</body>
-</html>`);
-  }
-
-  // =========================================================================
-  // 0. AUTHENTICATION ENDPOINTS (/api/auth/*)
-  // =========================================================================
-
-  if (method === "POST" && path === "/api/auth/login") {
-    let body: { username?: string; password?: string } = {};
     try {
-      body = (await request.json()) as { username?: string; password?: string };
+      const body = (await request.json()) as { username?: string; password?: string };
+      const user = await verifyUserCredentials(
+        db,
+        body.username || "",
+        body.password || ""
+      );
+      if (!user) {
+        return jsonResponse(
+          { detail: "Tên đăng nhập hoặc mật khẩu không chính xác." },
+          401
+        );
+      }
+
+      const issued = await issueUserSession(request, db, env, user.id);
+      return jsonResponse(
+        {
+          success: true,
+          user,
+          csrf_token: issued.csrfToken,
+          message: `Chào mừng ${user.full_name || user.username}!`
+        },
+        200,
+        { "Set-Cookie": makeSessionCookie(issued.token, isHttps) }
+      );
     } catch {
       return jsonResponse({ detail: "Dữ liệu đăng nhập không hợp lệ." }, 400);
     }
+  }
 
-    const user = await verifyUserCredentials(
-      db,
-      body.username || "",
-      body.password || ""
-    );
-    if (!user) {
+  if (pathname === "/api/auth/register" && method === "POST") {
+    const rl = await enforceAuthRateLimit(request, db, "register");
+    if (!rl.allowed) {
       return jsonResponse(
-        { detail: "Tên đăng nhập hoặc mật khẩu không chính xác." },
-        401
+        {
+          detail: `Quá nhiều yêu cầu đăng ký. Vui lòng thử lại sau ${rl.retryAfterSeconds} giây.`
+        },
+        429,
+        { "Retry-After": String(rl.retryAfterSeconds) }
       );
     }
 
-    const secretKey = env.SECRET_KEY || "meta_scheduler_secret_key_2026";
-    const token = await generateSessionToken(user.id, secretKey);
-    return jsonResponse(
-      {
-        status: "success",
-        message: `Chào mừng ${user.full_name || user.username}!`,
-        user,
-        token
-      },
-      200,
-      { "Set-Cookie": makeSessionCookie(token, isHttps) }
-    );
-  }
-
-  if (method === "POST" && path === "/api/auth/register") {
-    let body: {
-      username?: string;
-      password?: string;
-      full_name?: string;
-      email?: string;
-    } = {};
     try {
-      body = (await request.json()) as typeof body;
+      const body = (await request.json()) as {
+        username?: string;
+        password?: string;
+        full_name?: string;
+        email?: string;
+      };
+      const res = await createUser(
+        db,
+        body.username || "",
+        body.password || "",
+        body.full_name || null,
+        body.email || null,
+        "member"
+      );
+      if (!res.success || !res.user) {
+        return jsonResponse({ detail: res.message || "Đăng ký thất bại." }, 400);
+      }
+
+      const issued = await issueUserSession(request, db, env, res.user.id);
+      return jsonResponse(
+        {
+          success: true,
+          user: res.user,
+          csrf_token: issued.csrfToken,
+          message: "Đăng ký tài khoản thành công!"
+        },
+        200,
+        { "Set-Cookie": makeSessionCookie(issued.token, isHttps) }
+      );
     } catch {
       return jsonResponse({ detail: "Dữ liệu đăng ký không hợp lệ." }, 400);
     }
-
-    try {
-      const user = await createUser(db, {
-        username: body.username || "",
-        password: body.password || "",
-        fullName: body.full_name,
-        email: body.email,
-        role: "user"
-      });
-      const secretKey = env.SECRET_KEY || "meta_scheduler_secret_key_2026";
-      const token = await generateSessionToken(user.id, secretKey);
-      return jsonResponse(
-        {
-          status: "success",
-          message: "Đăng ký tài khoản thành công!",
-          user,
-          token
-        },
-        200,
-        { "Set-Cookie": makeSessionCookie(token, isHttps) }
-      );
-    } catch (err) {
-      return jsonResponse(
-        { detail: err instanceof Error ? err.message : "Lỗi đăng ký tài khoản." },
-        400
-      );
-    }
   }
 
-  if (method === "POST" && path === "/api/auth/logout") {
+  if (pathname === "/api/auth/logout" && method === "POST") {
+    await revokeRequestSession(request, db);
     return jsonResponse(
-      { status: "success", message: "Đã đăng xuất thành công." },
+      { success: true, message: "Đã đăng xuất và thu hồi phiên làm việc thành công." },
       200,
       { "Set-Cookie": clearSessionCookie(isHttps) }
     );
   }
 
-  if (method === "GET" && path === "/api/auth/me") {
-    const user = await getCurrentUser(request, db, env);
-    if (!user) {
-      return jsonResponse({ detail: "Chưa đăng nhập." }, 401);
+  if (pathname === "/api/auth/me" && method === "GET") {
+    if (!currentUser) {
+      return jsonResponse(
+        { authenticated: false, detail: "Chưa đăng nhập." },
+        401
+      );
     }
-    return jsonResponse({ status: "success", user });
+    return jsonResponse({
+      authenticated: true,
+      user: currentUser,
+      csrf_token: currentSession?.csrf_token || null
+    });
   }
 
-  // =========================================================================
-  // FACEBOOK OAUTH CALLBACK (/api/meta/callback)
-  // Validated via server-side `oauth_states` table in D1
-  // =========================================================================
-
-  if (method === "GET" && path === "/api/meta/callback") {
+  // ==========================================
+  // 5. FACEBOOK OAUTH CALLBACK (/api/meta/callback)
+  // ==========================================
+  if (pathname === "/api/meta/callback" && method === "GET") {
     const error = url.searchParams.get("error");
     const errorDesc = url.searchParams.get("error_description");
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+
     if (error) {
       return renderOAuthCallbackHtml({
         success: false,
-        title: "Kết Nối Facebook Thất Bại",
-        message:
-          errorDesc ||
-          error ||
-          "Người dùng đã từ chối cấp quyền trên hộp thoại Facebook OAuth."
+        title: "Kết Nối Facebook Bị Từ Chối",
+        message: errorDesc || error
       });
     }
 
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
     if (!code || !state) {
       return renderOAuthCallbackHtml({
         success: false,
-        title: "Thiếu Tham Số OAuth",
-        message: "Thiếu mã `code` hoặc `state` từ phản hồi của Facebook."
+        title: "Thiếu Tham Số Xác Thực OAuth",
+        message: "Yêu cầu callback không hợp lệ (thiếu code hoặc state)."
       });
     }
 
-    const currentUser = await getCurrentUser(request, db, env);
-    const exchangeRes = await exchangeCodeForToken(db, env, {
+    const res = await exchangeCodeForToken(
+      db,
+      env,
       code,
       state,
-      fallbackUserId: currentUser?.id || null
-    });
-
-    if (exchangeRes.status === "error") {
+      currentUser?.id || null
+    );
+    if (!res.success) {
       return renderOAuthCallbackHtml({
         success: false,
-        title: "Lỗi Đổi Mã Truy Cập (Token Exchange)",
-        message: exchangeRes.message
+        title: "Lỗi Xác Thực Meta OAuth",
+        message: res.message || "Không thể trao đổi Access Token với Facebook."
       });
     }
 
-    const ownerUserId = exchangeRes.owner_user_id || currentUser?.id || "usr_admin";
-    const syncRes = await syncPagesFromMeta(db, env, {
-      accountId: exchangeRes.account_id,
-      ownerUserId
-    });
+    const effectiveUserId = res.owner_user_id || currentUser?.id || "usr_admin";
+    let syncRes: { synced_count?: number } = { synced_count: 0 };
+    if (res.account_id) {
+      syncRes = await syncPagesForAccount(db, env, res.account_id, effectiveUserId);
+    } else {
+      syncRes = await syncPagesFromMeta(db, env, effectiveUserId);
+    }
 
     return renderOAuthCallbackHtml({
       success: true,
-      title: "Kết Nối Facebook Thành Công!",
-      subtitle: exchangeRes.user_name,
-      message: String(syncRes.message || "Đã đồng bộ danh sách Fanpage thành công.")
+      title: "Kết Nối Tài Khoản Facebook Thành Công!",
+      subtitle: `${res.user_name || ""} (ID: ${res.user_id || ""})`,
+      message: `Đã tự động đồng bộ ${syncRes.synced_count || 0} Fanpage từ Meta Graph API. Đang chuyển về trang Quản Lý Fanpage...`
     });
   }
 
-  // =========================================================================
-  // PROTECTED API ROUTES (/api/*) - Require Authenticated User
-  // =========================================================================
-
-  if (path.startsWith("/api/")) {
-    const currentUser = await getCurrentUser(request, db, env);
+  // ==========================================
+  // 6. BẢO VỆ CÁC API NGHIỆP VỤ (/api/*) - YÊU CẦU ĐĂNG NHẬP
+  // ==========================================
+  if (pathname.startsWith("/api/")) {
     if (!currentUser) {
       return jsonResponse(
         {
-          status: "error",
-          detail: "Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập. Vui lòng đăng nhập lại!"
+          detail: "Phiên đăng nhập hết hạn hoặc chưa xác thực. Vui lòng đăng nhập lại."
         },
         401
       );
     }
+
     const ownerUserId = currentUser.id;
 
-    // 1. META OAUTH & MULTI-ACCOUNT ENDPOINTS
-    if (method === "GET" && path === "/api/meta/status") {
-      const statusData = await getConnectionStatus(db, env, ownerUserId);
-      return jsonResponse(statusData);
+    // ------------------------------------------
+    // 6.1. MEDIA R2 UPLOAD & STORAGE ENDPOINTS
+    // ------------------------------------------
+    const mediaResp = await handleMediaRoutes(request, url, db, env, currentUser);
+    if (mediaResp) return mediaResp;
+
+    // ------------------------------------------
+    // 6.2. META CONNECTION & ADMIN ACCOUNTS
+    // ------------------------------------------
+    if (pathname === "/api/meta/status" && method === "GET") {
+      const status = await getConnectionStatus(db, env, ownerUserId);
+      return jsonResponse(status);
     }
 
-    if (method === "GET" && path === "/api/meta/accounts") {
-      const statusFilter = url.searchParams.get("status");
-      const accounts = await getFacebookAccounts(db, {
-        status: statusFilter,
-        ownerUserId,
-        includeEncryptedToken: false
-      });
+    if (pathname === "/api/meta/accounts" && method === "GET") {
+      const accounts = await getFacebookAccounts(
+        db,
+        encryptionKey,
+        false,
+        ownerUserId
+      );
       return jsonResponse(accounts);
     }
 
-    if (method === "GET" && path === "/api/meta/oauth-url") {
-      const accountId = url.searchParams.get("account_id");
-      const res = await generateOAuthUrl(db, env, {
-        userId: ownerUserId,
-        accountId,
-        authType: "rerequest"
-      });
-      if (res.status === "error") {
+    if (pathname === "/api/meta/oauth-url" && method === "GET") {
+      const reconnectId = url.searchParams.get("reconnect_account_id");
+      const res = await generateOAuthUrl(
+        db,
+        env,
+        ownerUserId,
+        reconnectId || null
+      );
+      if (!res.success) {
         return jsonResponse({ detail: res.message }, 400);
       }
       return jsonResponse(res);
     }
 
-    if (method === "GET" && path === "/api/meta/login") {
-      const accountId = url.searchParams.get("account_id");
-      const authType = url.searchParams.get("auth_type") || "rerequest";
-      const res = await generateOAuthUrl(db, env, {
-        userId: ownerUserId,
-        accountId,
-        authType
-      });
-      if (res.status === "error" || !res.oauth_url) {
-        return jsonResponse({ detail: res.message || "Lỗi khởi tạo OAuth URL." }, 400);
+    if (pathname === "/api/meta/login" && method === "GET") {
+      const reconnectId = url.searchParams.get("reconnect_account_id");
+      const res = await generateOAuthUrl(
+        db,
+        env,
+        ownerUserId,
+        reconnectId || null
+      );
+      if (!res.success || !res.oauth_url) {
+        return jsonResponse({ detail: res.message || "Lỗi khởi tạo OAuth" }, 400);
       }
       return Response.redirect(res.oauth_url, 302);
     }
 
-    if (method === "POST" && path === "/api/meta/disconnect") {
-      await disconnectAllUserAccounts(db, ownerUserId);
-      return jsonResponse({
-        status: "success",
-        message: "Đã ngắt kết nối toàn bộ tài khoản Facebook Admin của bạn."
-      });
-    }
-
-    if (method === "POST" && path === "/api/meta/sync-pages") {
-      const accountId = url.searchParams.get("account_id");
-      const res = await syncPagesFromMeta(db, env, { accountId, ownerUserId });
-      if (res.status === "error") {
-        return jsonResponse({ detail: res.message, ...res }, 400);
+    if (pathname === "/api/meta/sync-pages" && method === "POST") {
+      const res = await syncPagesFromMeta(db, env, ownerUserId);
+      if (!res.success && res.synced_count === 0) {
+        return jsonResponse({ detail: res.message, errors: res.errors }, 400);
       }
       return jsonResponse(res);
     }
 
-    // Dynamic /api/meta/accounts/:accountId/*
-    const accountRouteMatch = path.match(
-      /^\/api\/meta\/accounts\/([^/]+)(?:\/(disconnect|sync|reconnect-url))?$/
-    );
-    if (accountRouteMatch) {
-      const accountId = decodeURIComponent(accountRouteMatch[1]);
-      const subAction = accountRouteMatch[2] || "";
-
-      if (!subAction && method === "GET") {
-        const acc = await getFacebookAccountById(db, accountId, ownerUserId, false);
-        if (!acc) {
-          return jsonResponse(
-            { detail: "Không tìm thấy tài khoản Facebook Admin hoặc bạn không có quyền truy cập." },
-            404
-          );
-        }
-        return jsonResponse(acc);
-      }
-
-      if (subAction === "disconnect" && method === "POST") {
-        const ok = await disconnectFacebookAccount(db, accountId, ownerUserId);
-        if (!ok) {
-          return jsonResponse(
-            { detail: "Không tìm thấy tài khoản Facebook Admin thuộc quyền sở hữu của bạn." },
-            404
-          );
-        }
-        return jsonResponse({
-          status: "success",
-          account_id: accountId,
-          message: `Đã ngắt kết nối tài khoản Facebook Admin ${accountId}.`
-        });
-      }
-
-      if (!subAction && method === "DELETE") {
-        const ok = await deleteFacebookAccountLocal(db, accountId, ownerUserId);
-        if (!ok) {
-          return jsonResponse(
-            { detail: "Không tìm thấy tài khoản Facebook Admin thuộc quyền sở hữu của bạn." },
-            404
-          );
-        }
-        return jsonResponse({
-          status: "success",
-          account_id: accountId,
-          message: `Đã xóa tài khoản Facebook Admin ${accountId} khỏi hệ thống.`
-        });
-      }
-
-      if (subAction === "sync" && method === "POST") {
-        const res = await syncPagesFromMeta(db, env, { accountId, ownerUserId });
-        if (res.status === "error") {
-          return jsonResponse({ detail: res.message, ...res }, 400);
-        }
-        return jsonResponse(res);
-      }
-
-      if (subAction === "reconnect-url" && method === "GET") {
-        const acc = await getFacebookAccountById(db, accountId, ownerUserId, false);
-        if (!acc) {
-          return jsonResponse(
-            { detail: "Không tìm thấy tài khoản Facebook Admin thuộc quyền sở hữu của bạn." },
-            404
-          );
-        }
-        const res = await generateOAuthUrl(db, env, {
-          userId: ownerUserId,
-          accountId: acc.id,
-          authType: "rerequest"
-        });
-        return jsonResponse(res);
-      }
+    if (pathname === "/api/meta/disconnect" && method === "POST") {
+      await disconnectAllUserAccounts(db, ownerUserId);
+      return jsonResponse({
+        success: true,
+        message: "Đã ngắt kết nối toàn bộ tài khoản Facebook Admin của bạn."
+      });
     }
 
-    // 2. FANPAGE MANAGEMENT ENDPOINTS (/api/pages/*)
-    if (method === "GET" && path === "/api/pages") {
-      const rawAccountIds = url.searchParams.get("account_ids") || "";
-      const accountIds = rawAccountIds
+    const syncAccMatch = /^\/api\/meta\/accounts\/([^/]+)\/sync$/.exec(pathname);
+    if (syncAccMatch && method === "POST") {
+      const accountId = decodeURIComponent(syncAccMatch[1]);
+      const res = await syncPagesForAccount(db, env, accountId, ownerUserId);
+      if (!res.success) {
+        return jsonResponse({ detail: res.message }, 400);
+      }
+      const pages = await getFacebookPages(db, encryptionKey, {
+        includeToken: false,
+        ownerUserId
+      });
+      return jsonResponse({ ...res, pages });
+    }
+
+    const reconnectAccMatch = /^\/api\/meta\/accounts\/([^/]+)\/reconnect$/.exec(pathname);
+    if (reconnectAccMatch && method === "POST") {
+      const accountId = decodeURIComponent(reconnectAccMatch[1]);
+      const acc = await getFacebookAccountById(
+        db,
+        encryptionKey,
+        accountId,
+        false,
+        ownerUserId
+      );
+      if (!acc) {
+        return jsonResponse(
+          { detail: "Không tìm thấy tài khoản Facebook Admin thuộc quyền sở hữu của bạn." },
+          404
+        );
+      }
+      const res = await generateOAuthUrl(db, env, ownerUserId, accountId, "reconnect");
+      if (!res.success) {
+        return jsonResponse({ detail: res.message }, 400);
+      }
+      return jsonResponse(res);
+    }
+
+    const disconnectAccMatch = /^\/api\/meta\/accounts\/([^/]+)\/disconnect$/.exec(pathname);
+    if (disconnectAccMatch && method === "POST") {
+      const accountId = decodeURIComponent(disconnectAccMatch[1]);
+      const ok = await disconnectFacebookAccount(db, accountId, ownerUserId);
+      if (!ok) {
+        return jsonResponse(
+          { detail: "Không tìm thấy tài khoản hoặc không có quyền ngắt kết nối." },
+          404
+        );
+      }
+      return jsonResponse({
+        success: true,
+        message: "Đã ngắt kết nối tài khoản Facebook Admin."
+      });
+    }
+
+    const deleteAccMatch = /^\/api\/meta\/accounts\/([^/]+)$/.exec(pathname);
+    if (deleteAccMatch && method === "DELETE") {
+      const accountId = decodeURIComponent(deleteAccMatch[1]);
+      const ok = await deleteFacebookAccountLocal(db, accountId, ownerUserId);
+      if (!ok) {
+        return jsonResponse(
+          { detail: "Không tìm thấy tài khoản hoặc không có quyền xóa." },
+          404
+        );
+      }
+      return jsonResponse({
+        success: true,
+        message: "Đã xóa tài khoản Facebook Admin khỏi danh sách."
+      });
+    }
+
+    // ------------------------------------------
+    // 6.3. QUẢN LÝ FANPAGE (/api/pages*)
+    // ------------------------------------------
+    if (pathname === "/api/pages" && method === "GET") {
+      const accountIdsRaw = url.searchParams.get("account_ids") || "";
+      const accountIds = accountIdsRaw
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
-      const search = url.searchParams.get("search");
-      const status = url.searchParams.get("status");
-      const onlySelected = url.searchParams.get("only_selected") === "true";
-
-      const pages = await getFacebookPages(db, {
-        accountIds: accountIds.length > 0 ? accountIds : null,
-        search,
-        status,
-        onlySelected,
+      const pages = await getFacebookPages(db, encryptionKey, {
+        includeToken: false,
+        accountIds,
         ownerUserId
       });
       return jsonResponse(pages);
     }
 
-    if (
-      method === "POST" &&
-      (path === "/api/pages/bulk-select" || path === "/api/pages/select-all")
-    ) {
-      let body: {
+    if (pathname === "/api/pages/bulk-select" && method === "POST") {
+      const body = (await request.json()) as {
         is_selected?: boolean;
         facebook_page_ids?: string[];
         account_ids?: string[];
-      } = {};
-      try {
-        body = (await request.json()) as typeof body;
-      } catch {
-        return jsonResponse({ detail: "Payload không hợp lệ." }, 400);
-      }
-      const isSel = Boolean(body.is_selected);
-      const updatedCount = await bulkUpdatePageSelection(db, {
-        isSelected: isSel,
-        facebookPageIds: body.facebook_page_ids,
-        accountIds: body.account_ids,
+      };
+      const updated = await bulkUpdatePageSelection(
+        db,
+        Boolean(body.is_selected),
+        body.facebook_page_ids || null,
+        body.account_ids || null,
         ownerUserId
-      });
+      );
+      return jsonResponse({ success: true, updated_count: updated });
+    }
+
+    const pageSelectMatch = /^\/api\/pages\/([^/]+)\/select$/.exec(pathname);
+    if (pageSelectMatch && method === "POST") {
+      const pageId = decodeURIComponent(pageSelectMatch[1]);
+      const body = (await request.json()) as { is_selected?: boolean };
+      const ok = await updatePageSelection(
+        db,
+        pageId,
+        Boolean(body.is_selected),
+        ownerUserId
+      );
+      if (!ok) {
+        return jsonResponse({ detail: "Không tìm thấy Fanpage thuộc quyền sở hữu của bạn." }, 404);
+      }
       return jsonResponse({
-        status: "success",
-        updated_count: updatedCount,
-        is_selected: isSel,
-        message: `Đã ${isSel ? "chọn" : "bỏ chọn"} ${updatedCount} Fanpage.`
+        success: true,
+        facebook_page_id: pageId,
+        is_selected: Boolean(body.is_selected)
       });
     }
 
-    const pageRouteMatch = path.match(
-      /^\/api\/pages\/([^/]+)(?:\/(select|check-permission))?$/
-    );
-    if (pageRouteMatch) {
-      const facebookPageId = decodeURIComponent(pageRouteMatch[1]);
-      const subAction = pageRouteMatch[2] || "";
-
-      if (subAction === "select" && (method === "POST" || method === "PATCH")) {
-        let body: { is_selected?: boolean } = {};
-        try {
-          body = (await request.json()) as { is_selected?: boolean };
-        } catch {
-          return jsonResponse({ detail: "Payload không hợp lệ." }, 400);
-        }
-        const ok = await updatePageSelection(
-          db,
-          facebookPageId,
-          Boolean(body.is_selected),
-          ownerUserId
-        );
-        if (!ok) {
-          return jsonResponse(
-            { detail: "Không tìm thấy Fanpage hoặc bạn không có quyền truy cập Fanpage này." },
-            404
-          );
-        }
-        return jsonResponse({
-          status: "success",
-          facebook_page_id: facebookPageId,
-          is_selected: Boolean(body.is_selected)
-        });
+    const pageCheckMatch = /^\/api\/pages\/([^/]+)\/check-permission$/.exec(pathname);
+    if (pageCheckMatch && method === "POST") {
+      const pageId = decodeURIComponent(pageCheckMatch[1]);
+      const res = await checkPagePermissionOnMeta(db, env, pageId, ownerUserId);
+      if (!res.success) {
+        return jsonResponse({ detail: res.message }, 400);
       }
-
-      if (subAction === "check-permission" && method === "POST") {
-        const res = await checkPagePermissionOnMeta(db, env, facebookPageId, ownerUserId);
-        if (res.status === "error") {
-          return jsonResponse({ detail: res.message, ...res }, 400);
-        }
-        return jsonResponse(res);
-      }
-
-      if (!subAction && method === "DELETE") {
-        const ok = await deleteFacebookPageLocal(db, facebookPageId, ownerUserId);
-        if (!ok) {
-          return jsonResponse(
-            { detail: "Không tìm thấy Fanpage hoặc bạn không có quyền xóa Fanpage này." },
-            404
-          );
-        }
-        return jsonResponse({
-          status: "success",
-          message: `Đã xóa Fanpage ${facebookPageId} khỏi danh sách quản lý.`
-        });
-      }
+      return jsonResponse(res);
     }
 
-    // 3. TASK ENDPOINTS (/api/tasks/*)
-    if (method === "GET" && path === "/api/tasks") {
-      const facebookPageId = url.searchParams.get("facebook_page_id");
-      const profileId = url.searchParams.get("profile_id");
+    const pageDeleteMatch = /^\/api\/pages\/([^/]+)$/.exec(pathname);
+    if (pageDeleteMatch && method === "DELETE") {
+      const pageId = decodeURIComponent(pageDeleteMatch[1]);
+      const ok = await deleteFacebookPageLocal(db, pageId, ownerUserId);
+      if (!ok) {
+        return jsonResponse({ detail: "Không tìm thấy Fanpage thuộc quyền sở hữu của bạn." }, 404);
+      }
+      return jsonResponse({ success: true, deleted_id: pageId });
+    }
+
+    // ------------------------------------------
+    // 6.4. QUẢN LÝ TÁC VỤ REELS (/api/tasks*)
+    // ------------------------------------------
+    if (pathname === "/api/tasks" && method === "GET") {
+      const facebookPageId =
+        url.searchParams.get("facebook_page_id") ||
+        url.searchParams.get("profile_id");
       const status = url.searchParams.get("status");
       const search = url.searchParams.get("search");
+      const accountIdsRaw = url.searchParams.get("account_ids") || "";
+      const accountIds = accountIdsRaw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
 
       const tasks = await getTasks(db, {
         facebookPageId,
-        profileId,
         status,
         search,
+        accountIds,
         ownerUserId
       });
       return jsonResponse(tasks);
     }
 
-    if (method === "POST" && path === "/api/tasks") {
-      let body: {
+    if (pathname === "/api/tasks" && method === "POST") {
+      const body = (await request.json()) as {
+        facebook_page_id?: string;
+        profile_id?: string;
+        media_id?: string;
+        object_key?: string;
+        video_path?: string;
+        caption?: string;
+        comment_text?: string;
+        schedule_date?: string;
+        schedule_time?: string;
+      };
+      const vPath = (body.video_path || "").trim();
+      if (!vPath) {
+        return jsonResponse({ detail: "Vui lòng tải lên hoặc chọn video trên R2." }, 400);
+      }
+
+      const targetPageId = body.facebook_page_id || body.profile_id || null;
+      if (targetPageId) {
+        const ownedPages = await getFacebookPages(db, encryptionKey, {
+          includeToken: false,
+          ownerUserId
+        });
+        const owns = ownedPages.some(
+          (p) => p.facebook_page_id === targetPageId || p.id === targetPageId
+        );
+        if (!owns) {
+          return jsonResponse(
+            { detail: "Bạn không có quyền gán tác vụ cho Fanpage này." },
+            403
+          );
+        }
+      }
+
+      // Kiểm tra hợp lệ lịch hẹn (nếu có nhập)
+      if (body.schedule_date || body.schedule_time) {
+        const schedCheck = parseVnScheduleToUtc(body.schedule_date, body.schedule_time);
+        if (!schedCheck.isValid) {
+          return jsonResponse({ detail: schedCheck.error }, 400);
+        }
+      }
+
+      // Tự động phân giải media_id & object_key nếu video_path là r2://<media_id>
+      let mediaId = body.media_id || null;
+      let objectKey = body.object_key || null;
+      if (vPath.startsWith("r2://") || vPath.startsWith("d1://video/") || vPath.startsWith("med_")) {
+        const cleanMediaId = vPath.replace(/^r2:\/\//, "").replace(/^d1:\/\/video\//, "");
+        const mediaRecord = await getMediaFileById(db, cleanMediaId, ownerUserId);
+        if (!mediaRecord) {
+          return jsonResponse(
+            { detail: "Video R2 không tồn tại hoặc không thuộc quyền sở hữu của bạn." },
+            403
+          );
+        }
+        mediaId = mediaRecord.id;
+        objectKey = mediaRecord.object_key;
+      }
+
+      const taskId = await addTask(db, {
+        videoPath: vPath,
+        caption: body.caption || "",
+        commentText: body.comment_text || "",
+        scheduleDate: body.schedule_date || "",
+        scheduleTime: body.schedule_time || "",
+        facebookPageId: targetPageId,
+        profileId: body.profile_id || targetPageId,
+        mediaId,
+        objectKey,
+        ownerUserId
+      });
+
+      const created = await getTask(db, taskId, ownerUserId);
+      return jsonResponse({ success: true, id: taskId, task: created });
+    }
+
+    if (pathname === "/api/tasks/bulk" && method === "POST") {
+      const body = (await request.json()) as {
+        tasks?: Array<{
+          video_path: string;
+          caption?: string;
+          comment_text?: string;
+          schedule_date?: string;
+          schedule_time?: string;
+          facebook_page_id?: string;
+          media_id?: string;
+          object_key?: string;
+        }>;
+        assign_page_ids?: string[];
+        assign_profile_ids?: string[];
+      };
+
+      const tasksList = body.tasks || [];
+      if (tasksList.length === 0) {
+        return jsonResponse({ detail: "Danh sách tác vụ trống." }, 400);
+      }
+
+      let assignIds = body.assign_page_ids || body.assign_profile_ids || null;
+      if (!assignIds || assignIds.length === 0) {
+        const selectedPages = await getFacebookPages(db, encryptionKey, {
+          selectedOnly: true,
+          includeToken: false,
+          ownerUserId
+        });
+        assignIds = selectedPages.map((p) => p.facebook_page_id);
+      }
+
+      const inserted = await addTasksBulk(db, tasksList, assignIds, ownerUserId);
+      return jsonResponse({
+        success: true,
+        inserted_count: inserted.length,
+        task_ids: inserted
+      });
+    }
+
+    const taskLogsMatch = /^\/api\/tasks\/(\d+)\/logs$/.exec(pathname);
+    if (taskLogsMatch && method === "GET") {
+      const taskId = parseInt(taskLogsMatch[1], 10);
+      const logs = await getTaskLogs(db, taskId, ownerUserId);
+      return jsonResponse({ task_id: taskId, logs });
+    }
+
+    const taskAttemptsMatch = /^\/api\/tasks\/(\d+)\/attempts$/.exec(pathname);
+    if (taskAttemptsMatch && method === "GET") {
+      const taskId = parseInt(taskAttemptsMatch[1], 10);
+      const attempts = await getTaskAttempts(db, taskId, ownerUserId);
+      return jsonResponse({ task_id: taskId, attempts });
+    }
+
+    const taskResetMatch = /^\/api\/tasks\/(\d+)\/reset$/.exec(pathname);
+    if (taskResetMatch && method === "POST") {
+      const taskId = parseInt(taskResetMatch[1], 10);
+      const ok = await resetTask(db, taskId, ownerUserId);
+      if (!ok) {
+        return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+      }
+      return jsonResponse({ success: true, id: taskId });
+    }
+
+    const taskItemMatch = /^\/api\/tasks\/(\d+)$/.exec(pathname);
+    if (taskItemMatch && method === "PUT") {
+      const taskId = parseInt(taskItemMatch[1], 10);
+      const body = (await request.json()) as {
         facebook_page_id?: string;
         profile_id?: string;
         video_path?: string;
@@ -754,419 +727,226 @@ export async function handleWorkerRequest(
         comment_text?: string;
         schedule_date?: string;
         schedule_time?: string;
-        publish_mode?: string;
-      } = {};
-      try {
-        body = (await request.json()) as typeof body;
-      } catch {
-        return jsonResponse({ detail: "Payload không hợp lệ." }, 400);
-      }
-
-      if (!body.video_path || !body.video_path.trim()) {
-        return jsonResponse({ detail: "Đường dẫn hoặc URL video không được để trống." }, 400);
-      }
-
-      try {
-        const task = await addTask(db, {
-          facebookPageId: body.facebook_page_id,
-          profileId: body.profile_id,
-          videoPath: body.video_path,
-          caption: body.caption,
-          commentText: body.comment_text,
-          scheduleDate: body.schedule_date,
-          scheduleTime: body.schedule_time,
-          publishMode: body.publish_mode,
-          ownerUserId
-        });
-        return jsonResponse({
-          id: task?.id,
-          message: "Tạo task thành công.",
-          task
-        });
-      } catch (err) {
-        return jsonResponse(
-          { detail: err instanceof Error ? err.message : "Không thể tạo task." },
-          403
-        );
-      }
-    }
-
-    if (method === "POST" && path === "/api/tasks/bulk") {
-      let body: {
-        tasks?: Array<{
-          video_path: string;
-          caption?: string;
-          comment_text?: string;
-          schedule_date?: string;
-          schedule_time?: string;
-          facebook_page_id?: string | null;
-          profile_id?: string | null;
-        }>;
-        assign_page_ids?: string[];
-      } = {};
-      try {
-        body = (await request.json()) as typeof body;
-      } catch {
-        return jsonResponse({ detail: "Payload không hợp lệ." }, 400);
-      }
-
-      if (!body.tasks || !Array.isArray(body.tasks) || body.tasks.length === 0) {
-        return jsonResponse({ detail: "Danh sách task rỗng." }, 400);
-      }
-
-      const inserted = await addTasksBulk(db, {
-        tasksList: body.tasks,
-        assignPageIds: body.assign_page_ids,
+      };
+      const pageId =
+        body.facebook_page_id !== undefined ? body.facebook_page_id : body.profile_id;
+      const ok = await updateTask(db, taskId, {
+        facebookPageId: pageId,
+        videoPath: body.video_path,
+        caption: body.caption,
+        commentText: body.comment_text,
+        scheduleDate: body.schedule_date,
+        scheduleTime: body.schedule_time,
         ownerUserId
       });
+      if (!ok) {
+        return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+      }
+      const updated = await getTask(db, taskId, ownerUserId);
+      return jsonResponse({ success: true, task: updated });
+    }
+
+    if (taskItemMatch && method === "DELETE") {
+      const taskId = parseInt(taskItemMatch[1], 10);
+      const delRes = await deleteTask(db, taskId, ownerUserId);
+      if (!delRes.deleted) {
+        return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+      }
+      // Tự động xóa video tạm trên R2 nếu không còn task nào khác tham chiếu
+      if (delRes.orphanMediaId) {
+        await deleteUserVideo(db, env, delRes.orphanMediaId, ownerUserId);
+      }
       return jsonResponse({
-        inserted_count: inserted,
-        message: `Đã nhập thành công ${inserted} task.`
+        success: true,
+        deleted_id: taskId,
+        cleaned_orphan_media_id: delRes.orphanMediaId || null
       });
     }
 
-    const taskRouteMatch = path.match(/^\/api\/tasks\/(\d+)(?:\/(reset))?$/);
-    if (taskRouteMatch) {
-      const taskId = parseInt(taskRouteMatch[1], 10);
-      const subAction = taskRouteMatch[2] || "";
-
-      if (!subAction && method === "PUT") {
-        let body: {
-          facebook_page_id?: string;
-          profile_id?: string;
-          video_path?: string;
-          caption?: string;
-          comment_text?: string;
-          schedule_date?: string;
-          schedule_time?: string;
-          publish_mode?: string;
-        } = {};
-        try {
-          body = (await request.json()) as typeof body;
-        } catch {
-          return jsonResponse({ detail: "Payload không hợp lệ." }, 400);
-        }
-
-        try {
-          const updated = await updateTask(
-            db,
-            taskId,
-            {
-              facebookPageId: body.facebook_page_id,
-              profileId: body.profile_id,
-              videoPath: body.video_path,
-              caption: body.caption,
-              commentText: body.comment_text,
-              scheduleDate: body.schedule_date,
-              scheduleTime: body.schedule_time,
-              publishMode: body.publish_mode
-            },
-            ownerUserId
-          );
-          if (!updated) {
-            return jsonResponse(
-              { detail: "Không tìm thấy task hoặc bạn không có quyền chỉnh sửa." },
-              404
-            );
-          }
-          return jsonResponse({
-            message: "Cập nhật task thành công.",
-            task: updated
-          });
-        } catch (err) {
-          return jsonResponse(
-            { detail: err instanceof Error ? err.message : "Lỗi cập nhật task." },
-            403
-          );
-        }
-      }
-
-      if (!subAction && method === "DELETE") {
-        const ok = await deleteTask(db, taskId, ownerUserId);
-        if (!ok) {
-          return jsonResponse(
-            { detail: "Không tìm thấy task hoặc bạn không có quyền xóa." },
-            404
-          );
-        }
-        return jsonResponse({ message: "Đã xóa task." });
-      }
-
-      if (subAction === "reset" && method === "POST") {
-        const ok = await resetTask(db, taskId, ownerUserId);
-        if (!ok) {
-          return jsonResponse(
-            { detail: "Không tìm thấy task hoặc bạn không có quyền reset." },
-            404
-          );
-        }
-        return jsonResponse({ message: "Đã reset task về trạng thái pending." });
-      }
-    }
-
-    // 4. RUNNER CONTROLS (/api/runner/test, /api/runner/start, /api/runner/stop)
-    if (method === "POST" && path === "/api/runner/test") {
-      let body: { facebook_page_ids?: string[]; task_ids?: number[] } = {};
-      try {
-        body = (await request.json()) as typeof body;
-      } catch {
-        // Empty body allowed
-      }
-      const res = await runDiagnosticTest(db, env, {
-        facebookPageIds: body.facebook_page_ids,
-        taskIds: body.task_ids,
-        ownerUserId
-      });
-      return jsonResponse(res);
-    }
-
-    if (method === "POST" && (path === "/api/runner/start" || path === "/api/run")) {
-      let body: { facebook_page_ids?: string[]; threads?: number } = {};
-      try {
-        body = (await request.json()) as typeof body;
-      } catch {
-        // Empty body allowed
-      }
-
-      let targetPageIds = body.facebook_page_ids || [];
-      if (targetPageIds.length === 0) {
-        const selectedPages = await getFacebookPages(db, {
-          onlySelected: true,
-          ownerUserId
-        });
-        targetPageIds = selectedPages
-          .filter((p) => Number(p.can_post) === 1)
-          .map((p) => p.facebook_page_id);
-      }
-
-      if (targetPageIds.length === 0) {
-        return jsonResponse(
-          { detail: "Không có Fanpage nào được chọn hoặc có quyền đăng bài!" },
-          400
-        );
-      }
-
-      const pendingTasks = await getPendingTasks(db, {
-        facebookPageIds: targetPageIds,
-        ownerUserId
-      });
-
-      if (pendingTasks.length === 0) {
-        return jsonResponse({ detail: "Không có task cần làm!" }, 400);
-      }
-
-      const threads = Math.max(1, Math.min(Number(body.threads || 3), 5));
-      const batchPromise = executeTasksBatch(db, env, {
-        tasks: pendingTasks.map((t) => ({ id: t.id })),
-        ownerUserId,
-        concurrency: threads
-      });
-
-      if (ctx && typeof ctx.waitUntil === "function") {
-        ctx.waitUntil(batchPromise);
-      } else {
-        await batchPromise;
-      }
-
-      return jsonResponse({
-        status: "started",
-        total_tasks: pendingTasks.length,
-        threads,
-        message: `Đã bắt đầu xử lý ${pendingTasks.length} task qua Meta Graph API v19.0.`
-      });
-    }
-
-    if (method === "POST" && (path === "/api/runner/stop" || path === "/api/stop")) {
-      const resetCount = await resetRunningTasks(db, ownerUserId);
-      return jsonResponse({
-        status: "stopped",
-        message: `Đã dừng tiến trình và đặt lại ${resetCount} task.`
-      });
-    }
-
-    // 5. DASHBOARD STATUS SUMMARY (/api/status)
-    if (method === "GET" && path === "/api/status") {
-      const [connStatus, allAccounts, allPages, allTasks] = await Promise.all([
-        getConnectionStatus(db, env, ownerUserId),
-        getFacebookAccounts(db, { ownerUserId, includeEncryptedToken: false }),
-        getFacebookPages(db, { ownerUserId }),
-        getTasks(db, { ownerUserId })
-      ]);
-
-      const pendingTasks = allTasks.filter((t) => t.status === "pending");
-      const successTasks = allTasks.filter((t) => t.status === "success");
-      const failedTasks = allTasks.filter((t) => t.status === "failed");
-      const runningTasks = allTasks.filter((t) => t.status === "running");
-
-      return jsonResponse({
-        user: currentUser,
-        meta: connStatus,
-        accounts: allAccounts,
-        is_running: runningTasks.length > 0,
-        total_accounts: allAccounts.length,
-        connected_accounts: allAccounts.filter((a) => a.status === "connected").length,
-        total_pages: allPages.length,
-        selected_pages: allPages.filter((p) => Number(p.is_selected) === 1).length,
-        total_tasks: allTasks.length,
-        pending_tasks: pendingTasks.length,
-        success_tasks: successTasks.length,
-        failed_tasks: failedTasks.length,
-        running_tasks: runningTasks.length
-      });
-    }
-
-    // 6. CLOUD VIDEO UPLOAD & FILE CHECK HELPERS
-    if (method === "POST" && path === "/api/upload/video") {
-      try {
-        const contentType = request.headers.get("Content-Type") || "";
-        let fileName = "reel_video.mp4";
-        let mimeType = "video/mp4";
-        let arrayBuf: ArrayBuffer;
-
-        if (contentType.includes("multipart/form-data")) {
-          const formData = await request.formData();
-          const fileEntry = formData.get("file") as File | null;
-          if (!fileEntry || typeof fileEntry.arrayBuffer !== "function") {
-            return jsonResponse({ detail: "Không tìm thấy file video trong form upload." }, 400);
-          }
-          fileName = fileEntry.name || fileName;
-          mimeType = fileEntry.type || mimeType;
-          arrayBuf = await fileEntry.arrayBuffer();
-        } else {
-          fileName = request.headers.get("X-File-Name") || fileName;
-          arrayBuf = await request.arrayBuffer();
-        }
-
-        if (arrayBuf.byteLength === 0) {
-          return jsonResponse({ detail: "File video rỗng (0 bytes)." }, 400);
-        }
-
-        const videoId = `vid_${randomHex(6)}`;
-        let r2Key: string | null = null;
-        let dataBase64: string | null = null;
-
-        if (env.VIDEOS_BUCKET) {
-          r2Key = `uploads/${ownerUserId}/${videoId}_${fileName}`;
-          await env.VIDEOS_BUCKET.put(r2Key, arrayBuf, {
-            httpMetadata: { contentType: mimeType }
-          });
-        } else {
-          // Store in D1 uploaded_videos if under 25MB
-          if (arrayBuf.byteLength > 25 * 1024 * 1024) {
-            return jsonResponse(
-              {
-                detail:
-                  "Video lớn hơn 25MB cần gắn Cloudflare R2 Bucket (VIDEOS_BUCKET) hoặc sử dụng link URL video trực tiếp (https://...mp4)."
-              },
-              400
-            );
-          }
-          dataBase64 = bytesToBase64Url(new Uint8Array(arrayBuf));
-        }
-
-        await saveUploadedVideo(db, {
-          id: videoId,
-          ownerUserId,
-          filename: fileName,
-          mimeType,
-          fileSize: arrayBuf.byteLength,
-          r2Key,
-          dataBase64
-        });
-
-        const cloudPath = `cloud://video/${videoId}/${fileName}`;
-        return jsonResponse({
-          status: "success",
-          video_id: videoId,
-          path: cloudPath,
-          filename: fileName,
-          file_size: arrayBuf.byteLength,
-          message: `Đã tải video '${fileName}' lên Cloudflare thành công!`
-        });
-      } catch (err) {
-        return jsonResponse(
-          {
-            detail: `Lỗi tải video lên Cloud: ${err instanceof Error ? err.message : String(err)}`
-          },
-          500
-        );
-      }
-    }
-
-    if (method === "POST" && path === "/api/system/browse-file") {
-      return jsonResponse({
-        path: "",
-        mode: "cloud_browser_picker",
-        message: "Chọn file video trực tiếp từ trình duyệt của bạn."
-      });
-    }
-
-    if (method === "POST" && path === "/api/system/check-files") {
-      let body: { paths?: string[] } = {};
-      try {
-        body = (await request.json()) as { paths?: string[] };
-      } catch {
-        // Ignore
-      }
-      const results: Record<string, boolean> = {};
-      for (const p of body.paths || []) {
-        const check = await validateVideoSource(db, env, p, ownerUserId);
-        results[p] = check.exists;
+    // ------------------------------------------
+    // 6.5. KIỂM TRA VIDEO BULK (/api/system/check-files)
+    // ------------------------------------------
+    if (pathname === "/api/system/check-files" && method === "POST") {
+      const body = (await request.json()) as { paths?: string[] };
+      const paths = body.paths || [];
+      const results: Record<string, unknown> = {};
+      for (const p of paths) {
+        if (!p) continue;
+        results[p] = await validateVideoSource(db, env, p, ownerUserId);
       }
       return jsonResponse({ results });
     }
 
-    return jsonResponse({ detail: `API Endpoint không tồn tại: ${method} ${path}` }, 404);
-  }
-
-  // =========================================================================
-  // 7. GUI NAVIGATION & STATIC ASSETS
-  // =========================================================================
-
-  if (method === "GET" && path === "/login") {
-    const user = await getCurrentUser(request, db, env);
-    if (user) {
-      return new Response(null, {
-        status: 302,
-        headers: { Location: "/pages" }
+    if (pathname === "/api/system/browse-file" && method === "GET") {
+      return jsonResponse({
+        path: "",
+        cloud_mode: true,
+        message:
+          "Vui lòng nhấn nút 'Tải Video Lên R2' để chọn video trực tiếp từ trình duyệt của bạn."
       });
     }
-    const asset = await serveStaticHtmlAsset(request, env, "/login.html");
-    if (asset) return asset;
-  }
 
-  if (
-    method === "GET" &&
-    (path === "/" || path === "/pages" || path === "/schedules" || path === "/reels")
-  ) {
-    const user = await getCurrentUser(request, db, env);
-    if (!user) {
-      return new Response(null, {
-        status: 302,
-        headers: { Location: "/login" }
+    // ------------------------------------------
+    // 6.6. RUNNER, QUEUE & FREE QUOTA STATUS
+    // ------------------------------------------
+    if (pathname === "/api/runner/test" && method === "POST") {
+      const report = await runDiagnosticTest(db, env, ownerUserId);
+      return jsonResponse(report);
+    }
+
+    if (
+      (pathname === "/api/runner/start" || pathname === "/api/run") &&
+      method === "POST"
+    ) {
+      const enqueueRes = await enqueueUserPendingTasks(db, env, ctx, ownerUserId);
+      if (!enqueueRes.success) {
+        return jsonResponse({ detail: enqueueRes.message }, 400);
+      }
+      return jsonResponse(
+        {
+          success: true,
+          status: "accepted",
+          started_tasks: enqueueRes.enqueued_count,
+          enqueued_count: enqueueRes.enqueued_count,
+          message: enqueueRes.message
+        },
+        202
+      );
+    }
+
+    if (
+      (pathname === "/api/runner/stop" || pathname === "/api/stop") &&
+      method === "POST"
+    ) {
+      const resetCount = await resetRunningTasks(db, ownerUserId);
+      return jsonResponse({
+        success: true,
+        reset_tasks: resetCount,
+        message: `Đã dừng các tác vụ đang chờ/xử lý và đặt lại ${resetCount} tác vụ về trạng thái chờ.`
       });
     }
-    const asset = await serveStaticHtmlAsset(request, env, "/index.html");
-    if (asset) return asset;
+
+    if (pathname === "/api/system/quota" && method === "GET") {
+      const pages = await getFacebookPages(db, encryptionKey, {
+        includeToken: false,
+        ownerUserId
+      });
+      const tasks = await getTasks(db, { ownerUserId });
+      const mediaRow = await db
+        .prepare(
+          "SELECT COUNT(*) AS cnt, COALESCE(SUM(size_bytes), 0) AS total_bytes FROM media_files WHERE owner_user_id = ?"
+        )
+        .bind(ownerUserId)
+        .first<{ cnt: number; total_bytes: number }>();
+
+      const r2UsedBytes = Number(mediaRow?.total_bytes || 0);
+      const r2FreeLimitBytes = 10 * 1024 * 1024 * 1024; // 10 GB R2 Free tier
+      const r2Percent = Math.round((r2UsedBytes / r2FreeLimitBytes) * 10000) / 100;
+
+      return jsonResponse({
+        plan: "Cloudflare Workers Free",
+        limits: {
+          worker_requests_per_day: 100000,
+          cpu_ms_per_invocation: 10,
+          d1_rows_read_per_day: 5000000,
+          d1_rows_written_per_day: 100000,
+          r2_storage_gb: 10
+        },
+        usage: {
+          pages_count: pages.length,
+          tasks_count: tasks.length,
+          media_files_count: Number(mediaRow?.cnt || 0),
+          r2_used_mb: Math.round((r2UsedBytes / 1048576) * 100) / 100,
+          r2_used_percent: r2Percent,
+          r2_binding_active: Boolean(getR2Bucket(env)),
+          queue_binding_active: Boolean(env.REELS_QUEUE)
+        },
+        warning:
+          r2Percent >= 80
+            ? "Cảnh báo: Dung lượng video trên R2 đã vượt 80% hạn mức Free (10 GB). Hãy xóa các video cũ đã đăng."
+            : null
+      });
+    }
+
+    if (pathname === "/api/status" && method === "GET") {
+      const pages = await getFacebookPages(db, encryptionKey, {
+        includeToken: false,
+        ownerUserId
+      });
+      const tasks = await getTasks(db, { ownerUserId });
+      const metaStatus = await getConnectionStatus(db, env, ownerUserId);
+
+      const runningCount = tasks.filter(
+        (t) =>
+          t.status === "running" ||
+          t.raw_status === "queued" ||
+          t.raw_status === "processing"
+      ).length;
+
+      return jsonResponse({
+        is_running: runningCount > 0,
+        active_tasks_count: runningCount,
+        meta_connected: Boolean(metaStatus.is_connected),
+        meta_user_name: metaStatus.user_name,
+        connected_accounts_count: metaStatus.connected_accounts || 0,
+        total_accounts_count: metaStatus.total_accounts || 0,
+        total_pages: pages.length,
+        selected_pages: pages.filter((p) => p.is_selected).length,
+        total_profiles: pages.length,
+        selected_profiles: pages.filter((p) => p.is_selected).length,
+        total_tasks: tasks.length,
+        pending_tasks: tasks.filter((t) => t.status === "pending").length,
+        success_tasks: tasks.filter((t) => t.status === "success").length,
+        failed_tasks: tasks.filter((t) => t.status === "failed").length,
+        running_tasks: runningCount
+      });
+    }
+
+    return jsonResponse({ detail: `API endpoint not found: ${pathname}` }, 404);
   }
 
-  // Serve static files (/static/js/app.js -> /js/app.js in static directory)
+  // ==========================================
+  // 7. PHỤC VỤ FILE TĨNH (/static/*, /js/*, ...)
+  // ==========================================
   if (env.ASSETS) {
-    if (path.startsWith("/static/")) {
+    if (pathname.startsWith("/static/")) {
       const strippedUrl = new URL(request.url);
-      strippedUrl.pathname = path.replace(/^\/static/, "");
-      const resp = await env.ASSETS.fetch(new Request(strippedUrl.toString(), request));
-      if (resp.ok) return resp;
+      strippedUrl.pathname = pathname.replace(/^\/static/, "");
+      const strippedReq = new Request(strippedUrl.toString(), request);
+      const assetResp = await env.ASSETS.fetch(strippedReq);
+      if (assetResp.ok) return assetResp;
     }
     const directResp = await env.ASSETS.fetch(request);
     if (directResp.ok) return directResp;
   }
 
-  return jsonResponse({ detail: "Không tìm thấy trang yêu cầu (404)." }, 404);
+  return jsonResponse({ detail: "Not Found" }, 404);
+}
+
+export async function handleScheduledCron(
+  _event: ScheduledEvent,
+  env: Env,
+  ctx: ExecutionContext
+): Promise<{ checked_at_utc: number; claimed_count: number; task_ids: number[] }> {
+  const encryptionKey = getEncryptionKeyMaterial(env);
+  const db = getD1Database(env);
+  await ensureDatabaseInitialized(db, encryptionKey);
+  return dispatchDueScheduledTasks(db, env, ctx, 15);
+}
+
+export async function handleQueueConsumer(
+  batch: MessageBatch<QueueTaskMessage>,
+  env: Env,
+  _ctx: ExecutionContext
+): Promise<void> {
+  const encryptionKey = getEncryptionKeyMaterial(env);
+  const db = getD1Database(env);
+  await ensureDatabaseInitialized(db, encryptionKey);
+  await handleNativeQueueBatch(batch, db, env);
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    return handleWorkerRequest(request, env, ctx);
-  }
+  fetch: handleWorkerRequest,
+  scheduled: handleScheduledCron,
+  queue: handleQueueConsumer
 };
