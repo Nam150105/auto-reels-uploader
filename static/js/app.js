@@ -5,10 +5,17 @@
  */
 
 (function () {
+  let attempts = 0;
   function initMainDashboard() {
     if (typeof Vue === 'undefined') {
-      console.warn("Vue 3 runtime chưa sẵn sàng, đang thử lại...");
-      setTimeout(initMainDashboard, 50);
+      attempts++;
+      if (attempts < 60) {
+        setTimeout(initMainDashboard, 50);
+        return;
+      }
+      console.error("Vue 3 runtime chưa sẵn sàng sau 3 giây.");
+      const hint = document.getElementById('app-timeout-hint');
+      if (hint) hint.classList.remove('hidden');
       return;
     }
 

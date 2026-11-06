@@ -5,18 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Đăng Nhập - Hệ Thống Quản Lý Fanpage & Reels Scheduler</title>
   <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
-  <!-- Vue 3 Production CDN (Multi-CDN: Cloudflare CDNJS -> jsDelivr -> unpkg) -->
-  <script data-cfasync="false" src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.4.21/vue.global.prod.js"></script>
-  <script data-cfasync="false">
-    if (typeof Vue === 'undefined') {
-      document.write('<script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"><\/script>');
-    }
-  </script>
-  <script data-cfasync="false">
-    if (typeof Vue === 'undefined') {
-      document.write('<script data-cfasync="false" src="https://unpkg.com/vue@3/dist/vue.global.prod.js"><\/script>');
-    }
-  </script>
+  <!-- Vue 3 Production CDN (jsDelivr chuẩn, fallback sang unpkg qua onerror) -->
+  <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" onerror="this.onerror=null; this.src='https://unpkg.com/vue@3/dist/vue.global.prod.js';"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">

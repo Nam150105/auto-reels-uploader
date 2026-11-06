@@ -8,18 +8,8 @@
   <!-- Tailwind CSS CDN -->
   <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
   
-  <!-- Vue 3 Production CDN (Multi-CDN: Cloudflare CDNJS -> jsDelivr -> unpkg) -->
-  <script data-cfasync="false" src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.4.21/vue.global.prod.js"></script>
-  <script data-cfasync="false">
-    if (typeof Vue === 'undefined') {
-      document.write('<script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"><\/script>');
-    }
-  </script>
-  <script data-cfasync="false">
-    if (typeof Vue === 'undefined') {
-      document.write('<script data-cfasync="false" src="https://unpkg.com/vue@3/dist/vue.global.prod.js"><\/script>');
-    }
-  </script>
+  <!-- Vue 3 Production CDN (jsDelivr chuẩn, fallback sang unpkg qua onerror) -->
+  <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" onerror="this.onerror=null; this.src='https://unpkg.com/vue@3/dist/vue.global.prod.js';"></script>
   
   <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1295,6 +1285,6 @@
   </div>
 
   <!-- App Script (data-cfasync=false chống Rocket Loader và fallback đường dẫn tĩnh) -->
-  <script data-cfasync="false" src="/static/js/app.js" onerror="if(this.src.indexOf('/static/')!==-1){this.src='js/app.js';}"></script>
+  <script data-cfasync="false" src="/static/js/app.js" onerror="if(this.src.indexOf('/static/')!==-1){this.src='/js/app.js';}"></script>
 </body>
 </html>
