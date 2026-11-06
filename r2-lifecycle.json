@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "id": "Delete-Videos-After-30-Days",
+      "enabled": true,
+      "conditions": {
+        "maxAge": 2592000
+      }
+    }
+  ]
+}

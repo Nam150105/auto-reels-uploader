@@ -29,6 +29,30 @@ import { sanitizeSensitiveText } from "./utils/sanitize.ts";
 let schemaInitialized = false;
 let schemaInitPromise: Promise<void> | null = null;
 
+export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
+  try {
+    const info = await db.prepare("PRAGMA table_info(tasks)").all<{ name: string }>();
+    const existing = new Set((info.results || []).map((c) => c.name));
+    if (!existing.has("comment_id")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT ''"); } catch {}
+    }
+    if (!existing.has("comment_status")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none'"); } catch {}
+    }
+    if (!existing.has("comment_log")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_log TEXT DEFAULT ''"); } catch {}
+    }
+    if (!existing.has("comment_posted_at")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_posted_at TEXT"); } catch {}
+    }
+  } catch {
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT ''"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none'"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_log TEXT DEFAULT ''"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_posted_at TEXT"); } catch {}
+  }
+}
+
 export async function ensureDatabaseInitialized(
   db: D1Database,
   encryptionKey: string
@@ -44,6 +68,7 @@ export async function ensureDatabaseInitialized(
         .first<{ id: string }>();
       if (fastCheck?.id) {
         await db.prepare("SELECT 1 FROM user_page_permissions LIMIT 1").first();
+        await ensureTaskCommentColumns(db);
         schemaInitialized = true;
         return;
       }
@@ -305,10 +330,7 @@ export async function ensureDatabaseInitialized(
   await db.batch(statements.map((sql) => db.prepare(sql)));
 
   // Tương thích với CSDL hiện có (Thêm các cột trạng thái comment nếu chưa có)
-  try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT ''"); } catch {}
-  try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none'"); } catch {}
-  try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_log TEXT DEFAULT ''"); } catch {}
-  try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_posted_at TEXT"); } catch {}
+  await ensureTaskCommentColumns(db);
 
   // Khởi tạo tài khoản quản trị viên mặc định nếu hệ thống mới tinh
   const existingAdmin = await db
@@ -1922,35 +1944,45 @@ export async function addTask(
   const cleanComment = (params.commentText || "").trim();
   const initialCommentStatus = cleanComment ? "pending" : "none";
 
-  const res = await db
-    .prepare(
-      `INSERT INTO tasks (
+  const insertSql = `INSERT INTO tasks (
          owner_user_id, profile_id, facebook_page_id, media_id, object_key,
          video_path, caption, comment_text, schedule_date, schedule_time,
          scheduled_at, timezone, status, idempotency_key, attempt_count, max_attempts,
          log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`
-    )
-    .bind(
-      params.ownerUserId,
-      params.profileId || pageId,
-      pageId,
-      params.mediaId || null,
-      params.objectKey || null,
-      params.videoPath.trim(),
-      params.caption || "",
-      params.commentText || "",
-      params.scheduleDate || "",
-      params.scheduleTime || "",
-      scheduledAt,
-      status,
-      idempotencyKey,
-      initialCommentStatus,
-      now,
-      now
-    )
-    .run();
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
+
+  const insertParams = [
+    params.ownerUserId,
+    params.profileId || pageId,
+    pageId,
+    params.mediaId || null,
+    params.objectKey || null,
+    params.videoPath.trim(),
+    params.caption || "",
+    params.commentText || "",
+    params.scheduleDate || "",
+    params.scheduleTime || "",
+    scheduledAt,
+    status,
+    idempotencyKey,
+    initialCommentStatus,
+    now,
+    now
+  ];
+
+  let res: any;
+  try {
+    res = await db.prepare(insertSql).bind(...insertParams).run();
+  } catch (err: any) {
+    const errMsg = String(err?.message || err);
+    if (errMsg.includes("no column named comment_") || errMsg.includes("comment_id") || errMsg.includes("SQLITE_ERROR")) {
+      await ensureTaskCommentColumns(db);
+      res = await db.prepare(insertSql).bind(...insertParams).run();
+    } else {
+      throw err;
+    }
+  }
 
   const taskId = Number(res.meta?.last_row_id || 0);
   if (taskId > 0) {
@@ -2485,6 +2517,67 @@ export async function deleteTask(
   }
 
   return { deleted: true, orphanMediaId };
+}
+
+export async function deleteTasksBulk(
+  db: D1Database,
+  taskIds: number[],
+  ownerUserId: string
+): Promise<{ deletedCount: number; orphanMediaIds: string[] }> {
+  if (!Array.isArray(taskIds) || taskIds.length === 0) {
+    return { deletedCount: 0, orphanMediaIds: [] };
+  }
+
+  const validIds = taskIds
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  if (validIds.length === 0) {
+    return { deletedCount: 0, orphanMediaIds: [] };
+  }
+
+  const placeholders = validIds.map(() => "?").join(",");
+  const { results: targetTasks } = await db
+    .prepare(
+      `SELECT id, media_id FROM tasks WHERE id IN (${placeholders}) AND owner_user_id = ?`
+    )
+    .bind(...validIds, ownerUserId)
+    .all<{ id: number; media_id: string | null }>();
+
+  if (!targetTasks || targetTasks.length === 0) {
+    return { deletedCount: 0, orphanMediaIds: [] };
+  }
+
+  const idsToDelete = targetTasks.map((t) => t.id);
+  const mediaIds = targetTasks
+    .map((t) => t.media_id)
+    .filter((m): m is string => Boolean(m && m.trim().length > 0));
+
+  const delPlaceholders = idsToDelete.map(() => "?").join(",");
+  await db
+    .prepare(
+      `DELETE FROM tasks WHERE id IN (${delPlaceholders}) AND owner_user_id = ?`
+    )
+    .bind(...idsToDelete, ownerUserId)
+    .run();
+
+  const orphanMediaIds: string[] = [];
+  if (mediaIds.length > 0) {
+    const uniqueMediaIds = Array.from(new Set(mediaIds));
+    for (const mId of uniqueMediaIds) {
+      const refCount = await db
+        .prepare(
+          "SELECT COUNT(*) AS cnt FROM tasks WHERE media_id = ? AND owner_user_id = ?"
+        )
+        .bind(mId, ownerUserId)
+        .first<{ cnt: number }>();
+      if (!refCount || Number(refCount.cnt) === 0) {
+        orphanMediaIds.push(mId);
+      }
+    }
+  }
+
+  return { deletedCount: idsToDelete.length, orphanMediaIds };
 }
 
 export async function resetRunningTasks(

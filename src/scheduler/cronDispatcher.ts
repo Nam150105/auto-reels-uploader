@@ -11,6 +11,7 @@ import { nowUtcSeconds } from "../utils/timezone.ts";
 import { randomHex } from "../utils/crypto.ts";
 import { appendTaskStageLog } from "../db.ts";
 import { processTaskQueueMessages } from "../queue/publishQueue.ts";
+import { cleanupExpiredR2Media } from "../services/r2MediaService.ts";
 
 export async function dispatchDueScheduledTasks(
   db: D1Database,
@@ -110,6 +111,13 @@ export async function dispatchDueScheduledTasks(
     } else {
       ctx.waitUntil(processTaskQueueMessages(db, env, messagesToEnqueue));
     }
+  }
+
+  // Tự động dọn dẹp các video lưu trên R2 đã quá 30 ngày (1 tháng)
+  try {
+    await cleanupExpiredR2Media(db, env, 30, 20);
+  } catch (err) {
+    console.warn("[Cron] Lỗi dọn dẹp video R2 hết hạn:", err);
   }
 
   return {

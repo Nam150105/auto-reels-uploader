@@ -34,6 +34,8 @@
     const currentTab = ref('pages'); // 'pages' | 'schedules'
     const pages = ref([]);
     const tasks = ref([]);
+    const selectedTaskIds = ref([]);
+    const isBulkDeletingTasks = ref(false);
     const accounts = ref([]); // Danh sách các Facebook Admin Accounts
     const selectedAdminFilterIds = ref([]); // Lọc Fanpage theo các Admin Accounts được chọn
     const searchPage = ref('');
@@ -193,6 +195,10 @@
 
     const isAllPagesSelected = computed(() => {
       return pages.value.length > 0 && pages.value.every(p => p.is_selected);
+    });
+
+    const isAllTasksSelected = computed(() => {
+      return tasks.value.length > 0 && selectedTaskIds.value.length === tasks.value.length;
     });
 
     // ==========================================
@@ -369,6 +375,10 @@
           const data = await res.json();
           if (seq === tasksReqSeq && Array.isArray(data)) {
             tasks.value = data;
+            if (selectedTaskIds.value.length > 0) {
+              const currentIds = new Set(data.map(t => t.id));
+              selectedTaskIds.value = selectedTaskIds.value.filter(id => currentIds.has(id));
+            }
           }
           return true;
         }
@@ -1380,12 +1390,65 @@
         const data = await res.json();
         if (res.ok) {
           showToast("Đã xóa task.", "success");
+          selectedTaskIds.value = selectedTaskIds.value.filter(id => id !== taskId);
           await loadAll();
         } else {
           showToast(data.detail || "Không thể xóa task.", "error");
         }
       } catch (err) {
         showToast("Lỗi xóa task: " + err.message, "error");
+      }
+    }
+
+    function toggleSelectAllTasks() {
+      if (isAllTasksSelected.value) {
+        selectedTaskIds.value = [];
+      } else {
+        selectedTaskIds.value = tasks.value.map(t => t.id);
+      }
+    }
+
+    function toggleTaskSelection(taskId) {
+      const idx = selectedTaskIds.value.indexOf(taskId);
+      if (idx > -1) {
+        selectedTaskIds.value.splice(idx, 1);
+      } else {
+        selectedTaskIds.value.push(taskId);
+      }
+    }
+
+    function clearSelectedTasks() {
+      selectedTaskIds.value = [];
+    }
+
+    async function handleBulkDeleteSelectedTasks() {
+      if (selectedTaskIds.value.length === 0) return;
+      const count = selectedTaskIds.value.length;
+      if (!confirm(`Bạn có chắc chắn muốn xóa ${count} task đã chọn không?\n(Video liên kết trên R2 không còn dùng cũng sẽ được tự động dọn dẹp sạch sẽ)`)) {
+        return;
+      }
+      isBulkDeletingTasks.value = true;
+      try {
+        const res = await fetch('/api/tasks/bulk-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_ids: selectedTaskIds.value })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(`Đã xóa thành công ${data.deleted_count || count} task.`, 'success');
+          const deletedSet = new Set(selectedTaskIds.value);
+          tasks.value = tasks.value.filter(t => !deletedSet.has(t.id));
+          selectedTaskIds.value = [];
+          await loadStats();
+          await loadTasks();
+        } else {
+          showToast(data.detail || 'Không thể xóa các task đã chọn.', 'error');
+        }
+      } catch (err) {
+        showToast('Lỗi khi xóa hàng loạt: ' + err.message, 'error');
+      } finally {
+        isBulkDeletingTasks.value = false;
       }
     }
 
@@ -1812,6 +1875,13 @@
       handleUpdateTaskSubmit,
       handleResetTask,
       handleDeleteTask,
+      selectedTaskIds,
+      isBulkDeletingTasks,
+      isAllTasksSelected,
+      toggleSelectAllTasks,
+      toggleTaskSelection,
+      clearSelectedTasks,
+      handleBulkDeleteSelectedTasks,
       openLogModal,
       formatFriendlyLog,
       retryingCommentTaskId,

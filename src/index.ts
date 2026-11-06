@@ -36,6 +36,7 @@ import {
   updateTask,
   addTasksBulk,
   deleteTask,
+  deleteTasksBulk,
   resetTask,
   resetRunningTasks,
   getTaskLogs,
@@ -59,7 +60,7 @@ import {
   connectFacebookWithAccessToken,
   postReelCommentViaGraphApi
 } from "./services/metaGraphService.ts";
-import { deleteUserVideo, getR2Bucket } from "./services/r2MediaService.ts";
+import { deleteUserVideo, getR2Bucket, cleanupExpiredR2Media } from "./services/r2MediaService.ts";
 import {
   makeSessionCookie,
   clearSessionCookie,
@@ -1056,6 +1057,42 @@ export async function handleWorkerRequest(
         deleted_id: taskId,
         cleaned_orphan_media_id: delRes.orphanMediaId || null
       });
+    }
+
+    // ------------------------------------------
+    // 6.4B. XÓA NHIỀU TASK ĐÃ CHỌN (/api/tasks/bulk-delete HOẶC DELETE /api/tasks/bulk)
+    // ------------------------------------------
+    if (
+      (pathname === "/api/tasks/bulk-delete" && method === "POST") ||
+      (pathname === "/api/tasks/bulk" && method === "DELETE")
+    ) {
+      const body = (await request.json().catch(() => ({}))) as { task_ids?: number[] };
+      const taskIds = Array.isArray(body.task_ids) ? body.task_ids : [];
+      if (taskIds.length === 0) {
+        return jsonResponse({ detail: "Vui lòng chọn ít nhất một tác vụ để xóa." }, 400);
+      }
+      const bulkRes = await deleteTasksBulk(db, taskIds, ownerUserId);
+      for (const mId of bulkRes.orphanMediaIds) {
+        await deleteUserVideo(db, env, mId, ownerUserId);
+      }
+      return jsonResponse({
+        success: true,
+        deleted_count: bulkRes.deletedCount,
+        cleaned_orphan_count: bulkRes.orphanMediaIds.length
+      });
+    }
+
+    // ------------------------------------------
+    // 6.4C. TỰ ĐỘNG DỌN DẸP VIDEO R2 HẾT HẠN (/api/system/cleanup-expired-media)
+    // ------------------------------------------
+    if (
+      (pathname === "/api/system/cleanup-expired-media" || pathname === "/api/media/cleanup-expired") &&
+      method === "POST"
+    ) {
+      const body = (await request.json().catch(() => ({}))) as { max_age_days?: number };
+      const maxAge = Number(body.max_age_days) || 30;
+      const result = await cleanupExpiredR2Media(db, env, maxAge, 50);
+      return jsonResponse({ success: true, ...result });
     }
 
     // ------------------------------------------

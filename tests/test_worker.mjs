@@ -229,17 +229,24 @@ async function runAll30Tests() {
   }
 
   // --------------------------------------------------------------------------
-  // [TEST 12] D1 Migrations (0001, 0002, 0003) chạy nhiều lần an toàn (Idempotent)
+  // [TEST 12] D1 Migrations (0001, 0002, 0003, 0004) chạy an toàn & đầy đủ bảng/view/cột
   // --------------------------------------------------------------------------
   const migFiles = [
     "migrations/0001_initial_schema.sql",
     "migrations/0002_indexes.sql",
-    "migrations/0003_security_and_tokens.sql"
+    "migrations/0003_security_and_tokens.sql",
+    "migrations/0004_task_comment_columns.sql"
   ];
   for (let pass = 1; pass <= 2; pass++) {
     for (const mf of migFiles) {
       const sql = fs.readFileSync(path.join(process.cwd(), mf), "utf8");
-      await d1.exec(sql);
+      try {
+        await d1.exec(sql);
+      } catch (err) {
+        if (!String(err.message).includes("duplicate column")) {
+          throw err;
+        }
+      }
     }
   }
   const tablesCheck = await d1
@@ -263,7 +270,12 @@ async function runAll30Tests() {
   ]) {
     assert.ok(tableNames.has(required), `Thiếu bảng/view ${required} trong D1`);
   }
-  console.log("  ✓ [Test 12] D1 Migrations (0001, 0002, 0003) idempotent & đầy đủ 13 bảng/view");
+  const taskColsCheck = await d1.prepare("PRAGMA table_info(tasks)").all();
+  const taskColNames = new Set(taskColsCheck.results.map((c) => c.name));
+  for (const c of ["comment_id", "comment_status", "comment_log", "comment_posted_at"]) {
+    assert.ok(taskColNames.has(c), `Thiếu cột ${c} trong bảng tasks`);
+  }
+  console.log("  ✓ [Test 12] D1 Migrations (0001, 0002, 0003, 0004) idempotent & đầy đủ 13 bảng/view kèm comment columns");
 
   // --------------------------------------------------------------------------
   // [TEST 1] Worker khởi động & export đầy đủ fetch, scheduled, queue
@@ -1705,6 +1717,139 @@ async function runAll30Tests() {
   assert.equal(duplicateRetryData.comment_id, finishedNetRetried.comment_id);
   console.log("    ✓ [Scenario 9] Chống đăng trùng Reels & Comment: Idempotency bảo vệ toàn vẹn");
   console.log("  ✓ [Test 31] Bổ sung API tự động Comment sau khi đăng Reels (Pass toàn bộ 9 kịch bản)");
+
+  // --------------------------------------------------------------------------
+  // [TEST 32] Chọn task để xóa (Bulk Delete Tasks) & Dọn dẹp Orphan Media
+  // --------------------------------------------------------------------------
+  const initMedia1 = await (await callWorker("/api/media/upload-init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({ filename: "bulk_vid_1.mp4", mime_type: "video/mp4", size_bytes: 1024 })
+  })).json();
+  const initMedia2 = await (await callWorker("/api/media/upload-init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({ filename: "bulk_vid_2.mp4", mime_type: "video/mp4", size_bytes: 2048 })
+  })).json();
+
+  const bTask1 = await (await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({
+      video_path: "bulk_vid_1.mp4",
+      caption: "Task Bulk 1",
+      media_id: initMedia1.media_id,
+      facebook_page_id: "page_exp_1"
+    })
+  })).json();
+  const bTask2 = await (await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({
+      video_path: "bulk_vid_1.mp4",
+      caption: "Task Bulk 2",
+      media_id: initMedia1.media_id,
+      facebook_page_id: "page_exp_1"
+    })
+  })).json();
+  const bTask3 = await (await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({
+      video_path: "bulk_vid_2.mp4",
+      caption: "Task Bulk 3",
+      media_id: initMedia2.media_id,
+      facebook_page_id: "page_exp_1"
+    })
+  })).json();
+
+  const emptyDelResp = await callWorker("/api/tasks/bulk-delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({ task_ids: [] })
+  });
+  assert.equal(emptyDelResp.status, 400);
+
+  const bulkDelResp = await callWorker("/api/tasks/bulk-delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({ task_ids: [bTask1.id, bTask3.id] })
+  });
+  assert.equal(bulkDelResp.status, 200);
+  const bulkDelData = await bulkDelResp.json();
+  assert.equal(bulkDelData.success, true);
+  assert.equal(bulkDelData.deleted_count, 2);
+  assert.equal(bulkDelData.cleaned_orphan_count, 1);
+
+  const checkTasksAfterBulk = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  assert.ok(checkTasksAfterBulk.some(t => t.id === bTask2.id));
+  assert.ok(!checkTasksAfterBulk.some(t => t.id === bTask1.id));
+  assert.ok(!checkTasksAfterBulk.some(t => t.id === bTask3.id));
+
+  const media1Check = await d1.prepare("SELECT id FROM media_files WHERE id = ?").bind(initMedia1.media_id).first();
+  assert.ok(media1Check);
+  const media2Check = await d1.prepare("SELECT id FROM media_files WHERE id = ?").bind(initMedia2.media_id).first();
+  assert.ok(!media2Check);
+  console.log("  ✓ [Test 32] Chọn task để xóa (Bulk Delete Tasks) & Dọn dẹp Orphan Media R2 an toàn");
+
+  // --------------------------------------------------------------------------
+  // [TEST 33] Video lưu trên R2 tự xóa sau 1 tháng (30 ngày)
+  // --------------------------------------------------------------------------
+  const oldMediaInit = await (await callWorker("/api/media/upload-init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({ filename: "old_month_video.mp4", mime_type: "video/mp4", size_bytes: 4096 })
+  })).json();
+
+  await r2.put(oldMediaInit.object_key, new Uint8Array([1, 2, 3, 4]));
+  assert.ok(await r2.get(oldMediaInit.object_key));
+
+  const past35DaysIso = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString();
+  await d1.prepare("UPDATE media_files SET created_at = ? WHERE id = ?").bind(past35DaysIso, oldMediaInit.media_id).run();
+
+  const oldTask = await (await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({
+      video_path: "old_month_video.mp4",
+      caption: "Task chứa video cũ 35 ngày",
+      media_id: oldMediaInit.media_id,
+      facebook_page_id: "page_exp_1"
+    })
+  })).json();
+
+  const cleanupResp = await callWorker("/api/system/cleanup-expired-media", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({ max_age_days: 30 })
+  });
+  assert.equal(cleanupResp.status, 200);
+  const cleanupData = await cleanupResp.json();
+  assert.equal(cleanupData.success, true);
+  assert.ok(cleanupData.expired_count >= 1);
+
+  const objAfterCleanup = await r2.get(oldMediaInit.object_key);
+  assert.equal(objAfterCleanup, null, "Object trong R2 phải bị xóa sau 30 ngày");
+
+  const mediaAfterCleanup = await d1.prepare("SELECT upload_status FROM media_files WHERE id = ?").bind(oldMediaInit.media_id).first();
+  assert.equal(mediaAfterCleanup.upload_status, "expired");
+
+  const taskAfterCleanup = await d1.prepare("SELECT log FROM tasks WHERE id = ?").bind(oldTask.id).first();
+  assert.ok(taskAfterCleanup.log.includes("30 ngày"), "Task log phải ghi nhận video đã tự động dọn dẹp sau 30 ngày");
+  console.log("  ✓ [Test 33] Video lưu trên R2 tự xóa sau 1 tháng (30 ngày) & Đồng bộ Cron/API");
+
+  // --------------------------------------------------------------------------
+  // [TEST 34] Tự động khắc phục (Self-Healing) schema D1 khi thiếu cột comment_id
+  // --------------------------------------------------------------------------
+  const { ensureTaskCommentColumns } = await import("../src/db.ts");
+  await ensureTaskCommentColumns(d1);
+  const pragmaCheck = await d1.prepare("PRAGMA table_info(tasks)").all();
+  const cols = new Set(pragmaCheck.results.map((c) => c.name));
+  assert.ok(cols.has("comment_id"));
+  assert.ok(cols.has("comment_status"));
+  assert.ok(cols.has("comment_log"));
+  assert.ok(cols.has("comment_posted_at"));
+  console.log("  ✓ [Test 34] Tự động khắc phục (Self-Healing) schema D1 bảo vệ 100% không bị lỗi missing column");
 
   globalThis.fetch = originalFetch;
 

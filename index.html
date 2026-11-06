@@ -468,11 +468,40 @@
 
         </div>
 
+        <!-- Bulk Selection Action Bar -->
+        <div v-if="selectedTaskIds.length > 0" class="px-4 py-2 bg-blue-950/80 border-b border-blue-800/60 flex items-center justify-between text-xs transition">
+          <div class="flex items-center gap-2">
+            <span class="font-semibold text-blue-200 flex items-center gap-1.5">
+              <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              Đã chọn <b class="text-white">{{ selectedTaskIds.length }}</b> / {{ tasks.length }} task
+            </span>
+            <button @click="clearSelectedTasks" class="text-[11px] text-slate-400 hover:text-white underline ml-2 transition">
+              Bỏ chọn tất cả
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="handleBulkDeleteSelectedTasks"
+                    :disabled="isBulkDeletingTasks"
+                    class="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition shadow-md disabled:opacity-50">
+              <svg v-if="isBulkDeletingTasks" class="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+              <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              <span>{{ isBulkDeletingTasks ? 'Đang xóa...' : 'Xóa ' + selectedTaskIds.length + ' task đã chọn' }}</span>
+            </button>
+          </div>
+        </div>
+
         <!-- Task Table -->
         <div class="flex-1 overflow-auto">
           <table class="w-full text-left border-collapse">
             <thead class="sticky top-0 bg-slate-950/95 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider select-none z-10 backdrop-blur-sm">
               <tr>
+                <th class="py-2.5 px-3 w-10 text-center">
+                  <input type="checkbox"
+                         :checked="isAllTasksSelected"
+                         @change="toggleSelectAllTasks"
+                         title="Chọn tất cả task"
+                         class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer">
+                </th>
                 <th class="py-2.5 px-3 w-12 text-center">ID</th>
                 <th class="py-2.5 px-3 w-40">Fanpage</th>
                 <th class="py-2.5 px-3 min-w-[180px]">Video File</th>
@@ -485,12 +514,18 @@
             </thead>
             <tbody class="divide-y divide-slate-800/60 text-xs font-normal">
               <tr v-if="tasks.length === 0">
-                <td colspan="8" class="text-center py-20 text-slate-500">
+                <td colspan="9" class="text-center py-20 text-slate-500">
                   Chưa có task nào.<br>Bấm <b>+ Thêm Task Đơn Lẻ</b> hoặc <b>Nhập Nhanh Từ Excel</b> để tạo lịch đăng.
                 </td>
               </tr>
 
-              <tr v-for="t in tasks" :key="t.id" class="hover:bg-slate-800/40 transition">
+              <tr v-for="t in tasks" :key="t.id" :class="selectedTaskIds.includes(t.id) ? 'bg-blue-950/25' : 'hover:bg-slate-800/40'" class="transition">
+                <td class="py-2.5 px-3 text-center">
+                  <input type="checkbox"
+                         :checked="selectedTaskIds.includes(t.id)"
+                         @change="toggleTaskSelection(t.id)"
+                         class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer">
+                </td>
                 <td class="py-2.5 px-3 text-center font-mono text-slate-400 font-semibold">{{ t.id }}</td>
                 
                 <!-- Fanpage -->

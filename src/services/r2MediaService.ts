@@ -449,3 +449,102 @@ export async function listUserVideos(
   return getUserMediaFiles(db, ownerUserId);
 }
 
+/**
+ * Tự động dọn dẹp các video lưu trữ trên R2 cũ hơn 30 ngày (1 tháng)
+ * - Xóa object khỏi Cloudflare R2
+ * - Xóa fallback blob nếu có
+ * - Cập nhật trạng thái media_files thành 'expired'
+ * - Ghi chú vào log của task liên kết để người dùng theo dõi
+ */
+export async function cleanupExpiredR2Media(
+  db: D1Database,
+  env: Env,
+  maxAgeDays = 30,
+  limit = 50
+): Promise<{
+  checked_at: string;
+  expired_count: number;
+  deleted_keys: string[];
+}> {
+  const cutoffTime = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const { results: expiredMedia } = await db
+    .prepare(
+      `SELECT id, owner_user_id, object_key, original_filename, created_at
+       FROM media_files
+       WHERE created_at < ? AND upload_status != 'expired'
+       ORDER BY created_at ASC
+       LIMIT ?`
+    )
+    .bind(cutoffTime, limit)
+    .all<{
+      id: string;
+      owner_user_id: string;
+      object_key: string;
+      original_filename: string;
+      created_at: string;
+    }>();
+
+  if (!expiredMedia || expiredMedia.length === 0) {
+    return {
+      checked_at: new Date().toISOString(),
+      expired_count: 0,
+      deleted_keys: []
+    };
+  }
+
+  const bucket = getR2Bucket(env);
+  const deletedKeys: string[] = [];
+  const nowIso = new Date().toISOString();
+
+  for (const media of expiredMedia) {
+    if (bucket && media.object_key) {
+      try {
+        await bucket.delete(media.object_key);
+        deletedKeys.push(media.object_key);
+      } catch (err) {
+        console.warn(`[R2 Auto-Cleanup] Lỗi xóa key ${media.object_key}:`, err);
+      }
+    }
+
+    await db
+      .prepare(
+        `UPDATE media_files
+         SET upload_status = 'expired',
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(nowIso, media.id)
+      .run();
+
+    try {
+      await db
+        .prepare("DELETE FROM media_blobs_fallback WHERE media_id = ?")
+        .bind(media.id)
+        .run();
+    } catch {}
+
+    try {
+      await db
+        .prepare(
+          `UPDATE tasks
+           SET log = CASE
+             WHEN log IS NULL OR log = '' THEN '[Video R2 đã tự động xóa sau 30 ngày]'
+             ELSE log || '\n[Video R2 đã tự động xóa sau 30 ngày]'
+           END,
+           updated_at = ?
+           WHERE media_id = ?`
+        )
+        .bind(nowIso, media.id)
+        .run();
+    } catch {}
+  }
+
+  return {
+    checked_at: nowIso,
+    expired_count: expiredMedia.length,
+    deleted_keys: deletedKeys
+  };
+}
+
+
