@@ -56,7 +56,7 @@ try {
 }
 
 # Bước 4: Chạy D1 Schema Migrations trên Remote Cloudflare
-Write-Host "`n[4/6] Áp dụng Schema Migrations (0001, 0002, 0003) lên Cloudflare D1 Remote..." -ForegroundColor Yellow
+Write-Host "`n[4/6] Áp dụng Schema Migrations (0001, 0002, 0003, 0004) lên Cloudflare D1 Remote..." -ForegroundColor Yellow
 npx.cmd wrangler d1 migrations apply auto-reels-db --remote
 
 # Bước 5: Kiểm tra bộ 30 bài test tự động trước khi Deploy
