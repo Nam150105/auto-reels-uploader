@@ -11,8 +11,8 @@
   <meta property="og:title" content="Quản lý fanpage - Hệ Thống Quản Lý Fanpage & Reels Scheduler" />
   <meta property="og:description" content="Hệ thống quản lý Fanpage đa tài khoản và hẹn lịch đăng Facebook Reels tự động qua Meta Graph API." />
   <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
-  <!-- Vue 3 Production CDN (jsDelivr chuẩn, fallback sang unpkg qua onerror) -->
-  <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" onerror="this.onerror=null; this.src='https://unpkg.com/vue@3/dist/vue.global.prod.js';"></script>
+  <!-- Vue 3 Production CDN (jsDelivr chuẩn, fallback sang unpkg qua DOM script) -->
+  <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" onerror="(function(){var s=document.createElement('script');s.src='https://unpkg.com/vue@3/dist/vue.global.prod.js';document.head.appendChild(s);})()"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -36,7 +36,17 @@
     </div>
 
     <!-- Auth Card -->
-    <div class="bg-slate-900/95 border border-slate-800 rounded-2xl shadow-2xl backdrop-blur-xl p-7 sm:p-8">
+    <div v-if="authState === 'checking'" class="bg-slate-900/95 border border-slate-800 rounded-2xl shadow-2xl backdrop-blur-xl p-8 text-center">
+      <div class="w-10 h-10 rounded-full bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center mx-auto mb-3">
+        <svg class="animate-spin h-5 w-5 text-indigo-400" viewBox="0 0 24 24" fill="none">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+        </svg>
+      </div>
+      <p class="text-xs text-slate-300 font-semibold">Đang kiểm tra phiên đăng nhập...</p>
+    </div>
+
+    <div v-else class="bg-slate-900/95 border border-slate-800 rounded-2xl shadow-2xl backdrop-blur-xl p-7 sm:p-8">
       
       <!-- Tab Switcher -->
       <div class="flex p-1 bg-slate-950 rounded-xl mb-6 border border-slate-800/80">
@@ -179,9 +189,51 @@
         setTimeout(initLoginApp, 50);
         return;
       }
-      const { createApp, ref } = Vue;
+      const { createApp, ref, onMounted, onUnmounted } = Vue;
+
+      function getSafeRedirectTarget() {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const raw = (params.get('redirect') || '').trim();
+          if (
+            raw &&
+            raw.startsWith('/') &&
+            !raw.startsWith('//') &&
+            !raw.startsWith('/login') &&
+            !raw.startsWith('/api/')
+          ) {
+            if (raw === '/' || raw === '/pages') return '/page';
+            if (raw.startsWith('/pages?')) return '/page' + raw.slice(6);
+            return raw;
+          }
+        } catch (e) {}
+        return '/page';
+      }
+
+      function saveAuthBootstrap(user, csrfToken) {
+        try {
+          sessionStorage.setItem(
+            'fb_reels_auth_bootstrap',
+            JSON.stringify({
+              user: user || null,
+              csrf_token: csrfToken || null,
+              ts: Date.now()
+            })
+          );
+          localStorage.setItem(
+            'fb_reels_auth_event',
+            JSON.stringify({
+              event: 'login',
+              userId: user && user.id ? user.id : null,
+              ts: Date.now()
+            })
+          );
+        } catch (e) {}
+      }
+
       createApp({
       setup() {
+        const authState = ref('unauthenticated'); // 'checking' | 'authenticated' | 'unauthenticated'
         const activeTab = ref('login');
         const loading = ref(false);
         const errorMsg = ref('');
@@ -200,35 +252,104 @@
           confirm_password: ''
         });
 
+        async function verifyExistingSession() {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 6000);
+          try {
+            const resp = await fetch('/api/auth/me', {
+              method: 'GET',
+              credentials: 'same-origin',
+              cache: 'no-store',
+              signal: controller.signal
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              if (data && data.authenticated && data.user) {
+                authState.value = 'authenticated';
+                saveAuthBootstrap(data.user, data.csrf_token);
+                window.location.replace(getSafeRedirectTarget());
+                return true;
+              }
+            }
+          } catch (e) {
+            // Giữ trạng thái hiển thị form đăng nhập nếu chưa đăng nhập hoặc lỗi mạng
+          } finally {
+            clearTimeout(timer);
+          }
+          authState.value = 'unauthenticated';
+          return false;
+        }
+
+        function onPageShow(event) {
+          if (event && event.persisted) {
+            authState.value = 'checking';
+            verifyExistingSession();
+          }
+        }
+
+        function onStorageEvent(event) {
+          if (event && event.key === 'fb_reels_auth_event' && event.newValue) {
+            try {
+              const parsed = JSON.parse(event.newValue);
+              if (parsed && parsed.event === 'login') {
+                verifyExistingSession();
+              }
+            } catch (e) {}
+          }
+        }
+
+        onMounted(() => {
+          verifyExistingSession();
+          window.addEventListener('pageshow', onPageShow);
+          window.addEventListener('storage', onStorageEvent);
+        });
+
+        onUnmounted(() => {
+          window.removeEventListener('pageshow', onPageShow);
+          window.removeEventListener('storage', onStorageEvent);
+        });
+
         const handleLogin = async () => {
+          if (loading.value) return;
           errorMsg.value = '';
           successMsg.value = '';
           loading.value = true;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 12000);
           try {
             const resp = await fetch('/api/auth/login', {
               method: 'POST',
+              credentials: 'same-origin',
+              cache: 'no-store',
+              signal: controller.signal,
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 username: loginForm.value.username.trim(),
                 password: loginForm.value.password
               })
             });
-            const data = await resp.json();
+            const data = await resp.json().catch(() => ({}));
             if (!resp.ok) {
               throw new Error(data.detail || data.message || 'Đăng nhập không thành công.');
             }
-            successMsg.value = 'Đăng nhập thành công! Đang chuyển hướng...';
-            setTimeout(() => {
-              window.location.href = '/pages';
-            }, 800);
+            authState.value = 'authenticated';
+            saveAuthBootstrap(data.user, data.csrf_token);
+            successMsg.value = 'Đăng nhập thành công! Đang chuyển đến trang quản lý...';
+            window.location.replace(getSafeRedirectTarget());
           } catch (err) {
-            errorMsg.value = err.message || 'Lỗi kết nối máy chủ.';
+            if (err && err.name === 'AbortError') {
+              errorMsg.value = 'Máy chủ phản hồi quá thời gian chờ. Vui lòng thử lại.';
+            } else {
+              errorMsg.value = err.message || 'Lỗi kết nối máy chủ.';
+            }
           } finally {
+            clearTimeout(timer);
             loading.value = false;
           }
         };
 
         const handleRegister = async () => {
+          if (loading.value) return;
           errorMsg.value = '';
           successMsg.value = '';
           if (regForm.value.password !== regForm.value.confirm_password) {
@@ -236,9 +357,14 @@
             return;
           }
           loading.value = true;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 12000);
           try {
             const resp = await fetch('/api/auth/register', {
               method: 'POST',
+              credentials: 'same-origin',
+              cache: 'no-store',
+              signal: controller.signal,
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 username: regForm.value.username.trim(),
@@ -247,22 +373,28 @@
                 email: regForm.value.email.trim()
               })
             });
-            const data = await resp.json();
+            const data = await resp.json().catch(() => ({}));
             if (!resp.ok) {
               throw new Error(data.detail || data.message || 'Đăng ký không thành công.');
             }
-            successMsg.value = 'Tạo tài khoản thành công! Đang chuyển hướng...';
-            setTimeout(() => {
-              window.location.href = '/pages';
-            }, 800);
+            authState.value = 'authenticated';
+            saveAuthBootstrap(data.user, data.csrf_token);
+            successMsg.value = 'Tạo tài khoản thành công! Đang chuyển đến trang quản lý...';
+            window.location.replace(getSafeRedirectTarget());
           } catch (err) {
-            errorMsg.value = err.message || 'Lỗi khi đăng ký tài khoản.';
+            if (err && err.name === 'AbortError') {
+              errorMsg.value = 'Máy chủ phản hồi quá thời gian chờ. Vui lòng thử lại.';
+            } else {
+              errorMsg.value = err.message || 'Lỗi khi đăng ký tài khoản.';
+            }
           } finally {
+            clearTimeout(timer);
             loading.value = false;
           }
         };
 
         return {
+          authState,
           activeTab,
           loading,
           errorMsg,

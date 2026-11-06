@@ -24,7 +24,7 @@
 	},
 	// Biến môi trường Public cho Production (Tuyệt đối KHÔNG đặt META_APP_SECRET hay khóa mã hóa ở đây)
 	"vars": {
-		// "META_APP_ID": "1469615908436980",
+		"META_APP_ID": "1469615908436980",
 		"APP_BASE_URL": "https://pagefb.namnangno.click",
 		"META_REDIRECT_URI": "https://pagefb.namnangno.click/api/meta/callback",
 		"META_GRAPH_VERSION": "v19.0",

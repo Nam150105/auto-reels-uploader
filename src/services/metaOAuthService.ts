@@ -66,6 +66,83 @@ export function getMetaConfig(env: Env) {
   };
 }
 
+let appDomainsSyncedInIsolate = false;
+
+export async function ensureMetaAppDomainsConfigured(env: Env): Promise<{
+  checked: boolean;
+  updated: boolean;
+  app_domains?: string[];
+  website_url?: string | null;
+}> {
+  const cfg = getMetaConfig(env);
+  if (
+    !cfg.appId ||
+    !cfg.appSecret ||
+    cfg.appSecret.includes("unit_tests") ||
+    cfg.appSecret.includes("your_meta_app_secret")
+  ) {
+    return { checked: false, updated: false };
+  }
+
+  try {
+    const targetDomain = new URL(cfg.baseUrl).hostname;
+    const appAccessToken = `${cfg.appId}|${cfg.appSecret}`;
+    const infoUrl = `${cfg.graphBase}/${cfg.appId}?fields=id,name,app_domains,website_url&access_token=${encodeURIComponent(appAccessToken)}`;
+    const infoResp = await fetch(infoUrl);
+    if (!infoResp.ok) {
+      return { checked: false, updated: false };
+    }
+    const infoData = (await infoResp.json()) as {
+      app_domains?: string[];
+      website_url?: string;
+    };
+    const existingDomains = Array.isArray(infoData.app_domains)
+      ? infoData.app_domains
+      : [];
+    const hasTargetDomain = existingDomains.some(
+      (d) => d.toLowerCase() === targetDomain.toLowerCase()
+    );
+    const hasWebsiteUrl =
+      typeof infoData.website_url === "string" &&
+      infoData.website_url.includes(targetDomain);
+
+    if (hasTargetDomain && hasWebsiteUrl) {
+      appDomainsSyncedInIsolate = true;
+      return {
+        checked: true,
+        updated: false,
+        app_domains: existingDomains,
+        website_url: infoData.website_url || null
+      };
+    }
+
+    const mergedDomains = Array.from(
+      new Set([...existingDomains, targetDomain])
+    );
+    const updateParams = new URLSearchParams({
+      access_token: appAccessToken,
+      app_domains: JSON.stringify(mergedDomains),
+      website_url: `${cfg.baseUrl}/`,
+      privacy_policy_url: `${cfg.baseUrl}/privacy`,
+      terms_of_service_url: `${cfg.baseUrl}/terms`
+    });
+    const updateResp = await fetch(`${cfg.graphBase}/${cfg.appId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: updateParams.toString()
+    });
+    appDomainsSyncedInIsolate = true;
+    return {
+      checked: true,
+      updated: updateResp.ok,
+      app_domains: mergedDomains,
+      website_url: `${cfg.baseUrl}/`
+    };
+  } catch {
+    return { checked: false, updated: false };
+  }
+}
+
 export async function generateOAuthUrl(
   db: D1Database,
   env: Env,
@@ -90,6 +167,10 @@ export async function generateOAuthUrl(
       error_code: "facebook_error",
       message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
     };
+  }
+
+  if (!appDomainsSyncedInIsolate) {
+    await ensureMetaAppDomainsConfigured(env);
   }
 
   let effectiveRedirectUri = cfg.redirectUri;

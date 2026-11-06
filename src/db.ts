@@ -27,12 +27,29 @@ import { parseVnScheduleToUtc, nowUtcSeconds } from "./utils/timezone.ts";
 import { sanitizeSensitiveText } from "./utils/sanitize.ts";
 
 let schemaInitialized = false;
+let schemaInitPromise: Promise<void> | null = null;
 
 export async function ensureDatabaseInitialized(
   db: D1Database,
   encryptionKey: string
 ): Promise<void> {
   if (schemaInitialized) return;
+  if (schemaInitPromise) return schemaInitPromise;
+
+  schemaInitPromise = (async () => {
+    try {
+      const fastCheck = await db
+        .prepare("SELECT id FROM users WHERE username = ? LIMIT 1")
+        .bind("admin")
+        .first<{ id: string }>();
+      if (fastCheck?.id) {
+        await db.prepare("SELECT 1 FROM user_page_permissions LIMIT 1").first();
+        schemaInitialized = true;
+        return;
+      }
+    } catch {
+      // Schema chưa khởi tạo đầy đủ, tiếp tục chạy DDL batch bên dưới
+    }
 
   const statements = [
     `CREATE TABLE IF NOT EXISTS users (
@@ -311,6 +328,13 @@ export async function ensureDatabaseInitialized(
   }
 
   schemaInitialized = true;
+  })();
+
+  try {
+    await schemaInitPromise;
+  } finally {
+    schemaInitPromise = null;
+  }
 }
 
 // ==========================================
@@ -539,7 +563,7 @@ export async function createOAuthState(
   ownerUserId: string,
   reconnectAccountId: string | null = null,
   actionType = "connect",
-  redirectAfter = "/pages",
+  redirectAfter = "/page",
   ttlSeconds = 600
 ): Promise<void> {
   const now = nowUtcSeconds();
@@ -640,7 +664,7 @@ export async function consumeOAuthState(
     owner_user_id: row.owner_user_id,
     action_type: row.action_type || "connect",
     reconnect_account_id: row.reconnect_account_id,
-    redirect_after: row.redirect_after || "/pages"
+    redirect_after: row.redirect_after || "/page"
   };
 }
 

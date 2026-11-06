@@ -282,10 +282,20 @@ async function runAll30Tests() {
 
   const unauthRootResp = await callWorker("/");
   assert.equal(unauthRootResp.status, 302);
-  assert.ok(unauthRootResp.headers.get("Location")?.endsWith("/login"));
+  assert.ok(unauthRootResp.headers.get("Location")?.endsWith("/login"), "Chưa đăng nhập truy cập / phải chuyển đến /login");
+
+  const unauthPageResp = await callWorker("/page");
+  assert.equal(unauthPageResp.status, 302);
+  assert.ok(unauthPageResp.headers.get("Location")?.endsWith("/login"), "Chưa đăng nhập truy cập /page phải chuyển đến /login");
+
+  const unauthSchedResp = await callWorker("/schedules");
+  assert.equal(unauthSchedResp.status, 302);
+  assert.ok(unauthSchedResp.headers.get("Location")?.includes("/login"), "Chưa đăng nhập truy cập /schedules phải chuyển đến /login");
 
   const appJsResp = await callWorker("/static/js/app.js");
   assert.equal(appJsResp.status, 200);
+  const directAppJsResp = await callWorker("/js/app.js");
+  assert.equal(directAppJsResp.status, 200);
   console.log("  ✓ [Test 02] Frontend & Static Assets tải thành công");
 
   // --------------------------------------------------------------------------
@@ -358,6 +368,42 @@ async function runAll30Tests() {
   assert.equal(regBResp.status, 200);
   const tokenB = /session_token=([^;]+)/.exec(regBResp.headers.get("Set-Cookie") || "")?.[1] || "";
   console.log("  ✓ [Test 03] Login hoạt động chính xác cho nhiều người dùng");
+
+  // Kiểm tra đầy đủ quy tắc điều hướng khi ĐÃ đăng nhập & khi hết hạn phiên (Mục I & IV):
+  // - Đã đăng nhập truy cập / -> 302 chuyển đến /page
+  const authedRootResp = await callWorker("/", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(authedRootResp.status, 302);
+  assert.ok(authedRootResp.headers.get("Location")?.endsWith("/page"), "Đã đăng nhập truy cập / phải chuyển đến /page");
+
+  // - Đã đăng nhập truy cập /login -> 302 chuyển đến /page
+  const authedLoginResp = await callWorker("/login", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(authedLoginResp.status, 302);
+  assert.ok(authedLoginResp.headers.get("Location")?.endsWith("/page"), "Đã đăng nhập truy cập /login phải chuyển đến /page");
+
+  // - Đã đăng nhập truy cập /page -> 200 OK giữ nguyên /page (và reload /page lần 2 vẫn ổn định)
+  const authedPageResp1 = await callWorker("/page", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(authedPageResp1.status, 200, "Đã đăng nhập truy cập /page phải trả về 200 OK");
+  const authedPageHtml = await authedPageResp1.text();
+  assert.ok(authedPageHtml.includes("FB Reels Auto Scheduler"), "Trang /page phải hiển thị giao diện chính");
+
+  const authedPageReloadResp = await callWorker("/page", {
+    headers: { Cookie: `session_token=${tokenA}`, "If-None-Match": '"cached-etag-123"' }
+  });
+  assert.equal(authedPageReloadResp.status, 200, "Reload /page kèm If-None-Match vẫn phải trả về 200 OK đầy đủ");
+
+  // - Phiên đã thu hồi (tokenA1) truy cập /page -> 302 chuyển về /login
+  const revokedPageResp = await callWorker("/page", {
+    headers: { Cookie: `session_token=${tokenA1}` }
+  });
+  assert.equal(revokedPageResp.status, 302);
+  assert.ok(revokedPageResp.headers.get("Location")?.endsWith("/login"), "Phiên hết hạn/thu hồi truy cập /page phải chuyển về /login");
+  console.log("  ✓ [Test 06B] Quy tắc điều hướng /, /login, /page & khôi phục phiên hoạt động chuẩn xác 100%");
 
   // --------------------------------------------------------------------------
   // [TEST 11] Token Encryption, Decryption, Masking & Key Rotation (AES-256-GCM)

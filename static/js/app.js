@@ -24,8 +24,12 @@
     const app = createApp({
       setup() {
     // ==========================================
-    // 1. STATE DỮ LIỆU CHÍNH
+    // 1. STATE DỮ LIỆU CHÍNH & TRẠNG THÁI XÁC THỰC
     // ==========================================
+    const authState = ref('checking'); // 'checking' | 'authenticated' | 'unauthenticated' | 'error'
+    const csrfToken = ref('');
+    const isPageLoading = ref(true);
+    const pageLoadError = ref('');
     const currentUser = ref(null);
     const currentTab = ref('pages'); // 'pages' | 'schedules'
     const pages = ref([]);
@@ -185,34 +189,126 @@
     });
 
     // ==========================================
-    // 4. API CALLS & DATA LOADERS
+    // 4. API FETCH HELPER, TIMEOUT, ABORT & DATA LOADERS
     // ==========================================
-    async function loadMetaStatus() {
+    const activeAbortControllers = new Map();
+    let isRedirectingToLogin = false;
+    let pagesReqSeq = 0;
+    let accountsReqSeq = 0;
+    let tasksReqSeq = 0;
+
+    function handleUnauthorizedSession() {
+      authState.value = 'unauthenticated';
+      currentUser.value = null;
+      csrfToken.value = '';
+      isPageLoading.value = false;
       try {
-        const res = await fetch('/api/meta/status');
+        sessionStorage.removeItem('fb_reels_auth_bootstrap');
+      } catch (e) {}
+      if (!isRedirectingToLogin && window.location.pathname !== '/login') {
+        isRedirectingToLogin = true;
+        window.location.replace('/login');
+      }
+    }
+
+    async function apiFetch(url, options = {}) {
+      const {
+        timeoutMs = 12000,
+        abortKey = null,
+        skipUnauthorizedRedirect = false,
+        headers: customHeaders = {},
+        ...restOptions
+      } = options;
+
+      if (abortKey) {
+        const prev = activeAbortControllers.get(abortKey);
+        if (prev) {
+          try { prev.abort(); } catch (e) {}
+        }
+      }
+
+      const controller = new AbortController();
+      if (abortKey) {
+        activeAbortControllers.set(abortKey, controller);
+      }
+
+      const timer = setTimeout(() => {
+        try { controller.abort(); } catch (e) {}
+      }, timeoutMs);
+
+      const mergedHeaders = { ...customHeaders };
+      if (csrfToken.value && !mergedHeaders['X-CSRF-Token']) {
+        mergedHeaders['X-CSRF-Token'] = csrfToken.value;
+      }
+
+      try {
+        const res = await fetch(url, {
+          ...restOptions,
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: mergedHeaders,
+          signal: controller.signal
+        });
+
+        if (res.status === 401 && !skipUnauthorizedRedirect) {
+          handleUnauthorizedSession();
+        }
+        return res;
+      } finally {
+        clearTimeout(timer);
+        if (abortKey && activeAbortControllers.get(abortKey) === controller) {
+          activeAbortControllers.delete(abortKey);
+        }
+      }
+    }
+
+    async function loadMetaStatus() {
+      if (authState.value !== 'authenticated') return false;
+      try {
+        const res = await apiFetch('/api/meta/status', {
+          abortKey: 'loadMetaStatus',
+          timeoutMs: 10000
+        });
         if (res.ok) {
           metaStatus.value = await res.json();
+          return true;
         }
       } catch (err) {
-        console.error("Lỗi tải Meta Status:", err);
+        if (!err || err.name !== 'AbortError') {
+          console.error("Lỗi tải Meta Status:", err);
+        }
       }
+      return false;
     }
 
     async function loadAccounts() {
+      if (authState.value !== 'authenticated') return false;
+      const seq = ++accountsReqSeq;
       try {
-        const res = await fetch('/api/meta/accounts');
+        const res = await apiFetch('/api/meta/accounts', {
+          abortKey: 'loadAccounts',
+          timeoutMs: 10000
+        });
         if (res.ok) {
-          accounts.value = await res.json();
-          // Lọc bỏ những account ID không còn tồn tại khỏi bộ lọc
-          const validIds = new Set(accounts.value.map(a => a.id));
-          selectedAdminFilterIds.value = selectedAdminFilterIds.value.filter(id => validIds.has(id));
+          const data = await res.json();
+          if (seq === accountsReqSeq && Array.isArray(data)) {
+            accounts.value = data;
+            const validIds = new Set(accounts.value.map(a => a.id));
+            selectedAdminFilterIds.value = selectedAdminFilterIds.value.filter(id => validIds.has(id));
+          }
+          return true;
         }
       } catch (err) {
-        console.error("Lỗi tải danh sách Facebook Accounts:", err);
+        if (!err || err.name !== 'AbortError') {
+          console.error("Lỗi tải danh sách Facebook Accounts:", err);
+        }
       }
+      return false;
     }
 
     async function loadPages() {
+      if (authState.value !== 'authenticated') return false;
+      const seq = ++pagesReqSeq;
       try {
         const params = new URLSearchParams();
         if (selectedAdminFilterIds.value.length > 0) {
@@ -221,96 +317,198 @@
         if (searchPage.value.trim()) params.append('search', searchPage.value.trim());
         if (filterPageStatus.value) params.append('status', filterPageStatus.value);
 
-        const res = await fetch(`/api/pages?${params.toString()}`);
+        const queryStr = params.toString();
+        const res = await apiFetch(queryStr ? `/api/pages?${queryStr}` : '/api/pages', {
+          abortKey: 'loadPages',
+          timeoutMs: 12000
+        });
         if (res.ok) {
-          pages.value = await res.json();
+          const data = await res.json();
+          if (seq === pagesReqSeq && Array.isArray(data)) {
+            pages.value = data;
+            systemStats.value.total_pages = data.length;
+            systemStats.value.selected_pages = data.filter(p => p.is_selected).length;
+          }
+          pageLoadError.value = '';
+          return true;
+        }
+        if (res.status >= 500) {
+          pageLoadError.value = 'Máy chủ đang bận khi tải danh sách Fanpage. Vui lòng nhấn Thử lại.';
         }
       } catch (err) {
-        console.error("Lỗi tải danh sách Pages:", err);
+        if (!err || err.name !== 'AbortError') {
+          console.error("Lỗi tải danh sách Pages:", err);
+          pageLoadError.value = 'Không thể tải danh sách Fanpage do kết nối mạng chậm. Vui lòng thử lại.';
+        }
       }
+      return false;
     }
 
     async function loadTasks() {
+      if (authState.value !== 'authenticated') return false;
+      const seq = ++tasksReqSeq;
       try {
         const params = new URLSearchParams();
         if (filterPage.value) params.append('facebook_page_id', filterPage.value);
         if (filterStatus.value) params.append('status', filterStatus.value);
         if (searchTask.value.trim()) params.append('search', searchTask.value.trim());
 
-        const res = await fetch(`/api/tasks?${params.toString()}`);
+        const queryStr = params.toString();
+        const res = await apiFetch(queryStr ? `/api/tasks?${queryStr}` : '/api/tasks', {
+          abortKey: 'loadTasks',
+          timeoutMs: 12000
+        });
         if (res.ok) {
-          tasks.value = await res.json();
+          const data = await res.json();
+          if (seq === tasksReqSeq && Array.isArray(data)) {
+            tasks.value = data;
+          }
+          return true;
         }
       } catch (err) {
-        console.error("Lỗi tải danh sách Tasks:", err);
+        if (!err || err.name !== 'AbortError') {
+          console.error("Lỗi tải danh sách Tasks:", err);
+        }
       }
+      return false;
     }
 
     async function loadStats() {
+      if (authState.value !== 'authenticated') return false;
       try {
-        const res = await fetch('/api/status');
+        const res = await apiFetch('/api/status', {
+          abortKey: 'loadStats',
+          timeoutMs: 10000
+        });
         if (res.ok) {
           const data = await res.json();
           isRunning.value = data.is_running || false;
           systemStats.value = {
-            total_pages: data.total_pages || 0,
-            selected_pages: data.selected_pages || 0,
+            total_pages: data.total_pages ?? pages.value.length,
+            selected_pages: data.selected_pages ?? pages.value.filter(p => p.is_selected).length,
             total_tasks: data.total_tasks || 0,
             pending_tasks: data.pending_tasks || 0,
             success_tasks: data.success_tasks || 0,
             failed_tasks: data.failed_tasks || 0,
             running_tasks: data.running_tasks || 0
           };
-          if (data.meta) {
-            metaStatus.value = data.meta;
-          }
-          if (data.accounts) {
-            accounts.value = data.accounts;
-          }
+          return true;
         }
       } catch (err) {
-        console.error("Lỗi tải System Stats:", err);
+        if (!err || err.name !== 'AbortError') {
+          console.error("Lỗi tải System Stats:", err);
+        }
       }
+      return false;
     }
 
     async function loadAll() {
-      await Promise.all([loadMetaStatus(), loadAccounts(), loadPages(), loadTasks(), loadStats()]);
+      if (authState.value !== 'authenticated') return;
+      isPageLoading.value = true;
+      pageLoadError.value = '';
+      try {
+        // 1. Tải dữ liệu thiết yếu của trang /page trước để hiển thị ngay lập tức
+        await Promise.allSettled([loadPages(), loadAccounts()]);
+      } finally {
+        isPageLoading.value = false;
+      }
+      // 2. Tải dữ liệu phụ bất đồng bộ, không chặn hiển thị trang /page
+      Promise.allSettled([loadTasks(), loadStats(), loadMetaStatus()]);
     }
 
     // ==========================================
     // 5. AUTH & NAVIGATION ACTIONS
     // ==========================================
     async function checkAuth() {
+      authState.value = 'checking';
       try {
-        const res = await fetch('/api/auth/me');
+        const cachedRaw = sessionStorage.getItem('fb_reels_auth_bootstrap');
+        if (cachedRaw) {
+          const parsed = JSON.parse(cachedRaw);
+          if (parsed && parsed.user && Date.now() - (parsed.ts || 0) < 60000) {
+            currentUser.value = parsed.user;
+            if (parsed.csrf_token) csrfToken.value = parsed.csrf_token;
+          }
+        }
+      } catch (e) {}
+
+      try {
+        const res = await apiFetch('/api/auth/me', {
+          abortKey: 'checkAuth',
+          timeoutMs: 10000,
+          skipUnauthorizedRedirect: true
+        });
         if (res.status === 401) {
-          window.location.href = '/login';
+          handleUnauthorizedSession();
           return false;
         }
         if (res.ok) {
           const data = await res.json();
-          currentUser.value = data.user;
-          return true;
+          if (data && data.authenticated && data.user) {
+            currentUser.value = data.user;
+            csrfToken.value = data.csrf_token || '';
+            authState.value = 'authenticated';
+            try {
+              sessionStorage.setItem(
+                'fb_reels_auth_bootstrap',
+                JSON.stringify({
+                  user: data.user,
+                  csrf_token: data.csrf_token || null,
+                  ts: Date.now()
+                })
+              );
+            } catch (e) {}
+            return true;
+          }
+          handleUnauthorizedSession();
+          return false;
         }
+        // Lỗi server 5xx tạm thời: không tự động đăng xuất người dùng
+        authState.value = 'error';
+        isPageLoading.value = false;
+        pageLoadError.value = 'Máy chủ đang bận khi xác minh phiên đăng nhập. Vui lòng nhấn Thử lại.';
+        return false;
       } catch (e) {
         console.error("Auth check failed:", e);
+        authState.value = 'error';
+        isPageLoading.value = false;
+        pageLoadError.value = 'Không thể kết nối máy chủ để xác minh phiên đăng nhập. Vui lòng kiểm tra mạng và thử lại.';
+        return false;
       }
-      window.location.href = '/login';
-      return false;
+    }
+
+    async function retryInitializePage() {
+      pageLoadError.value = '';
+      if (authState.value !== 'authenticated') {
+        const ok = await checkAuth();
+        if (!ok) return;
+      }
+      await loadAll();
     }
 
     async function handleLogout() {
       try {
-        await fetch('/api/auth/logout', { method: 'POST' });
+        await apiFetch('/api/auth/logout', {
+          method: 'POST',
+          timeoutMs: 6000,
+          skipUnauthorizedRedirect: true
+        });
       } catch (e) {
         console.error("Lỗi đăng xuất:", e);
       }
-      window.location.href = '/login';
+      try {
+        sessionStorage.removeItem('fb_reels_auth_bootstrap');
+        localStorage.setItem(
+          'fb_reels_auth_event',
+          JSON.stringify({ event: 'logout', ts: Date.now() })
+        );
+      } catch (e) {}
+      handleUnauthorizedSession();
     }
 
     function setTab(tab) {
       currentTab.value = tab;
-      const targetPath = tab === 'pages' ? '/pages' : '/schedules';
+      const targetPath = tab === 'pages' ? '/page' : '/schedules';
       if (window.location.pathname !== targetPath) {
         history.pushState(null, '', targetPath);
       }
@@ -393,7 +591,9 @@
           params.set('account_id', targetId);
         }
         const queryStr = params.toString();
-        const res = await fetch(`/api/meta/oauth-url${queryStr ? '?' + queryStr : ''}`);
+        const res = await apiFetch(`/api/meta/oauth-url${queryStr ? '?' + queryStr : ''}`, {
+          timeoutMs: 12000
+        });
         const data = await res.json();
 
         if (!res.ok || !data.success || !data.oauth_url) {
@@ -447,7 +647,7 @@
 
     async function handleDisconnectMeta() {
       try {
-        const res = await fetch('/api/meta/disconnect', { method: 'POST' });
+        const res = await apiFetch('/api/meta/disconnect', { method: 'POST' });
         const data = await res.json();
         showToast(data.message || "Đã ngắt kết nối.", "success");
         await loadAll();
@@ -459,7 +659,7 @@
     async function handleSyncPages() {
       isSyncingPages.value = true;
       try {
-        const res = await fetch('/api/meta/sync-pages', { method: 'POST' });
+        const res = await apiFetch('/api/meta/sync-pages', { method: 'POST', timeoutMs: 25000 });
         const data = await res.json();
         if (res.ok) {
           showToast(data.message || "Đồng bộ Fanpage thành công!", "success");
@@ -477,7 +677,7 @@
     async function handleSyncAccountPages(accountId) {
       isSyncingPages.value = true;
       try {
-        const res = await fetch(`/api/meta/accounts/${accountId}/sync`, { method: 'POST' });
+        const res = await apiFetch(`/api/meta/accounts/${accountId}/sync`, { method: 'POST', timeoutMs: 25000 });
         const data = await res.json();
         if (res.ok) {
           showToast(data.message || "Đồng bộ Fanpage thành công!", data.no_pages ? "warning" : "success");
@@ -522,7 +722,7 @@
       const accountId = accountToDelete.value.id;
       isDeletingAccount.value = true;
       try {
-        const res = await fetch(`/api/meta/accounts/${accountId}`, { method: 'DELETE' });
+        const res = await apiFetch(`/api/meta/accounts/${accountId}`, { method: 'DELETE' });
         const data = await res.json();
         if (res.ok && data.success) {
           showDeleteAccountModal.value = false;
@@ -1115,37 +1315,74 @@
     }
 
     // ==========================================
-    // 11. LIFECYCLE & POLLING
+    // 11. LIFECYCLE, MULTI-TAB SYNC & POLLING
     // ==========================================
     let pollInterval = null;
 
+    function onPopState() {
+      const p = window.location.pathname;
+      if (p === '/schedules' || p === '/reels') {
+        currentTab.value = 'schedules';
+      } else {
+        currentTab.value = 'pages';
+      }
+    }
+
+    async function onPageShow(event) {
+      if (event && event.persisted) {
+        const authed = await checkAuth();
+        if (authed) {
+          await loadAll();
+        }
+      }
+    }
+
+    async function onStorageEvent(event) {
+      if (!event || event.key !== 'fb_reels_auth_event' || !event.newValue) return;
+      try {
+        const parsed = JSON.parse(event.newValue);
+        if (!parsed) return;
+        if (parsed.event === 'logout') {
+          handleUnauthorizedSession();
+        } else if (
+          parsed.event === 'login' &&
+          parsed.userId &&
+          currentUser.value &&
+          parsed.userId !== currentUser.value.id
+        ) {
+          const authed = await checkAuth();
+          if (authed) {
+            await loadAll();
+          }
+        }
+      } catch (e) {}
+    }
+
     onMounted(async () => {
-      // Xác định Tab theo đường dẫn URL
+      // Chuẩn hóa đường dẫn mặc định về /page
       const path = window.location.pathname;
       if (path === '/schedules' || path === '/reels') {
         currentTab.value = 'schedules';
       } else {
         currentTab.value = 'pages';
+        if (path === '/' || path === '/pages') {
+          history.replaceState(null, '', '/page' + window.location.search);
+        }
       }
 
-      window.addEventListener('popstate', () => {
-        const p = window.location.pathname;
-        if (p === '/schedules' || p === '/reels') {
-          currentTab.value = 'schedules';
-        } else {
-          currentTab.value = 'pages';
-        }
-      });
-
+      window.addEventListener('popstate', onPopState);
+      window.addEventListener('pageshow', onPageShow);
+      window.addEventListener('storage', onStorageEvent);
       window.addEventListener('message', onWindowMessage);
 
-      // Kiểm tra xác thực người dùng
+      // 1. Kiểm tra xác thực người dùng trước khi gọi bất kỳ API nội bộ nào
       const authed = await checkAuth();
       if (!authed) return;
 
+      // 2. Tải dữ liệu thiết yếu của trang /page (Pages & Accounts), dữ liệu phụ chạy ngầm không chặn UI
       await loadAll();
 
-      // Xử lý kết quả OAuth nếu quay lại từ chế độ redirect toàn trang
+      // 3. Xử lý kết quả OAuth nếu quay lại từ chế độ redirect toàn trang
       const urlParams = new URLSearchParams(window.location.search);
       const oauthStatus = urlParams.get('oauth_status');
       const oauthMsg = urlParams.get('oauth_msg');
@@ -1161,12 +1398,12 @@
         });
       }
 
-      // Smart Polling tối ưu cho Cloudflare Workers Free Plan:
+      // 4. Smart Polling tối ưu cho Cloudflare Workers Free Plan:
       // - Chỉ poll nhanh (5 giây) khi có tác vụ đang chạy/queued
       // - Giãn cách 30 giây khi hệ thống rảnh và tạm dừng khi ẩn tab trình duyệt
       let lastIdlePollTime = Date.now();
       pollInterval = setInterval(async () => {
-        if (document.hidden) return;
+        if (document.hidden || authState.value !== 'authenticated') return;
         const hasActiveWork = isRunning.value || systemStats.value.running_tasks > 0;
         const now = Date.now();
         if (!hasActiveWork && now - lastIdlePollTime < 30000) {
@@ -1175,8 +1412,7 @@
         lastIdlePollTime = now;
         await loadStats();
         if (isRunning.value || systemStats.value.running_tasks > 0) {
-          await loadTasks();
-          await loadPages();
+          await Promise.allSettled([loadTasks(), loadPages()]);
         }
       }, 5000);
     });
@@ -1184,10 +1420,21 @@
     onUnmounted(() => {
       if (pollInterval) clearInterval(pollInterval);
       clearOAuthPopupWatcher();
+      for (const ctrl of activeAbortControllers.values()) {
+        try { ctrl.abort(); } catch (e) {}
+      }
+      activeAbortControllers.clear();
+      window.removeEventListener('popstate', onPopState);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('storage', onStorageEvent);
       window.removeEventListener('message', onWindowMessage);
     });
 
     return {
+      authState,
+      isPageLoading,
+      pageLoadError,
+      retryInitializePage,
       currentUser,
       currentTab,
       setTab,
@@ -1287,14 +1534,21 @@
 });
 
     app.mount('#app');
+    clearTimeout(timeoutHintTimer);
 
-    // Ẩn màn hình loading fallback
+    // Ẩn màn hình loading fallback ngay khi ứng dụng mount xong
     const loader = document.getElementById('app-loading-screen');
     if (loader) {
       loader.style.opacity = '0';
-      setTimeout(() => loader.remove(), 250);
+      setTimeout(() => loader.remove(), 180);
     }
   }
+
+  // Cảnh báo timeout sau 6 giây chỉ khi script CDN chưa thể mount Vue
+  const timeoutHintTimer = setTimeout(() => {
+    const hint = document.getElementById('app-timeout-hint');
+    if (hint) hint.classList.remove('hidden');
+  }, 6000);
 
   // Khởi chạy khi DOM đã sẵn sàng
   if (document.readyState === 'loading') {
@@ -1302,10 +1556,4 @@
   } else {
     initMainDashboard();
   }
-
-  // Cảnh báo timeout sau 6 giây nếu gặp sự cố mạng hoặc CDN
-  setTimeout(() => {
-    const hint = document.getElementById('app-timeout-hint');
-    if (hint) hint.classList.remove('hidden');
-  }, 6000);
 })();

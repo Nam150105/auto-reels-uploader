@@ -29,6 +29,23 @@ export function htmlResponse(
     status,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      ...extraHeaders
+    }
+  });
+}
+
+export function redirectResponse(
+  targetUrl: string,
+  status = 302,
+  extraHeaders: Record<string, string> = {}
+): Response {
+  return new Response(null, {
+    status,
+    headers: {
+      Location: targetUrl,
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      Pragma: "no-cache",
       ...extraHeaders
     }
   });
@@ -42,17 +59,31 @@ export async function serveStaticHtmlAsset(
   if (!env.ASSETS) return null;
   const url = new URL(request.url);
   url.pathname = assetPath;
+  url.search = "";
+  const cleanHeaders = new Headers({
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+  });
   const assetReq = new Request(url.toString(), {
     method: "GET",
-    headers: request.headers
+    headers: cleanHeaders
   });
-  const resp = await env.ASSETS.fetch(assetReq);
+  let resp = await env.ASSETS.fetch(assetReq);
+  if (resp.status >= 300 && resp.status < 400) {
+    const loc = resp.headers.get("Location");
+    if (loc) {
+      const followUrl = new URL(loc, url.origin);
+      resp = await env.ASSETS.fetch(
+        new Request(followUrl.toString(), { method: "GET", headers: cleanHeaders })
+      );
+    }
+  }
   if (resp.ok) {
     return new Response(resp.body, {
       status: 200,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-cache"
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        Pragma: "no-cache"
       }
     });
   }
@@ -107,8 +138,8 @@ export function renderOAuthCallbackHtml(options: {
     : options.message;
 
   const redirectTarget = options.isEndpointReadyProbe
-    ? "/pages"
-    : `/pages?oauth_status=${encodeURIComponent(oauthStatus)}&oauth_msg=${encodeURIComponent(options.message)}`;
+    ? "/page"
+    : `/page?oauth_status=${encodeURIComponent(oauthStatus)}&oauth_msg=${encodeURIComponent(options.message)}`;
 
   const payloadJson = JSON.stringify({
     type: "META_OAUTH_RESULT",

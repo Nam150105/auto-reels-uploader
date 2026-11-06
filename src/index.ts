@@ -44,7 +44,8 @@ import {
   PRODUCTION_DOMAIN,
   generateOAuthUrl,
   exchangeCodeForToken,
-  getConnectionStatus
+  getConnectionStatus,
+  ensureMetaAppDomainsConfigured
 } from "./services/metaOAuthService.ts";
 import {
   syncPagesForAccount,
@@ -70,12 +71,33 @@ import {
 import { dispatchDueScheduledTasks } from "./scheduler/cronDispatcher.ts";
 import {
   jsonResponse,
+  redirectResponse,
   serveStaticHtmlAsset,
   renderOAuthCallbackHtml
 } from "./routes/responseHelpers.ts";
 import { handleComplianceRoutes } from "./routes/complianceRoutes.ts";
 import { handleMediaRoutes } from "./routes/mediaRoutes.ts";
 import { getD1Database } from "./fallback_d1.ts";
+
+function sanitizeInternalRedirect(raw: string | null): string {
+  if (!raw || typeof raw !== "string") return "/page";
+  const trimmed = raw.trim();
+  if (
+    !trimmed.startsWith("/") ||
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("/login") ||
+    trimmed.startsWith("/api/")
+  ) {
+    return "/page";
+  }
+  if (trimmed === "/" || trimmed === "/pages") {
+    return "/page";
+  }
+  if (trimmed.startsWith("/pages?")) {
+    return `/page${trimmed.slice(6)}`;
+  }
+  return trimmed;
+}
 
 export async function handleWorkerRequest(
   request: Request,
@@ -88,10 +110,6 @@ export async function handleWorkerRequest(
   const isHttps =
     url.protocol === "https:" ||
     request.headers.get("X-Forwarded-Proto") === "https";
-
-  const encryptionKey = getEncryptionKeyMaterial(env);
-  const db = getD1Database(env);
-  await ensureDatabaseInitialized(db, encryptionKey);
 
   // ==========================================
   // 0. CORS PREFLIGHT (Strict Same-Origin / Production Domain)
@@ -112,6 +130,33 @@ export async function handleWorkerRequest(
       }
     });
   }
+
+  // ==========================================
+  // 0.5. STATIC ASSETS FAST-PATH (/js/*, /static/*, /css/*, /favicon.ico)
+  // Phục vụ trực tiếp từ Cloudflare Assets không tốn truy vấn D1 và hỗ trợ cả 200 OK lẫn 304 Not Modified
+  // ==========================================
+  if (
+    env.ASSETS &&
+    (method === "GET" || method === "HEAD") &&
+    (pathname.startsWith("/static/") ||
+      pathname.startsWith("/js/") ||
+      pathname.startsWith("/css/") ||
+      pathname === "/favicon.ico")
+  ) {
+    if (pathname.startsWith("/static/")) {
+      const strippedUrl = new URL(request.url);
+      strippedUrl.pathname = pathname.replace(/^\/static/, "");
+      const strippedReq = new Request(strippedUrl.toString(), request);
+      const assetResp = await env.ASSETS.fetch(strippedReq);
+      if (assetResp.ok || assetResp.status === 304) return assetResp;
+    }
+    const directResp = await env.ASSETS.fetch(request);
+    if (directResp.ok || directResp.status === 304) return directResp;
+  }
+
+  const encryptionKey = getEncryptionKeyMaterial(env);
+  const db = getD1Database(env);
+  await ensureDatabaseInitialized(db, encryptionKey);
 
   // ==========================================
   // 1. TRANG CÔNG KHAI BẮT BUỘC CỦA META (/privacy, /terms, /data-deletion, /api/meta/data-deletion)
@@ -136,30 +181,54 @@ export async function handleWorkerRequest(
   }
 
   // ==========================================
-  // 3. ĐIỀU HƯỚNG GIAO DIỆN HTML FRONTEND (/, /login, /pages, /schedules)
+  // 3. ĐIỀU HƯỚNG GIAO DIỆN HTML FRONTEND (/, /login, /page, /pages, /schedules, /reels)
   // ==========================================
   if (pathname === "/login" && method === "GET") {
     if (currentUser) {
-      return Response.redirect(`${url.origin}/pages`, 302);
+      const target = sanitizeInternalRedirect(url.searchParams.get("redirect"));
+      return redirectResponse(`${url.origin}${target}`, 302);
     }
     const staticResp = await serveStaticHtmlAsset(request, env, "/login.html");
     if (staticResp) return staticResp;
   }
 
+  if (pathname === "/" && method === "GET") {
+    const ua = request.headers.get("User-Agent") || "";
+    const isFbCrawler = /facebookexternalhit|Facebot|meta-externalagent/i.test(ua);
+    if (currentUser) {
+      return redirectResponse(`${url.origin}/page`, 302);
+    }
+    if (isFbCrawler) {
+      const staticResp = await serveStaticHtmlAsset(request, env, "/login.html");
+      if (staticResp) return staticResp;
+    }
+    return redirectResponse(`${url.origin}/login`, 302);
+  }
+
   if (
-    (pathname === "/" || pathname === "/pages" || pathname === "/schedules") &&
+    (pathname === "/page" ||
+      pathname === "/pages" ||
+      pathname === "/schedules" ||
+      pathname === "/reels") &&
     method === "GET"
   ) {
     const ua = request.headers.get("User-Agent") || "";
-    const isFbCrawler = /facebookexternalhit|Facebot/i.test(ua);
-    if (!currentUser && !isFbCrawler) {
-      return Response.redirect(`${url.origin}/login`, 302);
+    const isFbCrawler = /facebookexternalhit|Facebot|meta-externalagent/i.test(ua);
+    if (!currentUser) {
+      if (isFbCrawler) {
+        const staticResp = await serveStaticHtmlAsset(request, env, "/login.html");
+        if (staticResp) return staticResp;
+      }
+      const loginRedirect =
+        pathname === "/schedules" || pathname === "/reels"
+          ? `/login?redirect=${encodeURIComponent(pathname + url.search)}`
+          : "/login";
+      return redirectResponse(`${url.origin}${loginRedirect}`, 302);
     }
-    const staticResp = await serveStaticHtmlAsset(
-      request,
-      env,
-      currentUser ? "/index.html" : "/login.html"
-    );
+    if (pathname === "/pages") {
+      return redirectResponse(`${url.origin}/page${url.search}`, 302);
+    }
+    const staticResp = await serveStaticHtmlAsset(request, env, "/index.html");
     if (staticResp) return staticResp;
   }
 
@@ -957,36 +1026,78 @@ export async function handleWorkerRequest(
       });
     }
 
-    if (pathname === "/api/status" && method === "GET") {
-      const pages = await getFacebookPages(db, encryptionKey, {
-        includeToken: false,
-        ownerUserId
+    if (pathname === "/api/meta/app-check" && method === "GET") {
+      const checkRes = await ensureMetaAppDomainsConfigured(env);
+      return jsonResponse({
+        success: true,
+        app_id: env.META_APP_ID || "1469615908436980",
+        app_base_url: env.APP_BASE_URL || PRODUCTION_DOMAIN,
+        redirect_uri: env.META_REDIRECT_URI || `${PRODUCTION_DOMAIN}/api/meta/callback`,
+        ...checkRes
       });
-      const tasks = await getTasks(db, { ownerUserId });
-      const metaStatus = await getConnectionStatus(db, env, ownerUserId);
+    }
 
-      const runningCount = tasks.filter(
-        (t) =>
-          t.status === "running" ||
-          t.raw_status === "queued" ||
-          t.raw_status === "processing"
-      ).length;
+    if (pathname === "/api/status" && method === "GET") {
+      const [pageCountsRes, taskCountsRes, accCountsRes] = await db.batch([
+        db
+          .prepare(
+            `SELECT COUNT(*) AS total_pages,
+                    COALESCE(SUM(CASE WHEN is_selected = 1 THEN 1 ELSE 0 END), 0) AS selected_pages
+             FROM facebook_pages
+             WHERE owner_user_id = ?`
+          )
+          .bind(ownerUserId),
+        db
+          .prepare(
+            `SELECT COUNT(*) AS total_tasks,
+                    COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_tasks,
+                    COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_tasks,
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_tasks,
+                    COALESCE(SUM(CASE WHEN status IN ('running', 'queued', 'processing') THEN 1 ELSE 0 END), 0) AS running_tasks
+             FROM tasks
+             WHERE owner_user_id = ?`
+          )
+          .bind(ownerUserId),
+        db
+          .prepare(
+            `SELECT COUNT(*) AS total_accounts,
+                    COALESCE(SUM(CASE WHEN status = 'connected' THEN 1 ELSE 0 END), 0) AS connected_accounts,
+                    MAX(CASE WHEN status = 'connected' THEN facebook_user_name ELSE NULL END) AS primary_user_name
+             FROM facebook_accounts
+             WHERE owner_user_id = ?`
+          )
+          .bind(ownerUserId)
+      ]);
+
+      const pageCounts = ((pageCountsRes.results || [])[0] || {}) as Record<string, unknown>;
+      const taskCounts = ((taskCountsRes.results || [])[0] || {}) as Record<string, unknown>;
+      const accCounts = ((accCountsRes.results || [])[0] || {}) as Record<string, unknown>;
+
+      const totalPages = Number(pageCounts.total_pages || 0);
+      const selectedPages = Number(pageCounts.selected_pages || 0);
+      const totalTasks = Number(taskCounts.total_tasks || 0);
+      const pendingTasks = Number(taskCounts.pending_tasks || 0);
+      const successTasks = Number(taskCounts.success_tasks || 0);
+      const failedTasks = Number(taskCounts.failed_tasks || 0);
+      const runningCount = Number(taskCounts.running_tasks || 0);
+      const connectedAccounts = Number(accCounts.connected_accounts || 0);
+      const totalAccounts = Number(accCounts.total_accounts || 0);
 
       return jsonResponse({
         is_running: runningCount > 0,
         active_tasks_count: runningCount,
-        meta_connected: Boolean(metaStatus.is_connected),
-        meta_user_name: metaStatus.user_name,
-        connected_accounts_count: metaStatus.connected_accounts || 0,
-        total_accounts_count: metaStatus.total_accounts || 0,
-        total_pages: pages.length,
-        selected_pages: pages.filter((p) => p.is_selected).length,
-        total_profiles: pages.length,
-        selected_profiles: pages.filter((p) => p.is_selected).length,
-        total_tasks: tasks.length,
-        pending_tasks: tasks.filter((t) => t.status === "pending").length,
-        success_tasks: tasks.filter((t) => t.status === "success").length,
-        failed_tasks: tasks.filter((t) => t.status === "failed").length,
+        meta_connected: connectedAccounts > 0,
+        meta_user_name: (accCounts.primary_user_name as string) || null,
+        connected_accounts_count: connectedAccounts,
+        total_accounts_count: totalAccounts,
+        total_pages: totalPages,
+        selected_pages: selectedPages,
+        total_profiles: totalPages,
+        selected_profiles: selectedPages,
+        total_tasks: totalTasks,
+        pending_tasks: pendingTasks,
+        success_tasks: successTasks,
+        failed_tasks: failedTasks,
         running_tasks: runningCount
       });
     }
@@ -995,7 +1106,7 @@ export async function handleWorkerRequest(
   }
 
   // ==========================================
-  // 7. PHỤC VỤ FILE TĨNH (/static/*, /js/*, ...)
+  // 7. PHỤC VỤ FILE TĨNH & ĐIỀU HƯỚNG FALLBACK CHO TRANG NỘI BỘ
   // ==========================================
   if (env.ASSETS) {
     if (pathname.startsWith("/static/")) {
@@ -1003,10 +1114,18 @@ export async function handleWorkerRequest(
       strippedUrl.pathname = pathname.replace(/^\/static/, "");
       const strippedReq = new Request(strippedUrl.toString(), request);
       const assetResp = await env.ASSETS.fetch(strippedReq);
-      if (assetResp.ok) return assetResp;
+      if (assetResp.ok || assetResp.status === 304) return assetResp;
     }
     const directResp = await env.ASSETS.fetch(request);
-    if (directResp.ok) return directResp;
+    if (directResp.ok || directResp.status === 304) return directResp;
+  }
+
+  const acceptHeader = request.headers.get("Accept") || "";
+  if (method === "GET" && !pathname.startsWith("/api/") && acceptHeader.includes("text/html")) {
+    if (!currentUser) {
+      return redirectResponse(`${url.origin}/login`, 302);
+    }
+    return redirectResponse(`${url.origin}/page`, 302);
   }
 
   return jsonResponse({ detail: "Not Found" }, 404);
