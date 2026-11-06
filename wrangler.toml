@@ -1,0 +1,37 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "pagefb-manager"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+# Phục vụ giao diện Frontend từ thư mục ./static kết hợp Worker xử lý API và Auth routing
+[assets]
+directory = "./static"
+binding = "ASSETS"
+run_worker_first = true
+
+# Liên kết trực tiếp Custom Domain trên Cloudflare (Không dùng Cloudflare Tunnel / Local PC)
+routes = [
+  { pattern = "pagefb.namnangno.click", custom_domain = true }
+]
+
+# Biến môi trường Public cho Production
+# Lưu ý: META_APP_SECRET, SECRET_KEY, ENCRYPTION_KEY được lưu an toàn qua `wrangler secret put`
+[vars]
+META_APP_ID = "1469615908436980"
+APP_BASE_URL = "https://pagefb.namnangno.click"
+META_REDIRECT_URI = "https://pagefb.namnangno.click/api/meta/callback"
+META_GRAPH_VERSION = "v19.0"
+
+# Cloudflare D1 Database (Serverless SQLite)
+[[d1_databases]]
+binding = "DB"
+database_name = "pagefb-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# (Tùy chọn) Cloudflare R2 Bucket để lưu trữ tạm thời file video Reels lớn (>25MB)
+# Bỏ comment 3 dòng dưới nếu bạn tạo R2 bucket tên "pagefb-videos":
+# [[r2_buckets]]
+# binding = "VIDEOS_BUCKET"
+# bucket_name = "pagefb-videos"
+

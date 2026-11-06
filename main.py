@@ -52,9 +52,9 @@ database.init_db()
 @app.middleware("http")
 async def proxy_headers_middleware(request: Request, call_next):
     """
-    Tin cậy Reverse Proxy headers từ Cloudflare Tunnel:
+    Tin cậy Reverse Proxy headers từ Cloudflare Edge:
     - X-Forwarded-Proto: https -> Đảm bảo request.scope['scheme'] = 'https'
-    - X-Forwarded-Host: namnangno.click -> Đảm bảo host đúng tên miền công khai
+    - X-Forwarded-Host: pagefb.namnangno.click -> Đảm bảo host đúng tên miền công khai
     """
     forwarded_proto = request.headers.get("x-forwarded-proto")
     if forwarded_proto:
@@ -847,7 +847,7 @@ def meta_data_deletion_callback(request: Request = None):
     Trả về URL tra cứu trạng thái và mã xác nhận theo chuẩn Meta Platform.
     """
     confirmation_code = f"DEL_{secrets.token_hex(8).upper()}"
-    status_url = f"https://namnangno.click/data-deletion-status?code={confirmation_code}"
+    status_url = f"https://pagefb.namnangno.click/data-deletion-status?code={confirmation_code}"
     return JSONResponse({
         "url": status_url,
         "confirmation_code": confirmation_code

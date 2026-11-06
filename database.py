@@ -167,7 +167,7 @@ def ensure_default_admin() -> Dict[str, Any]:
         cursor.execute(
             """
             INSERT OR IGNORE INTO users (id, username, password_hash, salt, full_name, email, role, status, created_at)
-            VALUES (?, 'admin', ?, ?, 'Quản Trị Viên', 'admin@namnangno.click', 'admin', 'active', CURRENT_TIMESTAMP)
+            VALUES (?, 'admin', ?, ?, 'Quản Trị Viên', 'admin@pagefb.namnangno.click', 'admin', 'active', CURRENT_TIMESTAMP)
             """,
             (admin_id, pwd_hash, salt)
         )

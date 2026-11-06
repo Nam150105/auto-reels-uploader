@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="vi" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FB Reels Scheduler - Meta Graph API</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Vue 3 Production CDN (jsDelivr chuẩn, fallback sang unpkg qua onerror) -->
+  <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" onerror="this.onerror=null; this.src='https://unpkg.com/vue@3/dist/vue.global.prod.js';"></script>
+  
+  <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #090d16;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+    [v-cloak] {
+      display: none !important;
+    }
+    @keyframes pulse-subtle {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    .animate-pulse-subtle {
+      animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col overflow-hidden text-sm select-none">
+
+  <div id="app" v-cloak class="h-full flex flex-col">
+
+    <!-- ================= TOP HEADER ================= -->
+    <header class="bg-slate-900/95 border-b border-slate-800/80 px-4 py-2 flex flex-wrap items-center justify-between gap-3 shrink-0 backdrop-blur-md z-20">
+      
+      <!-- Brand & Summary Badges -->
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 text-white font-extrabold text-xl shrink-0">
+          R
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-extrabold text-sm tracking-tight text-white">FB Reels Auto Scheduler</h1>
+            <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">
+              Meta Graph API
+            </span>
+          </div>
+
+          <!-- Summary Metrics Chips -->
+          <div class="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5 flex-wrap">
+            <span class="text-slate-300 font-semibold">{{ systemStats.total_pages }} Fanpages</span>
+            <span v-if="systemStats.selected_pages > 0" class="px-1.5 py-0.2 rounded bg-blue-500/10 text-blue-400 font-bold border border-blue-500/30">
+              {{ systemStats.selected_pages }} đã chọn
+            </span>
+            <span class="text-slate-600">•</span>
+            <span class="text-amber-400 font-medium">{{ systemStats.pending_tasks }} Chờ</span>
+            <span class="text-slate-600">•</span>
+            <span class="text-blue-400 font-medium" v-if="systemStats.running_tasks > 0">
+              {{ systemStats.running_tasks }} Đang đăng •
+            </span>
+            <span class="text-emerald-400 font-medium">{{ systemStats.success_tasks }} Đã đăng</span>
+            <span v-if="systemStats.failed_tasks > 0" class="text-rose-400 font-medium">
+              • {{ systemStats.failed_tasks }} Lỗi
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Navigation Tabs (Quản Lý Fanpage / Lên Lịch Reels) -->
+      <div class="flex items-center bg-slate-950/80 p-1 rounded-xl border border-slate-800">
+        <button @click="setTab('pages')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition"
+                :class="currentTab === 'pages' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'">
+          <span>📢 Quản Lý Fanpage</span>
+          <span class="px-1.5 py-0.2 rounded-full text-[10px] bg-black/20">{{ pages.length }}</span>
+        </button>
+        <button @click="setTab('schedules')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition"
+                :class="currentTab === 'schedules' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'">
+          <span>📅 Lên Lịch Reels</span>
+          <span class="px-1.5 py-0.2 rounded-full text-[10px] bg-black/20">{{ systemStats.pending_tasks }}</span>
+        </button>
+      </div>
+
+      <!-- Multi-Admin Connection Management Header Widget -->
+      <div class="flex items-center gap-2 bg-slate-950/80 p-1.5 px-3 rounded-xl border border-slate-800">
+        
+        <!-- Connected Admins Trigger Pill -->
+        <button @click="openAccountsModal" class="flex items-center gap-2 hover:bg-slate-800/80 p-1 px-2 rounded-lg transition text-left" title="Xem và quản lý các tài khoản Facebook Admin">
+          <span class="relative flex h-2.5 w-2.5">
+            <span v-if="connectedAdminCount > 0" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5" :class="connectedAdminCount > 0 ? 'bg-emerald-500' : 'bg-rose-500'"></span>
+          </span>
+          <div class="text-xs">
+            <span class="text-slate-400 font-medium">Admins:</span>
+            <b class="ml-1 font-bold" :class="connectedAdminCount > 0 ? 'text-emerald-400' : 'text-rose-400'">
+              {{ connectedAdminCount > 0 ? connectedAdminCount + ' Đang kết nối' : '0 Đang kết nối' }}
+            </b>
+          </div>
+          <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+
+        <!-- Nút + Thêm Admin -->
+        <button @click="startMetaOAuthFlow()" class="flex items-center gap-1 text-xs px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition shadow-sm active:scale-95" title="Kết nối thêm tài khoản Facebook Admin mới qua Meta OAuth">
+          <span>+ Thêm Admin</span>
+        </button>
+
+        <!-- Nút Quản Lý Tài Khoản -->
+        <button @click="openAccountsModal" class="flex items-center gap-1 text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition" title="Mở bảng quản lý chi tiết các tài khoản Facebook Admin">
+          <span>👥 Quản Lý</span>
+        </button>
+
+        <div class="h-4 w-px bg-slate-800 mx-0.5"></div>
+
+        <!-- Đồng bộ toàn bộ Pages button -->
+        <button @click="handleSyncPages" :disabled="isSyncingPages || connectedAdminCount === 0" class="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold transition" title="Đồng bộ danh sách Fanpage từ Meta Graph API cho tất cả Admin đang kết nối">
+          <svg class="w-3.5 h-3.5" :class="isSyncingPages ? 'animate-spin text-blue-400' : 'text-slate-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          <span>{{ isSyncingPages ? 'Đang đồng bộ...' : 'Đồng Bộ' }}</span>
+        </button>
+      </div>
+
+      <!-- Runner Config & Controls + User Profile -->
+      <div class="flex items-center gap-2.5">
+        <!-- Luồng chạy đa luồng -->
+        <div class="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-slate-800 text-xs">
+          <label class="text-slate-400 font-medium">Luồng:</label>
+          <input type="number" v-model.number="config.threads" min="1" max="10" class="w-12 bg-slate-900 border border-slate-700 rounded-lg px-1.5 py-0.5 text-center font-bold text-white focus:outline-none focus:border-blue-500 text-xs" title="Số luồng upload & publish song song">
+        </div>
+
+        <!-- Trạng thái runner -->
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+          <span class="h-2 w-2 rounded-full" :class="isRunning ? 'bg-blue-400 animate-ping' : 'bg-slate-400'"></span>
+          <span>{{ isRunning ? 'Đang chạy' : 'Đang rảnh' }}</span>
+        </div>
+
+        <!-- Nút RUN TEST: Chẩn đoán toàn diện KHÔNG upload -->
+        <button @click="handleRunTest" :disabled="isRunning || isRunningTest" class="flex items-center gap-1.5 bg-gradient-to-r from-amber-600 to-indigo-600 hover:from-amber-500 hover:to-indigo-500 text-white font-bold px-3 py-1.5 rounded-xl shadow-lg shadow-indigo-950/40 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-xs" title="Kiểm tra token, quyền Page, video và caption mà KHÔNG đăng hay tải video">
+          <svg v-if="isRunningTest" class="animate-spin w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+          <span v-else class="text-sm">🧪</span>
+          <span>Chạy Thử</span>
+        </button>
+
+        <!-- Nút RUN TASK: Đăng thật lên Graph API -->
+        <button @click="handleRunBatch" :disabled="isRunning || systemStats.selected_pages === 0" class="flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold px-3.5 py-1.5 rounded-xl shadow-lg shadow-emerald-950/40 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-xs" title="Upload và Đăng Reels thật cho các Fanpage đã chọn qua Meta Graph API">
+          <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M4.5 3.5v13l11-6.5-11-6.5z"/></svg>
+          <span>Đăng Reels</span>
+        </button>
+
+        <!-- Nút DỪNG KHẨN CẤP -->
+        <button @click="handleStopBatch" :disabled="!isRunning" class="flex items-center gap-1 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold px-3 py-1.5 rounded-xl shadow-lg shadow-rose-950/40 transition active:scale-95 text-xs" title="Dừng ngay lập tức các luồng đang xử lý">
+          <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M5 4h10v12H5V4z"/></svg>
+          <span>Dừng</span>
+        </button>
+
+        <!-- User Profile & Logout Widget -->
+        <div v-if="currentUser" class="flex items-center gap-2 bg-slate-950/90 p-1.5 px-3 rounded-xl border border-slate-800 ml-1">
+          <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow-sm">
+            {{ (currentUser.username || 'U').charAt(0).toUpperCase() }}
+          </div>
+          <div class="text-xs">
+            <div class="flex items-center gap-1.5">
+              <span class="font-bold text-slate-200">{{ currentUser.full_name || currentUser.username }}</span>
+              <span v-if="currentUser.role === 'admin'" class="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                👑 Admin
+              </span>
+              <span v-else class="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                👤 User
+              </span>
+            </div>
+          </div>
+          <button @click="handleLogout" class="ml-1 text-slate-400 hover:text-rose-400 p-1 rounded-lg transition" title="Đăng xuất khỏi hệ thống">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ================= MAIN WORKSPACE ================= -->
+    <main class="flex-1 flex overflow-hidden p-3 gap-2">
+
+      <!-- ================= LEFT: FANPAGE MANAGEMENT ================= -->
+      <section 
+        class="flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl shrink-0 transition-all duration-75"
+        :class="{ 'hidden md:flex': currentTab !== 'pages' }"
+        :style="{ width: sidebarWidth + 'px', minWidth: '320px', maxWidth: '750px' }">
+        
+        <!-- Header Fanpage -->
+        <div class="p-3 border-b border-slate-800 bg-slate-900 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-base">📢</span>
+            <h2 class="font-bold text-white text-sm">Quản Lý Fanpage</h2>
+            <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">{{ pages.length }}</span>
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <button @click="openAccountsModal" class="flex items-center gap-1 px-2.5 py-1 bg-blue-600/90 hover:bg-blue-600 text-white rounded-lg text-xs font-semibold transition shadow-sm" title="Quản lý các tài khoản Facebook Admin">
+              <span>👥 Admins</span>
+            </button>
+            <button @click="handleSyncPages" :disabled="isSyncingPages" class="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs transition" title="Đồng bộ danh sách Page từ Graph API">
+              <svg class="w-3.5 h-3.5" :class="isSyncingPages ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              <span>Đồng Bộ</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Multi-Admin Filter Toolbar (Lọc theo 1 hoặc nhiều tài khoản Admin) -->
+        <div v-if="accounts.length > 0" class="px-2.5 py-2 border-b border-slate-800/80 bg-slate-950/70 space-y-1.5">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="font-bold text-slate-300 flex items-center gap-1.5">
+              <span>👥 Lọc theo Admin FB:</span>
+            </span>
+            <div class="flex items-center gap-2">
+              <button @click="clearAdminFilter" class="text-blue-400 hover:text-blue-300 transition underline text-[10px]">(Tất cả)</button>
+              <button @click="selectAllConnectedAdminFilters" class="text-slate-400 hover:text-slate-200 transition underline text-[10px]">(Chọn hết)</button>
+            </div>
+          </div>
+          <!-- Admin Filter Chips -->
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <button @click="clearAdminFilter"
+                    class="px-2 py-0.5 rounded-lg text-[11px] font-medium transition flex items-center gap-1 border"
+                    :class="selectedAdminFilterIds.length === 0
+                      ? 'bg-blue-600 border-blue-500 text-white font-bold shadow-sm'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800'">
+              <span>Tất cả</span>
+            </button>
+            <button v-for="acc in accounts" :key="acc.id"
+                    @click="toggleAdminFilter(acc.id)"
+                    class="px-2 py-0.5 rounded-lg text-[11px] font-medium transition flex items-center gap-1.5 border"
+                    :class="selectedAdminFilterIds.includes(acc.id)
+                      ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200 font-bold shadow-sm'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800'">
+              <span class="w-1.5 h-1.5 rounded-full" :class="acc.status === 'connected' ? 'bg-emerald-400' : 'bg-rose-400'"></span>
+              <span class="truncate max-w-[110px]" :title="acc.user_name">{{ acc.user_name }}</span>
+              <span class="text-[9px] opacity-75 font-mono">({{ acc.managed_pages_count }})</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Search & Filter Toolbar -->
+        <div class="p-2.5 border-b border-slate-800/80 bg-slate-950/40 space-y-2">
+          <div class="relative">
+            <input type="text" v-model="searchPage" @input="loadPages" placeholder="Tìm kiếm Fanpage theo tên, Page ID..." class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-1.5 pl-8 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+            <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          </div>
+
+          <!-- Selection & Filter Tabs -->
+          <div class="flex items-center justify-between text-xs px-1 text-slate-400 flex-wrap gap-1">
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] text-slate-300">
+                Đã chọn: <b class="text-blue-400 font-bold">{{ selectedPageCount }}</b> / {{ pages.length }}
+              </span>
+              <button @click="handleToggleSelectAll(true)" class="text-[11px] text-blue-400 hover:text-blue-300 transition underline">(Chọn tất cả)</button>
+              <button @click="handleToggleSelectAll(false)" class="text-[11px] text-slate-400 hover:text-rose-400 transition underline">(Bỏ chọn)</button>
+            </div>
+
+            <!-- Filter Status -->
+            <div class="flex items-center gap-1 text-[11px]">
+              <button @click="filterPageStatus = ''; loadPages()" class="px-2 py-0.5 rounded transition" :class="filterPageStatus === '' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-slate-200'">Tất cả</button>
+              <button @click="filterPageStatus = 'can_post'; loadPages()" class="px-2 py-0.5 rounded transition" :class="filterPageStatus === 'can_post' ? 'bg-emerald-950/60 text-emerald-400 font-bold border border-emerald-800/40' : 'text-slate-400 hover:text-slate-200'">Đủ quyền</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fanpage List Table -->
+        <div class="flex-1 overflow-y-auto">
+          <table class="w-full text-left border-collapse select-none">
+            <thead class="sticky top-0 bg-slate-950/95 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider z-10 backdrop-blur-sm">
+              <tr>
+                <th class="py-2 px-2 w-8 text-center">
+                  <input type="checkbox" :checked="isAllPagesSelected" @change="handleToggleSelectAll($event.target.checked)" class="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer" title="Chọn / Bỏ chọn tất cả Fanpage">
+                </th>
+                <th class="py-2 px-2.5">Fanpage</th>
+                <th class="py-2 px-1 w-16 text-center">Tasks</th>
+                <th class="py-2 px-1 w-24 text-center">Quyền</th>
+                <th class="py-2 px-2 text-right w-20">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/60 text-xs">
+              <tr v-if="pages.length === 0">
+                <td colspan="5" class="text-center py-12 text-slate-500 text-xs">
+                  <div class="space-y-2">
+                    <p>Chưa có Fanpage nào được đồng bộ.</p>
+                    <button @click="openAccountsModal" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition shadow-md">
+                      🔗 Quản Lý / Thêm Tài Khoản Facebook Admin
+                    </button>
+                  </div>
+                </td>
+              </tr>
+
+              <tr v-for="p in pages" :key="p.facebook_page_id"
+                  @click="filterByPage(p.facebook_page_id)"
+                  class="h-10 transition-colors group cursor-pointer"
+                  :class="p.is_selected ? 'bg-blue-950/30 hover:bg-blue-900/30' : (filterPage === p.facebook_page_id ? 'bg-slate-800/70 hover:bg-slate-800/90' : 'hover:bg-slate-800/30')">
+                
+                <!-- Checkbox -->
+                <td class="py-1 px-2 text-center" @click.stop>
+                  <input type="checkbox" :checked="p.is_selected" @change="handleTogglePageSelect(p)" class="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer">
+                </td>
+
+                <!-- Page Info -->
+                <td class="py-1 px-2.5 min-w-0" :title="'Page ID: ' + p.facebook_page_id">
+                  <div class="flex items-center gap-2">
+                    <img v-if="p.avatar_url" :src="p.avatar_url" class="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-700 shadow-sm" alt="Page Avatar">
+                    <div v-else class="w-7 h-7 rounded-lg bg-blue-600/20 text-blue-400 font-bold flex items-center justify-center shrink-0 border border-blue-500/30 text-xs">
+                      {{ (p.name || 'P').charAt(0).toUpperCase() }}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="font-bold text-slate-100 truncate group-hover:text-blue-400 transition-colors text-xs tracking-tight">
+                        {{ p.name }}
+                      </div>
+                      <div class="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono mt-0.5">
+                        <span class="truncate">{{ p.facebook_page_id }}</span>
+                        <button @click.stop="copyToClipboard(p.facebook_page_id)" class="text-slate-500 hover:text-white transition" title="Sao chép Facebook Page ID">
+                          <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                        </button>
+                        <span v-if="p.category" class="text-slate-500 font-sans truncate">• {{ p.category }}</span>
+                      </div>
+
+                      <!-- Multi-Admin Badges (Nhiều - Nhiều) -->
+                      <div v-if="p.admin_accounts && p.admin_accounts.length > 0" class="flex items-center gap-1 flex-wrap mt-1">
+                        <span v-for="adm in p.admin_accounts" :key="adm.account_id"
+                              class="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-medium border"
+                              :class="adm.account_status === 'connected' ? 'bg-indigo-950/40 text-indigo-300 border-indigo-800/40' : 'bg-slate-800 text-slate-400 border-slate-700'"
+                              :title="'Admin: ' + adm.user_name + ' (' + adm.user_id + ') - ' + (adm.account_status === 'connected' ? 'Đang kết nối' : 'Đã ngắt')">
+                          <span class="w-1.5 h-1.5 rounded-full" :class="adm.account_status === 'connected' ? 'bg-emerald-400' : 'bg-rose-500'"></span>
+                          <span class="truncate max-w-[85px]">{{ adm.user_name }}</span>
+                        </span>
+                      </div>
+                      <div v-else-if="p.admin_names" class="text-[9px] text-slate-500 mt-0.5 truncate">
+                        Admin: {{ p.admin_names }}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+
+                <!-- Pending Tasks Badge -->
+                <td class="py-1 px-1 text-center whitespace-nowrap" @click.stop="filterByPage(p.facebook_page_id)">
+                  <span class="cursor-pointer px-1.5 py-0.5 rounded text-[10px] font-bold font-mono transition inline-block"
+                        :class="p.pending_count > 0 ? 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30' : 'bg-slate-800 text-slate-500 hover:bg-slate-700'"
+                        :title="'Click để xem ' + (p.pending_count || 0) + ' task chờ của Page này'">
+                    {{ p.pending_count || 0 }} chờ
+                  </span>
+                </td>
+
+                <!-- Quyền Đăng & Trạng thái Token -->
+                <td class="py-1 px-1 text-center whitespace-nowrap" @click.stop>
+                  <div class="space-y-0.5">
+                    <span v-if="p.can_post" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 inline-block" title="Đã có Page Access Token và quyền CREATE_CONTENT">
+                      ✓ Đủ quyền
+                    </span>
+                    <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 inline-block" title="Chưa có quyền CREATE_CONTENT hoặc thiếu Token">
+                      ⚠ Thiếu quyền
+                    </span>
+                    <div v-if="p.token_status && p.token_status !== 'valid'" class="text-[9px] text-rose-400 font-mono">
+                      Token lỗi
+                    </div>
+                  </div>
+                </td>
+
+                <!-- Actions -->
+                <td class="py-1 px-2 text-right whitespace-nowrap" @click.stop>
+                  <div class="flex items-center justify-end gap-1">
+                    <!-- Kiểm tra quyền Graph API -->
+                    <button @click="handleCheckPagePermission(p)" class="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded transition" title="Kiểm tra quyền đăng với Meta Graph API">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </button>
+
+                    <!-- Thêm Task Cho Page Này -->
+                    <button @click="openSingleTaskModal(p.facebook_page_id)" class="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded transition" title="Tạo task mới cho Fanpage này">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                    </button>
+
+                    <!-- Xóa Page khỏi tool -->
+                    <button @click="handleDeletePage(p)" class="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition" title="Xóa Fanpage khỏi ứng dụng (không ảnh hưởng Fanpage trên Facebook)">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                  </div>
+                </td>
+
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Hint Footer -->
+        <div class="px-3 py-1.5 border-t border-slate-800 bg-slate-950/70 text-[10px] text-slate-500 flex items-center justify-between">
+          <span>Click vào dòng để lọc task theo Page</span>
+          <span class="font-mono">Total: {{ pages.length }}</span>
+        </div>
+
+      </section>
+
+      <!-- ================= RESIZABLE SPLITTER HANDLE ================= -->
+      <div 
+        class="hidden md:flex w-2.5 -mx-1 hover:w-2.5 bg-transparent hover:bg-blue-500/30 cursor-col-resize select-none items-center justify-center transition-colors group relative z-20 shrink-0"
+        :class="isResizingSplitter ? 'bg-blue-500/50' : ''"
+        @mousedown="startResizeSplitter"
+        title="Kéo sang trái/phải để thay đổi độ rộng cột Fanpage"
+      >
+        <div class="w-1 h-8 rounded-full bg-slate-700/80 group-hover:bg-blue-400 group-hover:h-12 transition-all"></div>
+      </div>
+
+      <!-- ================= RIGHT: TASK MANAGEMENT ================= -->
+      <section 
+        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0"
+        :class="{ 'hidden md:flex': currentTab !== 'schedules' }">
+        
+        <!-- Task Action Toolbar -->
+        <div class="p-3 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-3">
+          
+          <!-- Filters & Search -->
+          <div class="flex items-center gap-2.5 flex-wrap">
+            <div class="flex items-center gap-1.5 text-xs text-slate-400">
+              <span>Fanpage:</span>
+              <select v-model="filterPage" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 max-w-[180px]">
+                <option value="">Tất cả Fanpage</option>
+                <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">{{ p.name }}</option>
+              </select>
+            </div>
+
+            <div class="flex items-center gap-1.5 text-xs text-slate-400">
+              <select v-model="filterStatus" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+                <option value="">Tất cả trạng thái</option>
+                <option value="pending">Chờ xử lý (Pending)</option>
+                <option value="running">Đang đăng (Running)</option>
+                <option value="success">Thành công (Success)</option>
+                <option value="failed">Thất bại (Failed)</option>
+              </select>
+            </div>
+
+            <div class="relative">
+              <input type="text" v-model="searchTask" @input="loadTasks" placeholder="Tìm caption, video, id..." class="w-44 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 pl-7 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+              <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2 top-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            </div>
+          </div>
+
+          <!-- Buttons -->
+          <div class="flex items-center gap-2">
+            <button @click="openSingleTaskModal()" class="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold px-3 py-1.5 rounded-lg text-xs transition">
+              <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+              <span>+ Thêm Task Đơn Lẻ</span>
+            </button>
+
+            <button @click="openBulkTaskModal" class="flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold px-3.5 py-1.5 rounded-lg text-xs transition shadow-md">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              <span>📋 Nhập Nhanh Từ Excel (Bulk)</span>
+            </button>
+
+            <button @click="loadAll" title="Làm mới bảng" class="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            </button>
+          </div>
+
+        </div>
+
+        <!-- Task Table -->
+        <div class="flex-1 overflow-auto">
+          <table class="w-full text-left border-collapse">
+            <thead class="sticky top-0 bg-slate-950/95 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider select-none z-10 backdrop-blur-sm">
+              <tr>
+                <th class="py-2.5 px-3 w-12 text-center">ID</th>
+                <th class="py-2.5 px-3 w-40">Fanpage</th>
+                <th class="py-2.5 px-3 min-w-[180px]">Video File</th>
+                <th class="py-2.5 px-3 min-w-[200px]">Caption & Bình luận</th>
+                <th class="py-2.5 px-3 w-32">Hẹn Giờ Meta</th>
+                <th class="py-2.5 px-3 w-28 text-center">Trạng Thái</th>
+                <th class="py-2.5 px-3 min-w-[160px]">Link Reels / Log Lỗi</th>
+                <th class="py-2.5 px-3 w-24 text-center">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/60 text-xs font-normal">
+              <tr v-if="tasks.length === 0">
+                <td colspan="8" class="text-center py-20 text-slate-500">
+                  Chưa có task nào.<br>Bấm <b>+ Thêm Task Đơn Lẻ</b> hoặc <b>Nhập Nhanh Từ Excel</b> để tạo lịch đăng.
+                </td>
+              </tr>
+
+              <tr v-for="t in tasks" :key="t.id" class="hover:bg-slate-800/40 transition">
+                <td class="py-2.5 px-3 text-center font-mono text-slate-400 font-semibold">{{ t.id }}</td>
+                
+                <!-- Fanpage -->
+                <td class="py-2.5 px-3">
+                  <div class="font-bold text-white text-xs truncate max-w-[160px]">{{ t.page_name || t.profile_name || 'Chưa gán Page' }}</div>
+                  <div class="text-[10px] text-slate-500 font-mono truncate" v-if="t.facebook_page_id">
+                    ID: {{ t.facebook_page_id }}
+                  </div>
+                </td>
+
+                <!-- Video File -->
+                <td class="py-2.5 px-3 max-w-[220px]">
+                  <div class="flex items-center gap-1.5 group/vid">
+                    <span class="truncate font-mono text-[11px] text-slate-200" :title="t.video_path">
+                      {{ getFileName(t.video_path) }}
+                    </span>
+                    <button @click="copyToClipboard(t.video_path)" class="opacity-0 group-hover/vid:opacity-100 text-slate-400 hover:text-white transition" title="Sao chép đường dẫn">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                    </button>
+                  </div>
+                  <div class="text-[10px] text-slate-500 truncate font-mono" :title="t.video_path">{{ t.video_path }}</div>
+                </td>
+
+                <!-- Caption & Comment -->
+                <td class="py-2.5 px-3 max-w-[240px]">
+                  <div class="text-slate-300 truncate font-medium whitespace-pre-line" :title="t.caption">
+                    {{ t.caption || '—' }}
+                  </div>
+                  <div v-if="t.comment_text" class="text-[10px] text-indigo-400 truncate mt-0.5" :title="t.comment_text">
+                    💬 {{ t.comment_text }}
+                  </div>
+                </td>
+
+                <!-- Schedule -->
+                <td class="py-2.5 px-3 whitespace-nowrap">
+                  <div v-if="t.schedule_date || t.schedule_time">
+                    <div class="font-semibold text-slate-200">{{ t.schedule_date }}</div>
+                    <div class="text-[11px] font-mono text-slate-400">{{ t.schedule_time || '00:00' }}</div>
+                  </div>
+                  <div v-else class="text-slate-500">Đăng ngay</div>
+                </td>
+
+                <!-- Status -->
+                <td class="py-2.5 px-3 text-center whitespace-nowrap">
+                  <span v-if="t.status === 'pending'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Chờ xử lý</span>
+                  <span v-else-if="t.status === 'running'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/30 animate-pulse">Đang đăng...</span>
+                  <span v-else-if="t.status === 'success'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Thành công</span>
+                  <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">Thất bại</span>
+                </td>
+
+                <!-- Link Reels / Log -->
+                <td class="py-2.5 px-3 max-w-[220px]">
+                  <div v-if="t.video_url" class="truncate">
+                    <a :href="t.video_url" target="_blank" class="text-blue-400 hover:underline font-semibold text-[11px] flex items-center gap-1">
+                      <span>🔗 Xem Reels Facebook</span>
+                    </a>
+                  </div>
+                  <div v-if="t.log" @click="openLogModal(t)" class="truncate cursor-pointer hover:underline text-[11px] mt-0.5" :class="t.status === 'failed' ? 'text-rose-400 font-semibold' : 'text-slate-400'" :title="t.log">
+                    {{ t.log }}
+                  </div>
+                  <div v-if="t.done_time" class="text-[10px] font-mono text-slate-500 mt-0.5">
+                    Xong: {{ t.done_time }}
+                  </div>
+                </td>
+
+                <!-- Actions -->
+                <td class="py-2.5 px-3 text-center whitespace-nowrap">
+                  <div class="flex items-center justify-center gap-1">
+                    <button @click="openEditTaskModal(t)" title="Sửa task" class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                    </button>
+                    <button @click="handleResetTask(t.id)" title="Đặt lại về Pending" class="p-1 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded transition">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    </button>
+                    <button @click="handleDeleteTask(t.id)" title="Xóa task" class="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Footer -->
+        <div class="px-4 py-2 border-t border-slate-800 bg-slate-950/70 flex items-center justify-between text-xs text-slate-400 shrink-0">
+          <span>Tổng cộng: <b class="text-white">{{ tasks.length }}</b> tasks</span>
+          <span class="text-[11px] text-slate-500">Tự động đồng bộ mỗi 3 giây • Chuẩn Meta Graph API</span>
+        </div>
+
+      </section>
+
+    </main>
+
+    <!-- ================= MODAL: CHẠY THỬ (RUN TEST DIAGNOSTIC) ================= -->
+    <div v-if="showRunTestModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div class="flex items-center gap-2">
+            <span class="text-xl">🧪</span>
+            <div>
+              <h3 class="font-bold text-white text-base">Kết Quả Chẩn Đoán Hệ Thống (Run Test)</h3>
+              <p class="text-[11px] text-slate-400">Kiểm tra toàn diện trước khi đăng - Tuyệt đối không upload hay publish video</p>
+            </div>
+          </div>
+          <button @click="showRunTestModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <div class="p-5 overflow-y-auto space-y-4">
+          <!-- Summary Banner -->
+          <div class="p-3.5 rounded-xl border flex items-center justify-between"
+               :class="{
+                 'bg-emerald-950/40 border-emerald-600/50 text-emerald-300': testResult.status === 'passed',
+                 'bg-amber-950/40 border-amber-600/50 text-amber-300': testResult.status === 'warning',
+                 'bg-rose-950/40 border-rose-600/50 text-rose-300': testResult.status === 'failed'
+               }">
+            <div class="flex items-center gap-2.5">
+              <span class="text-2xl font-bold">
+                {{ testResult.status === 'passed' ? '✅' : (testResult.status === 'warning' ? '⚠️' : '❌') }}
+              </span>
+              <div>
+                <div class="font-bold text-sm uppercase tracking-wide">
+                  {{ testResult.status === 'passed' ? 'Hệ thống sẵn sàng đăng Reels!' : (testResult.status === 'warning' ? 'Có cảnh báo cần lưu ý' : 'Chưa đủ điều kiện đăng bài') }}
+                </div>
+                <div class="text-xs opacity-90 mt-0.5">{{ testResult.message }}</div>
+              </div>
+            </div>
+            <span class="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-black/40">
+              {{ testResult.status }}
+            </span>
+          </div>
+
+          <!-- Step 1: Facebook Admin OAuth & Token -->
+          <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2 font-bold text-xs text-white">
+                <span>1. Tài Khoản Facebook Admin & Token</span>
+              </div>
+              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                    :class="testResult.oauth_check?.connected ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'">
+                {{ testResult.oauth_check?.connected ? (testResult.oauth_check?.connected_count ? testResult.oauth_check.connected_count + ' Admin hợp lệ' : '✓ Hợp lệ') : '✗ Chưa kết nối' }}
+              </span>
+            </div>
+            <div class="text-xs text-slate-300 space-y-1 pl-4 border-l-2 border-slate-800 font-mono text-[11px]">
+              <div>• Admin chính: <b>{{ testResult.oauth_check?.user_name || 'N/A' }}</b> (ID: {{ testResult.oauth_check?.user_id || 'N/A' }})</div>
+              <div>• Hạn token: {{ testResult.oauth_check?.token_expires_at || 'Không xác định' }} ({{ testResult.oauth_check?.days_remaining != null ? testResult.oauth_check.days_remaining + ' ngày còn lại' : 'N/A' }})</div>
+              <div v-if="testResult.oauth_check?.accounts && testResult.oauth_check.accounts.length > 1" class="text-indigo-300">
+                • Các Admin kết nối ({{ testResult.oauth_check.accounts.length }}): {{ testResult.oauth_check.accounts.map(a => a.user_name).join(', ') }}
+              </div>
+              <div v-if="testResult.oauth_check?.missing_scopes?.length" class="text-rose-400">
+                • Thiếu Scopes: {{ testResult.oauth_check.missing_scopes.join(', ') }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: Fanpage Permissions -->
+          <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2 font-bold text-xs text-white">
+                <span>2. Quyền Đăng Bài Fanpage ({{ testResult.page_checks?.length || 0 }} Pages)</span>
+              </div>
+              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                    :class="testResult.valid_pages_count > 0 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'">
+                {{ testResult.valid_pages_count }}/{{ testResult.page_checks?.length || 0 }} Đủ quyền
+              </span>
+            </div>
+            <div class="space-y-1.5 max-h-36 overflow-y-auto">
+              <div v-for="p in testResult.page_checks" :key="p.facebook_page_id" class="flex items-center justify-between text-xs p-2 rounded-lg bg-slate-900 border border-slate-800/80">
+                <div class="truncate">
+                  <span class="font-bold text-slate-200">{{ p.name }}</span>
+                  <span class="text-[10px] text-slate-500 font-mono ml-1.5">({{ p.facebook_page_id }})</span>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span v-if="p.can_post" class="text-emerald-400 text-[11px] font-bold">✓ CREATE_CONTENT</span>
+                  <span v-else class="text-rose-400 text-[11px] font-bold">⚠ {{ p.error || 'Thiếu quyền' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: Video Files Check -->
+          <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2 font-bold text-xs text-white">
+                <span>3. Kiểm Tra File Video ({{ testResult.video_checks?.length || 0 }} files)</span>
+              </div>
+              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                    :class="testResult.valid_videos_count === testResult.video_checks?.length ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'">
+                {{ testResult.valid_videos_count }}/{{ testResult.video_checks?.length || 0 }} Tồn tại
+              </span>
+            </div>
+            <div class="space-y-1 max-h-36 overflow-y-auto font-mono text-[11px]">
+              <div v-for="(v, idx) in testResult.video_checks" :key="idx" class="flex items-center justify-between p-1.5 rounded bg-slate-900">
+                <div class="truncate text-slate-300" :title="v.path">{{ getFileName(v.path) }}</div>
+                <div class="shrink-0 flex items-center gap-2">
+                  <span class="text-slate-400">{{ v.size_mb ? v.size_mb + ' MB' : '' }}</span>
+                  <span v-if="v.exists" class="text-emerald-400 font-bold">✓ OK</span>
+                  <span v-else class="text-rose-400 font-bold">✗ Không tìm thấy!</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 4: Caption & Schedules Check -->
+          <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2 font-bold text-xs text-white">
+                <span>4. Caption & Hẹn Giờ Meta</span>
+              </div>
+              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                    :class="testResult.invalid_schedules_count === 0 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'">
+                {{ testResult.invalid_schedules_count === 0 ? '✓ Chuẩn Meta' : '⚠ Cần điều chỉnh giờ' }}
+              </span>
+            </div>
+            <div class="text-xs text-slate-400 pl-4 border-l-2 border-slate-800 space-y-1">
+              <div>• Meta Graph API yêu cầu: Thời gian hẹn giờ phải cách thời điểm hiện tại từ <b>20 phút đến 75 ngày</b>.</div>
+              <div v-if="testResult.schedule_warnings?.length" class="text-amber-400 space-y-0.5 mt-1">
+                <div v-for="(w, idx) in testResult.schedule_warnings" :key="idx">• {{ w }}</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="px-5 py-3 border-t border-slate-800 bg-slate-900 flex justify-end gap-2.5">
+          <button @click="showRunTestModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
+          <button v-if="testResult.status === 'passed'" @click="showRunTestModal = false; handleRunBatch()" class="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md">
+            ▶ Tiến Hành Đăng Thật Ngay
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ================= MODAL: QUẢN LÝ NHIỀU TÀI KHOẢN FACEBOOK ADMIN (MULTI-ADMIN OAUTH) ================= -->
+    <div v-if="showAccountsModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        
+        <!-- Header -->
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div class="flex items-center gap-2.5">
+            <span class="text-xl">👥</span>
+            <div>
+              <h3 class="font-bold text-white text-base">Quản Lý Tài Khoản Facebook Admin</h3>
+              <p class="text-[11px] text-slate-400">Kết nối nhiều tài khoản Facebook cá nhân độc lập qua Meta OAuth 2.0</p>
+            </div>
+          </div>
+          <button @click="showAccountsModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <div class="p-5 overflow-y-auto space-y-4">
+          
+          <!-- Top Action Bar -->
+          <div class="flex items-center justify-between bg-slate-950/70 p-3 rounded-xl border border-slate-800 flex-wrap gap-2">
+            <div class="text-xs">
+              <span class="text-slate-400">Tổng tài khoản:</span>
+              <b class="text-white ml-1 font-bold">{{ accounts.length }}</b>
+              <span class="text-slate-600 mx-2">•</span>
+              <span class="text-emerald-400 font-semibold">{{ connectedAdminCount }} Đang kết nối</span>
+            </div>
+            
+            <div class="flex items-center gap-2">
+              <button @click="handleSyncPages" :disabled="isSyncingPages || connectedAdminCount === 0" class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition disabled:opacity-40">
+                <svg class="w-3.5 h-3.5" :class="isSyncingPages ? 'animate-spin text-blue-400' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                <span>Đồng Bộ Toàn Bộ Pages</span>
+              </button>
+
+              <button @click="startMetaOAuthFlow()" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-md active:scale-95">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                <span>+ Thêm Tài Khoản Facebook</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Empty State -->
+          <div v-if="accounts.length === 0" class="py-12 text-center space-y-3 bg-slate-950/40 rounded-xl border border-slate-800">
+            <div class="text-4xl">👥</div>
+            <div class="text-sm font-bold text-white">Chưa có tài khoản Facebook Admin nào được kết nối</div>
+            <p class="text-xs text-slate-400 max-w-md mx-auto">
+              Hãy kết nối tài khoản Facebook đầu tiên để tự động tải danh sách Fanpage và bắt đầu lên lịch đăng Reels.
+            </p>
+            <button @click="startMetaOAuthFlow()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg transition">
+              🔗 Kết Nối Tài Khoản Facebook Ngay
+            </button>
+          </div>
+
+          <!-- Accounts List -->
+          <div v-else class="space-y-3">
+            <div v-for="acc in accounts" :key="acc.id" class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition flex flex-col md:flex-row md:items-center justify-between gap-4">
+              
+              <!-- Left: User Info -->
+              <div class="flex items-start gap-3 min-w-0">
+                <img v-if="acc.avatar_url" :src="acc.avatar_url" class="w-10 h-10 rounded-full object-cover shrink-0 shadow-md border border-slate-700" alt="Admin Avatar">
+                <div v-else class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-bold text-white text-base shrink-0 shadow-md">
+                  {{ (acc.user_name || 'F').charAt(0).toUpperCase() }}
+                </div>
+                <div class="space-y-1 min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-bold text-white text-sm truncate">{{ acc.user_name || 'Facebook User' }}</span>
+                    <!-- Status Badge -->
+                    <span v-if="acc.status === 'connected'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      🟢 Đang kết nối
+                    </span>
+                    <span v-else-if="acc.status === 'expired'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                      🟡 Hết hạn token
+                    </span>
+                    <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                      🔴 Đã ngắt
+                    </span>
+                  </div>
+
+                  <div class="flex items-center gap-2 text-xs text-slate-400 font-mono">
+                    <span>ID: {{ acc.user_id }}</span>
+                    <button @click="copyToClipboard(acc.user_id)" class="text-slate-500 hover:text-white transition" title="Sao chép User ID">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                    </button>
+                    <span class="text-slate-600">•</span>
+                    <span class="text-slate-300 font-sans">
+                      📢 <b>{{ acc.managed_pages_count }}</b> Fanpage ({{ acc.postable_pages_count }} đủ quyền)
+                    </span>
+                  </div>
+
+                  <!-- Token info & Expiry -->
+                  <div class="text-[11px] text-slate-400">
+                    <span>Hạn token: <b class="text-slate-300">{{ acc.token_expires_at || 'Không thời hạn' }}</b></span>
+                    <span v-if="acc.days_remaining != null" class="ml-1" :class="acc.days_remaining < 7 ? 'text-amber-400 font-bold' : 'text-slate-400'">
+                      ({{ acc.days_remaining }} ngày còn lại)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right: Actions per Account -->
+              <div class="flex items-center gap-1.5 shrink-0 flex-wrap">
+                <!-- Đồng bộ Page của riêng Admin này -->
+                <button @click="handleSyncAccountPages(acc.id)" :disabled="isSyncingPages || acc.status !== 'connected'" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition disabled:opacity-40 flex items-center gap-1" title="Đồng bộ danh sách Fanpage của riêng tài khoản này">
+                  <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                  <span>Đồng Bộ</span>
+                </button>
+
+                <!-- Kết nối lại (khi hết hạn hoặc muốn làm mới) -->
+                <button @click="handleReconnectAccount(acc.id)" class="px-2.5 py-1.5 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-800/60 text-xs font-semibold transition flex items-center gap-1" title="Cấp lại quyền OAuth cho tài khoản này">
+                  <span>🔗 Kết Nối Lại</span>
+                </button>
+
+                <!-- Ngắt kết nối (nếu đang connected) -->
+                <button v-if="acc.status === 'connected'" @click="handleDisconnectAccount(acc.id)" class="px-2.5 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border border-amber-800/50 text-xs font-semibold transition" title="Tạm thời ngắt kết nối tài khoản này">
+                  <span>✕ Ngắt</span>
+                </button>
+
+                <!-- Xóa tài khoản -->
+                <button @click="handleDeleteAccount(acc.id)" class="px-2.5 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 text-xs font-semibold transition" title="Xóa vĩnh viễn tài khoản này khỏi hệ thống">
+                  <span>🗑 Xóa</span>
+                </button>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Explanatory note -->
+          <div class="p-3 bg-blue-950/20 border border-blue-800/40 rounded-xl text-[11px] text-blue-300/90 space-y-1">
+            <div class="font-bold flex items-center gap-1.5">
+              <span>💡 Cơ chế Đa Admin & Tổng hợp Fanpage (Many-to-Many):</span>
+            </div>
+            <div class="leading-relaxed">
+              • Bạn có thể kết nối không giới hạn tài khoản Facebook cá nhân. Hệ thống tự tổng hợp toàn bộ Fanpage từ tất cả tài khoản.<br>
+              • Nếu nhiều Admin cùng quản lý 1 Fanpage, hệ thống sẽ khử trùng lặp và giữ duy nhất 1 bản ghi Fanpage.<br>
+              • Khi ngắt kết nối một Admin, Fanpage dùng chung <b>vẫn được duy trì hoạt động</b> nếu còn ít nhất một Admin khác kết nối.
+            </div>
+          </div>
+
+        </div>
+
+        <div class="px-5 py-3 border-t border-slate-800 bg-slate-900 flex justify-end">
+          <button @click="showAccountsModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ================= MODAL: KẾT NỐI FACEBOOK ADMIN (OAUTH GUIDE) ================= -->
+    <div v-if="showConnectModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col">
+        
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-xl">🔗</span>
+            <h3 class="font-bold text-white text-base">Kết Nối Facebook Admin (Meta OAuth)</h3>
+          </div>
+          <button @click="showConnectModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <div class="p-5 space-y-4">
+          
+          <!-- Trạng thái hiện tại -->
+          <div class="p-3.5 rounded-xl border flex items-center justify-between"
+               :class="metaStatus.is_connected ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300' : 'bg-slate-950/60 border-slate-800 text-slate-300'">
+            <div>
+              <div class="text-xs font-bold">Trạng Thái Kết Nối:</div>
+              <div class="text-sm font-extrabold mt-0.5">
+                {{ metaStatus.is_connected ? '🟢 Đã Kết Nối: ' + metaStatus.user_name : '🔴 Chưa kết nối tài khoản Facebook' }}
+              </div>
+              <div v-if="metaStatus.is_connected" class="text-[11px] text-slate-400 mt-1 font-mono">
+                User ID: {{ metaStatus.user_id }} • Hạn: {{ metaStatus.token_expires_at }}
+              </div>
+            </div>
+            <button v-if="metaStatus.is_connected" @click="handleDisconnectMeta" class="px-3 py-1.5 bg-rose-600/30 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition">
+              Ngắt Kết Nối
+            </button>
+          </div>
+
+          <!-- Hướng dẫn các bước kết nối -->
+          <div class="space-y-2.5 text-xs text-slate-300">
+            <div class="font-bold text-white">Quy trình cấp quyền chuẩn Meta:</div>
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-[11px] leading-relaxed">
+              <div class="flex items-start gap-2">
+                <span class="font-bold text-blue-400">1.</span>
+                <span>Hệ thống chuyển hướng bạn đến cổng xác thực chính thức của <b>Facebook Login OAuth 2.0</b> kèm mã bảo mật chống CSRF.</span>
+              </div>
+              <div class="flex items-start gap-2">
+                <span class="font-bold text-blue-400">2.</span>
+                <span>Bạn đồng ý cấp các quyền bắt buộc: <code class="text-cyan-400">pages_show_list</code>, <code class="text-cyan-400">pages_read_engagement</code>, <code class="text-cyan-400">pages_manage_posts</code>, <code class="text-cyan-400">publish_video</code>.</span>
+              </div>
+              <div class="flex items-start gap-2">
+                <span class="font-bold text-blue-400">3.</span>
+                <span>Cloudflare Worker tự động nâng cấp sang <b>Long-lived Token (60 ngày)</b>, mã hóa đối xứng an toàn bằng AES-256-GCM trong Cloudflare D1 và đồng bộ toàn bộ Fanpage mà bạn có quyền quản lý.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Lưu ý cấu hình Meta App Production -->
+          <div class="p-3 bg-amber-950/20 border border-amber-800/40 rounded-xl text-[11px] text-amber-300/90 space-y-1">
+            <div class="font-bold">⚠️ Lưu ý quan trọng về Meta App:</div>
+            <div>Trong Meta Developer Portal &gt; App &gt; Facebook Login Settings, hãy chắc chắn đã điền <b>Valid OAuth Redirect URIs</b> là:</div>
+            <div class="font-mono bg-black/40 px-2 py-1 rounded text-cyan-300 select-all">
+              https://pagefb.namnangno.click/api/meta/callback
+            </div>
+          </div>
+
+        </div>
+
+        <div class="px-5 py-3.5 border-t border-slate-800 flex justify-end gap-2.5 bg-slate-900">
+          <button @click="showConnectModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
+          <button @click="startMetaOAuthFlow" class="flex items-center gap-2 px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-900/40 transition active:scale-95">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+            <span>Đăng Nhập Với Facebook Ngay</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ================= MODAL: THÊM 1 TASK ĐƠN LẺ ================= -->
+    <div v-if="showSingleTaskModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <h3 class="font-bold text-white text-base flex items-center gap-2">
+            <span>+ Thêm Task Đơn Lẻ</span>
+          </h3>
+          <button @click="showSingleTaskModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <form @submit.prevent="handleCreateSingleTaskSubmit" class="p-5 space-y-4 overflow-y-auto">
+          <!-- Gán Fanpage -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Gán Cho Fanpage: <span class="text-rose-500">*</span></label>
+            <select v-model="singleTaskForm.facebook_page_id" required class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-medium">
+              <option value="">-- Chọn Fanpage để đăng Reels --</option>
+              <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">
+                {{ p.name }} (ID: {{ p.facebook_page_id }}) {{ p.can_post ? '✓' : '⚠ Thiếu quyền' }}
+              </option>
+            </select>
+          </div>
+
+          <!-- Video Path / URL + Cloud Upload Button + Drag & Drop -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">
+              URL Video (.mp4) hoặc Tải File Lên Cloud: <span class="text-rose-500">*</span>
+            </label>
+            <div class="flex items-center gap-2" @dragover.prevent @drop.prevent="handleFileDropSingleTask">
+              <input type="text" v-model="singleTaskForm.video_path" required placeholder="https://.../video.mp4 hoặc bấm Chọn Video để tải từ máy" class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              <input type="file" id="cloud-video-file-input" accept="video/mp4,video/quicktime,video/*" class="hidden" @change="handleCloudVideoFileSelected">
+              <button type="button" @click="handleBrowseFileSingleTask" class="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition shrink-0 shadow-md">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                <span>📁 Chọn / Tải Video</span>
+              </button>
+            </div>
+            <p class="text-[11px] text-slate-500 mt-1">Bấm nút để chọn file video từ máy tính/điện thoại tải lên Cloudflare, kéo thả file vào ô, hoặc dán link URL video trực tiếp (https://...mp4).</p>
+          </div>
+
+          <!-- Caption -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Caption (Bảo toàn nguyên vẹn định dạng xuống dòng, dấu ngoặc kép, emoji):</label>
+            <textarea v-model="singleTaskForm.caption" rows="3" placeholder="Nội dung mô tả thước phim..." class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-blue-500 leading-relaxed font-mono"></textarea>
+          </div>
+
+          <!-- Comment Text -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Bình luận sau khi lên lịch (Tùy chọn):</label>
+            <input type="text" v-model="singleTaskForm.comment_text" placeholder="Nhập nội dung bình luận..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+            <p class="text-[11px] text-slate-500 mt-1 italic">Nếu để trống, hệ thống sẽ bỏ qua bước bình luận.</p>
+          </div>
+
+          <!-- Ngày lên lịch + Presets thông minh -->
+          <div class="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-semibold text-slate-300">Ngày lên lịch (Để trống nếu muốn Đăng ngay):</label>
+              <div class="flex items-center gap-1.5">
+                <button type="button" @click="setDatePreset(0)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[Hôm nay]</button>
+                <button type="button" @click="setDatePreset(1)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[Ngày mai]</button>
+                <button type="button" @click="setDatePreset(2)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[+2 ngày]</button>
+              </div>
+            </div>
+            <input type="date" v-model="singleTaskForm.schedule_date" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+          </div>
+
+          <!-- Giờ lên lịch + Presets khung giờ -->
+          <div class="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-semibold text-slate-300">Giờ lên lịch (HH:MM):</label>
+              <div class="flex items-center gap-1.5">
+                <button type="button" @click="setTimePreset('00:00')" class="px-2.5 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[00:00]</button>
+                <button type="button" @click="setTimePreset('07:00')" class="px-2.5 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[07:00]</button>
+                <button type="button" @click="setTimePreset('12:00')" class="px-2.5 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[12:00]</button>
+                <button type="button" @click="setTimePreset('19:00')" class="px-2.5 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[19:00]</button>
+              </div>
+            </div>
+            <input type="time" v-model="singleTaskForm.schedule_time" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+            <p class="text-[10px] text-slate-500">Lưu ý: Meta Reels yêu cầu hẹn giờ tối thiểu trước 20 phút và tối đa 75 ngày.</p>
+          </div>
+
+          <div class="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
+            <button type="button" @click="showSingleTaskModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Hủy</button>
+            <button type="submit" class="px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-900/40">Lưu Task</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: NHẬP NHANH TỪ EXCEL (BULK) & LIVE PREVIEW ================= -->
+    <div v-if="showBulkTaskModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh]">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div>
+            <h3 class="font-bold text-white text-base">Nhập Nhanh Hàng Loạt Từ Excel / Google Sheets</h3>
+            <p class="text-xs text-slate-400">Copy các cột từ bảng tính và dán trực tiếp vào ô bên dưới (tự nhận diện phím Tab hoặc Pipe)</p>
+          </div>
+          <button @click="showBulkTaskModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <form @submit.prevent="handleBulkSubmit" class="p-5 space-y-4 overflow-y-auto flex-1 flex flex-col">
+          <!-- Textarea dán -->
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="text-xs font-bold text-slate-300">Dán dữ liệu các cột từ Excel:</label>
+              <span class="text-[11px] font-mono text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-400/20">
+                PATH VIDEO \t CAPTION \t BÌNH LUẬN \t NGÀY ĐĂNG \t GIỜ ĐĂNG
+              </span>
+            </div>
+            <textarea v-model="bulkDataRaw" @input="handleBulkInputChanged" rows="5" placeholder="D:\Videos\s31.v1.mp4&#9;Caption review hay&#9;Link mua hàng: bit.ly/123&#9;2026-11-05&#9;07:00&#10;D:\Videos\s31.v2.mp4&#9;Tập 2 kịch tính&#9;&#9;2026-11-05&#9;12:00" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono focus:outline-none focus:border-blue-500 leading-relaxed"></textarea>
+          </div>
+
+          <!-- Lựa chọn phân bổ Fanpage -->
+          <div class="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+            <span class="text-xs font-bold text-slate-300">Phân bổ Fanpage:</span>
+            
+            <div class="flex items-center gap-4 flex-wrap">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" v-model="bulkAssignMethod" value="round_robin" class="text-blue-600 bg-slate-900 border-slate-700 focus:ring-0">
+                <span class="text-xs text-slate-200">Chia đều (Round-Robin) cho các Fanpage đã chọn ({{ selectedPageCount }})</span>
+              </label>
+
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" v-model="bulkAssignMethod" value="specific" class="text-blue-600 bg-slate-900 border-slate-700 focus:ring-0">
+                <span class="text-xs text-slate-200">Gán cho 1 Fanpage cụ thể:</span>
+              </label>
+
+              <select v-model="bulkSpecificPageId" :disabled="bulkAssignMethod !== 'specific'" class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500 disabled:opacity-40">
+                <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">{{ p.name }}</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- LIVE PREVIEW TABLE -->
+          <div class="flex-1 flex flex-col min-h-[160px]">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-2">
+                <span>Bảng Live Preview (Xem trước):</span>
+                <span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-mono">{{ bulkParsedList.length }} dòng hợp lệ</span>
+              </span>
+            </div>
+
+            <div class="flex-1 overflow-auto border border-slate-800 rounded-xl bg-slate-950">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead class="sticky top-0 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 uppercase font-mono">
+                  <tr>
+                    <th class="py-2 px-2.5 w-10 text-center">#</th>
+                    <th class="py-2 px-2.5">ĐƯỜNG DẪN VIDEO</th>
+                    <th class="py-2 px-2.5">CAPTION</th>
+                    <th class="py-2 px-2.5">BÌNH LUẬN</th>
+                    <th class="py-2 px-2.5 w-32">NGÀY & GIỜ</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 font-mono">
+                  <tr v-if="bulkParsedList.length === 0">
+                    <td colspan="5" class="py-8 text-center text-slate-500 font-sans">
+                      Hãy dán dữ liệu vào ô bên trên để xem trước tại đây.
+                    </td>
+                  </tr>
+
+                  <tr v-for="(item, idx) in bulkParsedList" :key="idx" class="hover:bg-slate-900/50">
+                    <td class="py-2 px-2.5 text-center text-slate-500">{{ idx + 1 }}</td>
+                    
+                    <td class="py-2 px-2.5 max-w-[260px]">
+                      <div class="truncate text-slate-200" :title="item.video_path">{{ item.video_path }}</div>
+                      <div class="mt-0.5">
+                        <span v-if="bulkFilesStatus[item.video_path] === true" class="text-[10px] text-emerald-400 font-sans font-semibold">
+                          ✓ Nguồn video hợp lệ (Cloud / URL)
+                        </span>
+                        <span v-else-if="bulkFilesStatus[item.video_path] === false" class="text-[10px] text-rose-400 font-sans font-semibold">
+                          ⚠ Nguồn video cần là link https://...mp4 hoặc đã tải lên Cloud!
+                        </span>
+                      </div>
+                    </td>
+
+                    <td class="py-2 px-2.5 max-w-[200px] truncate text-slate-300 font-sans" :title="item.caption">
+                      {{ item.caption || '—' }}
+                    </td>
+
+                    <td class="py-2 px-2.5 max-w-[150px] truncate" :title="item.comment_text">
+                      <span v-if="item.comment_text" class="text-cyan-400 font-sans">{{ item.comment_text }}</span>
+                      <span v-else class="text-slate-500 italic text-[11px] font-sans">(Không cmt)</span>
+                    </td>
+
+                    <td class="py-2 px-2.5 whitespace-nowrap text-slate-300">
+                      {{ item.schedule_date }} {{ item.schedule_time }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
+            <button type="button" @click="showBulkTaskModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Hủy</button>
+            <button type="submit" :disabled="bulkParsedList.length === 0" class="px-6 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-900/40 disabled:opacity-50">
+              Nhập Hàng Loạt ({{ bulkParsedList.length }} Task)
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: SỬA TASK ================= -->
+    <div v-if="showEditTaskModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+          <h3 class="font-bold text-white text-base">Chỉnh Sửa Task #{{ editTaskForm.id }}</h3>
+          <button @click="showEditTaskModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <form @submit.prevent="handleUpdateTaskSubmit" class="p-5 space-y-4 overflow-y-auto">
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Gán Cho Fanpage:</label>
+            <select v-model="editTaskForm.facebook_page_id" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+              <option value="">-- Chưa gán Page (Task tự do) --</option>
+              <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">{{ p.name }} ({{ p.facebook_page_id }})</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Đường Dẫn File Video:</label>
+            <input type="text" v-model="editTaskForm.video_path" required class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Caption:</label>
+            <textarea v-model="editTaskForm.caption" rows="3" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"></textarea>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Bình luận sau khi đăng:</label>
+            <input type="text" v-model="editTaskForm.comment_text" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày đăng:</label>
+              <input type="date" v-model="editTaskForm.schedule_date" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Giờ đăng:</label>
+              <input type="time" v-model="editTaskForm.schedule_time" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+            </div>
+          </div>
+
+          <div class="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
+            <button type="button" @click="showEditTaskModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Hủy</button>
+            <button type="submit" class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md">Lưu Thay Đổi</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: XEM LOG & META DETAILS ================= -->
+    <div v-if="showLogModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+          <h3 class="font-bold text-white text-base">{{ currentLogTask.title }}</h3>
+          <button @click="showLogModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+        <div class="p-5 overflow-y-auto space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Thông báo chi tiết:</label>
+            <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-xs text-slate-200 whitespace-pre-wrap break-all">
+              {{ currentLogTask.log }}
+            </div>
+          </div>
+          <div v-if="currentLogTask.video_url">
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Liên kết bài đăng / Reels:</label>
+            <div class="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs">
+              <a :href="currentLogTask.video_url" target="_blank" class="text-blue-400 hover:underline break-all">
+                {{ currentLogTask.video_url }}
+              </a>
+            </div>
+          </div>
+        </div>
+        <div class="px-5 py-3 border-t border-slate-800 flex justify-end">
+          <button @click="showLogModal = false" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= TOAST NOTIFICATION STACK ================= -->
+    <div class="fixed bottom-5 right-5 flex flex-col gap-2 z-50 pointer-events-none">
+      <div v-for="t in toasts" :key="t.id" 
+           class="px-4 py-2.5 rounded-xl border shadow-xl text-xs font-semibold flex items-center gap-2 pointer-events-auto transition-all transform duration-300"
+           :class="{
+             'bg-emerald-600 text-white border-emerald-500': t.type === 'success',
+             'bg-rose-600 text-white border-rose-500': t.type === 'error',
+             'bg-amber-600 text-white border-amber-500': t.type === 'warning',
+             'bg-slate-800 text-slate-200 border-slate-700': t.type === 'info'
+           }">
+        <span>{{ t.message }}</span>
+      </div>
+    </div>
+
+    <!-- ================= FOOTER / META COMPLIANCE ================= -->
+    <footer class="bg-slate-900/90 border-t border-slate-800/80 px-5 py-2 text-[11px] text-slate-400 flex flex-wrap items-center justify-between gap-3 shrink-0">
+      <div class="flex items-center gap-2">
+        <span class="text-slate-400 font-semibold">Quản lý fanpage</span>
+        <span class="text-slate-600">•</span>
+        <span class="text-slate-500 font-mono">App ID: 1469615908436980</span>
+        <span class="text-slate-600">•</span>
+        <span class="text-slate-500">Domain: https://pagefb.namnangno.click</span>
+      </div>
+      <div class="flex items-center gap-3 text-xs">
+        <a href="/privacy" target="_blank" class="text-slate-400 hover:text-blue-400 transition hover:underline">Chính Sách Quyền Riêng Tư</a>
+        <span class="text-slate-700">•</span>
+        <a href="/terms" target="_blank" class="text-slate-400 hover:text-blue-400 transition hover:underline">Điều Khoản Dịch Vụ</a>
+        <span class="text-slate-700">•</span>
+        <a href="/data-deletion" target="_blank" class="text-slate-400 hover:text-blue-400 transition hover:underline">Hướng Dẫn Xóa Dữ Liệu</a>
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- Fallback Screen khi tải ứng dụng -->
+  <div id="app-loading-screen" class="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-50 text-white">
+    <div class="h-14 w-14 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-pink-500 flex items-center justify-center shadow-2xl shadow-indigo-500/30 text-white font-extrabold text-2xl mb-4 animate-pulse">
+      R
+    </div>
+    <div class="text-sm font-bold text-white tracking-wide">FB Reels Auto Scheduler</div>
+    <div class="text-xs text-slate-400 mt-2 flex items-center gap-2">
+      <svg class="animate-spin h-3.5 w-3.5 text-blue-400" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+      <span>Đang khởi tạo giao diện hệ thống...</span>
+    </div>
+    <div id="app-timeout-hint" class="hidden mt-6 text-center max-w-sm px-4">
+      <p class="text-xs text-rose-400 mb-2">Hệ thống phản hồi chậm hoặc trình duyệt bị chặn script CDN.</p>
+      <button onclick="window.location.reload()" class="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition">
+        Tải Lại Trang
+      </button>
+    </div>
+  </div>
+
+  <!-- App Script (data-cfasync=false chống Rocket Loader và fallback đường dẫn tĩnh) -->
+  <script data-cfasync="false" src="/static/js/app.js" onerror="if(this.src.indexOf('/static/')!==-1){this.src='/js/app.js';}"></script>
+</body>
+</html>

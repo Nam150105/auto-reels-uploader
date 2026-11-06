@@ -1,0 +1,22 @@
+{
+  "name": "pagefb-cloudflare-manager",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Hệ thống Quản lý Facebook Fanpage & Hẹn lịch đăng Reels (Cloudflare Workers + D1 + Meta Graph API v19.0)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/test_worker.mjs",
+    "d1:create": "wrangler d1 create pagefb-db",
+    "d1:migrate:local": "wrangler d1 migrations apply pagefb-db --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply pagefb-db --remote",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "wrangler": "^3.99.0"
+  }
+}
+

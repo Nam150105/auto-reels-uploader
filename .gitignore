@@ -1,0 +1,26 @@
+# Cloudflare & Node.js
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+
+# Environment & Secrets (NEVER commit real secrets)
+.env
+.env.local
+.env.production
+.meta_key
+
+# Databases & Backups
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+backups/
+logs/
+profiles/
+
+# Python Legacy Cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+

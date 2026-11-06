@@ -607,7 +607,35 @@
       showSingleTaskModal.value = true;
     }
 
+    async function uploadVideoFileToCloud(file) {
+      if (!file) return;
+      showToast(`Đang tải video "${file.name}" lên Cloudflare...`, "info");
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/upload/video', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (res.ok && data.path) {
+          singleTaskForm.value.video_path = data.path;
+          showToast(data.message || `Đã tải video "${file.name}" lên Cloud!`, "success");
+        } else {
+          showToast(data.detail || "Không thể tải video lên Cloud.", "error");
+        }
+      } catch (err) {
+        showToast("Lỗi tải video lên Cloud: " + err.message, "error");
+      }
+    }
+
     async function handleBrowseFileSingleTask() {
+      const fileInput = document.getElementById('cloud-video-file-input');
+      if (fileInput) {
+        fileInput.value = '';
+        fileInput.click();
+        return;
+      }
       try {
         const res = await fetch('/api/system/browse-file', { method: 'POST' });
         const data = await res.json();
@@ -619,14 +647,17 @@
       }
     }
 
-    function handleFileDropSingleTask(event) {
+    async function handleCloudVideoFileSelected(event) {
+      const files = event.target && event.target.files;
+      if (files && files.length > 0) {
+        await uploadVideoFileToCloud(files[0]);
+      }
+    }
+
+    async function handleFileDropSingleTask(event) {
       if (event.dataTransfer && event.dataTransfer.files.length > 0) {
         const file = event.dataTransfer.files[0];
-        if (file.path) {
-          singleTaskForm.value.video_path = file.path;
-        } else {
-          singleTaskForm.value.video_path = file.name;
-        }
+        await uploadVideoFileToCloud(file);
       }
     }
 
@@ -1032,6 +1063,7 @@
       handleStopBatch,
       openSingleTaskModal,
       handleBrowseFileSingleTask,
+      handleCloudVideoFileSelected,
       handleFileDropSingleTask,
       setDatePreset,
       setTimePreset,
