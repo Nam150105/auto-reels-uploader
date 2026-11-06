@@ -152,10 +152,16 @@ export async function handleWorkerRequest(
     (pathname === "/" || pathname === "/pages" || pathname === "/schedules") &&
     method === "GET"
   ) {
-    if (!currentUser) {
+    const ua = request.headers.get("User-Agent") || "";
+    const isFbCrawler = /facebookexternalhit|Facebot/i.test(ua);
+    if (!currentUser && !isFbCrawler) {
       return Response.redirect(`${url.origin}/login`, 302);
     }
-    const staticResp = await serveStaticHtmlAsset(request, env, "/index.html");
+    const staticResp = await serveStaticHtmlAsset(
+      request,
+      env,
+      currentUser ? "/index.html" : "/login.html"
+    );
     if (staticResp) return staticResp;
   }
 
@@ -316,12 +322,14 @@ export async function handleWorkerRequest(
       }
     }
 
-    if (!code || !state) {
+    if (!code) {
       return renderOAuthCallbackHtml({
         success: false,
-        title: "Thiếu Tham Số Xác Thực OAuth",
+        statusCode: 200,
+        isEndpointReadyProbe: true,
+        title: "Cổng Xác Thực Meta OAuth 2.0 Đang Hoạt Động",
         message:
-          "Yêu cầu callback không hợp lệ (thiếu code hoặc state). Bạn có thể dán trực tiếp Access Token / URL / JSON Graph API Explorer ở khung bên dưới để kết nối ngay:"
+          "Điểm cuối Callback OAuth 2.0 (HTTP 200 OK) đã sẵn sàng cho Meta App 1469615908436980. Bấm nút bên dưới để bắt đầu đăng nhập Facebook hoặc dán trực tiếp Access Token:"
       });
     }
 
@@ -329,7 +337,7 @@ export async function handleWorkerRequest(
       db,
       env,
       code,
-      state,
+      state || "",
       currentUser?.id || null
     );
     if (!res.success) {

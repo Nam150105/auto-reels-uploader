@@ -61,24 +61,46 @@ export async function serveStaticHtmlAsset(
 
 export function renderOAuthCallbackHtml(options: {
   success: boolean;
+  statusCode?: number;
+  isEndpointReadyProbe?: boolean;
   title: string;
   subtitle?: string;
   message: string;
 }): Response {
-  const badgeClass = options.success
-    ? "bg-emerald-500/20 text-emerald-400"
-    : "bg-rose-500/20 text-rose-400";
-  const icon = options.success ? "✓" : "✕";
+  const statusCode =
+    typeof options.statusCode === "number"
+      ? options.statusCode
+      : options.success
+        ? 200
+        : 400;
+  const badgeClass =
+    options.success || options.isEndpointReadyProbe
+      ? "bg-emerald-500/20 text-emerald-400"
+      : "bg-rose-500/20 text-rose-400";
+  const icon = options.success || options.isEndpointReadyProbe ? "✓" : "✕";
   const metaRefresh = options.success
     ? `<meta http-equiv="refresh" content="2;url=/pages" />`
     : "";
 
+  const ogTitle = options.isEndpointReadyProbe
+    ? "Quản lý fanpage - Cổng Xác Thực Meta OAuth 2.0"
+    : `${options.title} - Quản lý fanpage`;
+  const ogDesc = options.isEndpointReadyProbe
+    ? "Cổng xác thực Facebook OAuth 2.0 và đồng bộ Fanpage chính thức qua Meta Graph API."
+    : options.message;
+
   const quickTokenConnectHtml = options.success
     ? ""
     : `
-    <div class="mt-5 pt-5 border-t border-slate-800 text-left space-y-3">
+    <div class="mt-4">
+      <a href="/api/meta/login?auth_type=rerequest"
+         class="inline-flex items-center justify-center gap-2 w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition shadow-lg mb-2">
+        🔗 Bắt Đầu Đăng Nhập Qua Facebook OAuth
+      </a>
+    </div>
+    <div class="mt-4 pt-4 border-t border-slate-800 text-left space-y-3">
       <div class="text-xs font-bold text-emerald-400">
-        ⚡ Kết nối trực tiếp không cần OAuth Callback (Dán Access Token / URL / JSON Graph API Explorer):
+        ⚡ Hoặc dán trực tiếp Access Token / URL / JSON Graph API Explorer:
       </div>
       <textarea id="quick-token-input" rows="4"
         placeholder="Dán chuỗi Access Token (EAA...), URL Graph API Explorer hoặc JSON /me/accounts vào đây..."
@@ -146,7 +168,13 @@ export function renderOAuthCallbackHtml(options: {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(options.title)} - Quản lý fanpage</title>
+  <title>${escapeHtml(ogTitle)}</title>
+  <meta property="fb:app_id" content="1469615908436980" />
+  <meta property="og:url" content="https://pagefb.namnangno.click/api/meta/callback" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Quản lý fanpage" />
+  <meta property="og:title" content="${escapeHtml(ogTitle)}" />
+  <meta property="og:description" content="${escapeHtml(ogDesc)}" />
   ${metaRefresh}
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
@@ -156,12 +184,12 @@ export function renderOAuthCallbackHtml(options: {
     <h1 class="text-lg font-bold text-white mb-1">${escapeHtml(options.title)}</h1>
     ${options.subtitle ? `<p class="text-xs text-emerald-400 font-semibold mb-2">${escapeHtml(options.subtitle)}</p>` : ""}
     <p class="text-xs text-slate-400 mb-5">${escapeHtml(options.message)}</p>
-    <a href="/pages" class="inline-block px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition">Quay về Bảng Điều Khiển</a>
+    <a href="/pages" class="inline-block px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition">Quay về Bảng Điều Khiển</a>
     ${quickTokenConnectHtml}
   </div>
 </body>
 </html>`,
-    options.success ? 200 : 400
+    statusCode
   );
 }
 

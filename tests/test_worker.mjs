@@ -637,6 +637,14 @@ async function runAll30Tests() {
   });
   assert.equal(cbA1.status, 200);
 
+  // Kiểm tra Facebook URL Debugger / Scraper gọi GET /api/meta/callback không có code -> Phải trả về 200 OK kèm fb:app_id
+  const cbScraper = await callWorker("/api/meta/callback", {
+    headers: { "User-Agent": "facebookexternalhit/1.1" }
+  });
+  assert.equal(cbScraper.status, 200, "Facebook Scraper gọi /api/meta/callback phải nhận được HTTP 200 OK");
+  const cbScraperHtml = await cbScraper.text();
+  assert.ok(cbScraperHtml.includes('property="fb:app_id"'), "Phải có thẻ meta fb:app_id cho Facebook Debugger");
+
   // Thử replay lại state của User A -> Phải bị chặn!
   const cbReplay = await callWorker(`/api/meta/callback?code=code_user_a_acc1&state=${oauthA1.state}`, {
     headers: { Cookie: `session_token=${tokenA}` }

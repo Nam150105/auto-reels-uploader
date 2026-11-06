@@ -30,13 +30,24 @@ export const REQUIRED_SCOPES = [
 ];
 
 export function getMetaConfig(env: Env) {
-  const appId = (env.META_APP_ID || DEFAULT_META_APP_ID).trim();
-  const appSecret = (env.META_APP_SECRET || "").trim();
-  const baseUrl = (env.APP_BASE_URL || PRODUCTION_DOMAIN).trim().replace(/\/+$/, "");
+  const appId = (env.META_APP_ID || DEFAULT_META_APP_ID)
+    .trim()
+    .replace(/^["']|["']$/g, "");
+  const appSecret = (env.META_APP_SECRET || "")
+    .trim()
+    .replace(/^["']|["']$/g, "");
+  const baseUrl = (env.APP_BASE_URL || PRODUCTION_DOMAIN)
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .replace(/\/+$/, "");
   const redirectUri = (
     env.META_REDIRECT_URI || `${baseUrl}/api/meta/callback`
-  ).trim();
-  const graphVersion = (env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION).trim();
+  )
+    .trim()
+    .replace(/^["']|["']$/g, "");
+  const graphVersion = (env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION)
+    .trim()
+    .replace(/^["']|["']$/g, "");
   const encryptionKey = getEncryptionKeyMaterial(env);
 
   return {
@@ -206,24 +217,37 @@ export async function exchangeCodeForToken(
       }
     }
 
-    // Bước 3: Lấy thông tin cá nhân Facebook (/me)
+    // Bước 3: Lấy thông tin cá nhân Facebook (/me) với fallback nếu thiếu quyền email
+    let fbUserId = "";
+    let fbUserName = "Facebook Admin";
+    let fbUserEmail: string | null = null;
+
     const meResp = await fetch(
       `${cfg.graphBase}/me?fields=id,name,email&access_token=${encodeURIComponent(finalToken)}`
     );
     const meData = (await meResp.json()) as Record<string, unknown>;
-    if (!meResp.ok || !meData.id) {
-      const errObj = (meData.error || {}) as Record<string, unknown>;
-      return {
-        success: false,
-        message: sanitizeSensitiveText(
-          `Không thể lấy thông tin người dùng Facebook (/me): ${errObj.message || "Lỗi Graph API"}`
-        )
-      };
+    if (meResp.ok && meData.id) {
+      fbUserId = String(meData.id);
+      fbUserName = String(meData.name || "Facebook Admin");
+      fbUserEmail = meData.email ? String(meData.email) : null;
+    } else {
+      const meFallbackResp = await fetch(
+        `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(finalToken)}`
+      );
+      const meFallbackData = (await meFallbackResp.json()) as Record<string, unknown>;
+      if (meFallbackResp.ok && meFallbackData.id) {
+        fbUserId = String(meFallbackData.id);
+        fbUserName = String(meFallbackData.name || "Facebook Admin");
+      } else {
+        const errObj = (meData.error || {}) as Record<string, unknown>;
+        return {
+          success: false,
+          message: sanitizeSensitiveText(
+            `Không thể lấy thông tin người dùng Facebook (/me): ${errObj.message || "Lỗi Graph API"}`
+          )
+        };
+      }
     }
-
-    const fbUserId = String(meData.id);
-    const fbUserName = String(meData.name || "Facebook Admin");
-    const fbUserEmail = meData.email ? String(meData.email) : null;
 
     // Bước 4: Kiểm tra danh sách quyền đã cấp (/me/permissions)
     const grantedScopes: string[] = [];
