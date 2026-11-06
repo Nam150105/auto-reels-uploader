@@ -70,8 +70,8 @@
         <div>
           <div class="flex items-center gap-2">
             <h1 class="font-extrabold text-sm tracking-tight text-white">FB Reels Auto Scheduler</h1>
-            <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">
-              Meta Graph API
+            <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+              Quản lý Fanpage &amp; Reels
             </span>
           </div>
 
@@ -128,19 +128,19 @@
         </button>
 
         <!-- Nút + Thêm Admin -->
-        <button @click="openConnectModal()" class="flex items-center gap-1 text-xs px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition shadow-sm active:scale-95" title="Kết nối thêm tài khoản Facebook Admin mới (Access Token hoặc Meta OAuth)">
+        <button @click="openConnectModal()" class="flex items-center gap-1 text-xs px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition shadow-sm active:scale-95" title="Thêm tài khoản Facebook để quản lý các Fanpage của bạn">
           <span>+ Thêm Admin</span>
         </button>
 
         <!-- Nút Quản Lý Tài Khoản -->
-        <button @click="openAccountsModal" class="flex items-center gap-1 text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition" title="Mở bảng quản lý chi tiết các tài khoản Facebook Admin">
+        <button @click="openAccountsModal" class="flex items-center gap-1 text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition" title="Mở bảng quản lý các tài khoản Facebook đã kết nối">
           <span>👥 Quản Lý</span>
         </button>
 
         <div class="h-4 w-px bg-slate-800 mx-0.5"></div>
 
         <!-- Đồng bộ toàn bộ Pages button -->
-        <button @click="handleSyncPages" :disabled="isSyncingPages || connectedAdminCount === 0" class="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold transition" title="Đồng bộ danh sách Fanpage từ Meta Graph API cho tất cả Admin đang kết nối">
+        <button @click="handleSyncPages" :disabled="isSyncingPages || connectedAdminCount === 0" class="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold transition" title="Cập nhật danh sách Fanpage mới nhất từ Facebook">
           <svg class="w-3.5 h-3.5" :class="isSyncingPages ? 'animate-spin text-blue-400' : 'text-slate-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
           </svg>
@@ -371,17 +371,17 @@
                   </span>
                 </td>
 
-                <!-- Quyền Đăng & Trạng thái Token -->
+                <!-- Quyền Đăng -->
                 <td class="py-1 px-1 text-center whitespace-nowrap" @click.stop>
                   <div class="space-y-0.5">
-                    <span v-if="p.can_post" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 inline-block" title="Đã có Page Access Token và quyền CREATE_CONTENT">
+                    <span v-if="p.can_post" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 inline-block" title="Fanpage đã sẵn sàng đăng bài">
                       ✓ Đủ quyền
                     </span>
-                    <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 inline-block" title="Chưa có quyền CREATE_CONTENT hoặc thiếu Token">
+                    <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 inline-block" title="Chưa cấp đủ quyền quản lý Fanpage">
                       ⚠ Thiếu quyền
                     </span>
-                    <div v-if="p.token_status && p.token_status !== 'valid'" class="text-[9px] text-rose-400 font-mono">
-                      Token lỗi
+                    <div v-if="p.token_status && p.token_status !== 'valid'" class="text-[9px] text-rose-400 font-semibold">
+                      Cần kết nối lại
                     </div>
                   </div>
                 </td>
@@ -389,8 +389,8 @@
                 <!-- Actions -->
                 <td class="py-1 px-2 text-right whitespace-nowrap" @click.stop>
                   <div class="flex items-center justify-end gap-1">
-                    <!-- Kiểm tra quyền Graph API -->
-                    <button @click="handleCheckPagePermission(p)" class="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded transition" title="Kiểm tra quyền đăng với Meta Graph API">
+                    <!-- Kiểm tra quyền -->
+                    <button @click="handleCheckPagePermission(p)" class="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded transition" title="Kiểm tra quyền đăng bài của Fanpage">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </button>
 
@@ -638,25 +638,24 @@
             </span>
           </div>
 
-          <!-- Step 1: Facebook Admin OAuth & Token -->
+          <!-- Step 1: Facebook Admin Connection -->
           <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2 font-bold text-xs text-white">
-                <span>1. Tài Khoản Facebook Admin & Token</span>
+                <span>1. Kết Nối Tài Khoản Facebook</span>
               </div>
               <span class="text-[11px] font-bold px-2 py-0.5 rounded-full"
                     :class="testResult.oauth_check?.connected ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'">
-                {{ testResult.oauth_check?.connected ? (testResult.oauth_check?.connected_count ? testResult.oauth_check.connected_count + ' Admin hợp lệ' : '✓ Hợp lệ') : '✗ Chưa kết nối' }}
+                {{ testResult.oauth_check?.connected ? (testResult.oauth_check?.connected_count ? testResult.oauth_check.connected_count + ' tài khoản kết nối' : '✓ Đang kết nối') : '✗ Chưa kết nối' }}
               </span>
             </div>
-            <div class="text-xs text-slate-300 space-y-1 pl-4 border-l-2 border-slate-800 font-mono text-[11px]">
-              <div>• Admin chính: <b>{{ testResult.oauth_check?.user_name || 'N/A' }}</b> (ID: {{ testResult.oauth_check?.user_id || 'N/A' }})</div>
-              <div>• Hạn token: {{ testResult.oauth_check?.token_expires_at || 'Không xác định' }} ({{ testResult.oauth_check?.days_remaining != null ? testResult.oauth_check.days_remaining + ' ngày còn lại' : 'N/A' }})</div>
+            <div class="text-xs text-slate-300 space-y-1 pl-4 border-l-2 border-slate-800 text-[11px]">
+              <div>• Tài khoản chính: <b>{{ testResult.oauth_check?.user_name || 'N/A' }}</b></div>
               <div v-if="testResult.oauth_check?.accounts && testResult.oauth_check.accounts.length > 1" class="text-indigo-300">
-                • Các Admin kết nối ({{ testResult.oauth_check.accounts.length }}): {{ testResult.oauth_check.accounts.map(a => a.user_name).join(', ') }}
+                • Các tài khoản đã kết nối ({{ testResult.oauth_check.accounts.length }}): {{ testResult.oauth_check.accounts.map(a => a.user_name).join(', ') }}
               </div>
               <div v-if="testResult.oauth_check?.missing_scopes?.length" class="text-rose-400">
-                • Thiếu Scopes: {{ testResult.oauth_check.missing_scopes.join(', ') }}
+                • Trạng thái quyền: Facebook chưa cấp đủ quyền cần thiết
               </div>
             </div>
           </div>
@@ -679,7 +678,7 @@
                   <span class="text-[10px] text-slate-500 font-mono ml-1.5">({{ p.facebook_page_id }})</span>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
-                  <span v-if="p.can_post" class="text-emerald-400 text-[11px] font-bold">✓ CREATE_CONTENT</span>
+                  <span v-if="p.can_post" class="text-emerald-400 text-[11px] font-bold">✓ Đủ quyền</span>
                   <span v-else class="text-rose-400 text-[11px] font-bold">⚠ {{ p.error || 'Thiếu quyền' }}</span>
                 </div>
               </div>
@@ -740,7 +739,7 @@
       </div>
     </div>
 
-    <!-- ================= MODAL: QUẢN LÝ NHIỀU TÀI KHOẢN FACEBOOK ADMIN (MULTI-ADMIN OAUTH) ================= -->
+    <!-- ================= MODAL: QUẢN LÝ NHIỀU TÀI KHOẢN FACEBOOK ADMIN ================= -->
     <div v-if="showAccountsModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         
@@ -749,8 +748,8 @@
           <div class="flex items-center gap-2.5">
             <span class="text-xl">👥</span>
             <div>
-              <h3 class="font-bold text-white text-base">Quản Lý Tài Khoản Facebook Admin</h3>
-              <p class="text-[11px] text-slate-400">Kết nối nhiều tài khoản Facebook cá nhân độc lập qua Meta OAuth 2.0</p>
+              <h3 class="font-bold text-white text-base">Quản Lý Tài Khoản Facebook</h3>
+              <p class="text-[11px] text-slate-400">Danh sách các tài khoản Facebook và Fanpage đang được quản lý</p>
             </div>
           </div>
           <button @click="showAccountsModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
@@ -770,12 +769,12 @@
             <div class="flex items-center gap-2">
               <button @click="handleSyncPages" :disabled="isSyncingPages || connectedAdminCount === 0" class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition disabled:opacity-40">
                 <svg class="w-3.5 h-3.5" :class="isSyncingPages ? 'animate-spin text-blue-400' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                <span>Đồng Bộ Toàn Bộ Pages</span>
+                <span>Đồng Bộ Tất Cả</span>
               </button>
 
               <button @click="openConnectModal()" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-md active:scale-95">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
-                <span>+ Thêm Tài Khoản Facebook</span>
+                <span>+ Kết nối Facebook</span>
               </button>
             </div>
           </div>
@@ -783,97 +782,79 @@
           <!-- Empty State -->
           <div v-if="accounts.length === 0" class="py-12 text-center space-y-3 bg-slate-950/40 rounded-xl border border-slate-800">
             <div class="text-4xl">👥</div>
-            <div class="text-sm font-bold text-white">Chưa có tài khoản Facebook Admin nào được kết nối</div>
+            <div class="text-sm font-bold text-white">Chưa có tài khoản Facebook nào được kết nối</div>
             <p class="text-xs text-slate-400 max-w-md mx-auto">
-              Hãy kết nối tài khoản Facebook đầu tiên để tự động tải danh sách Fanpage và bắt đầu lên lịch đăng Reels.
+              Kết nối tài khoản Facebook để quản lý các Fanpage của bạn.
             </p>
             <button @click="openConnectModal()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg transition">
-              🔗 Kết Nối Tài Khoản Facebook Ngay
+              + Kết nối Facebook
             </button>
           </div>
 
           <!-- Accounts List -->
           <div v-else class="space-y-3">
-            <div v-for="acc in accounts" :key="acc.id" class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition flex flex-col md:flex-row md:items-center justify-between gap-4">
-              
-              <!-- Left: User Info -->
-              <div class="flex items-start gap-3 min-w-0">
-                <img v-if="acc.avatar_url" :src="acc.avatar_url" class="w-10 h-10 rounded-full object-cover shrink-0 shadow-md border border-slate-700" alt="Admin Avatar">
-                <div v-else class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-bold text-white text-base shrink-0 shadow-md">
-                  {{ (acc.user_name || 'F').charAt(0).toUpperCase() }}
+            <div v-for="acc in accounts" :key="acc.id" class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition flex flex-col gap-3">
+              <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <!-- Left: User Info -->
+                <div class="flex items-start gap-3 min-w-0">
+                  <img v-if="acc.avatar_url" :src="acc.avatar_url" class="w-10 h-10 rounded-full object-cover shrink-0 shadow-md border border-slate-700" alt="Admin Avatar">
+                  <div v-else class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-bold text-white text-base shrink-0 shadow-md">
+                    {{ (acc.user_name || 'F').charAt(0).toUpperCase() }}
+                  </div>
+                  <div class="space-y-1 min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span class="font-bold text-white text-sm truncate">{{ acc.user_name || 'Tài khoản Facebook' }}</span>
+                      <!-- Status Badge -->
+                      <span v-if="acc.status === 'connected'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                        🟢 Đang kết nối
+                      </span>
+                      <span v-else-if="acc.status === 'expired'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                        🟡 Cần kết nối lại
+                      </span>
+                      <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                        🔴 Ngắt kết nối
+                      </span>
+                    </div>
+
+                    <div class="flex items-center gap-2 text-xs text-slate-400">
+                      <span class="font-mono">ID: {{ acc.user_id }}</span>
+                      <span class="text-slate-600">•</span>
+                      <span class="text-slate-300">
+                        📢 <b>{{ acc.managed_pages_count }}</b> Fanpage
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div class="space-y-1 min-w-0">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-bold text-white text-sm truncate">{{ acc.user_name || 'Facebook User' }}</span>
-                    <!-- Status Badge -->
-                    <span v-if="acc.status === 'connected'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                      🟢 Đang kết nối
-                    </span>
-                    <span v-else-if="acc.status === 'expired'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                      🟡 Hết hạn token
-                    </span>
-                    <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30">
-                      🔴 Đã ngắt
-                    </span>
-                  </div>
 
-                  <div class="flex items-center gap-2 text-xs text-slate-400 font-mono">
-                    <span>ID: {{ acc.user_id }}</span>
-                    <button @click="copyToClipboard(acc.user_id)" class="text-slate-500 hover:text-white transition" title="Sao chép User ID">
-                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                    </button>
-                    <span class="text-slate-600">•</span>
-                    <span class="text-slate-300 font-sans">
-                      📢 <b>{{ acc.managed_pages_count }}</b> Fanpage ({{ acc.postable_pages_count }} đủ quyền)
-                    </span>
-                  </div>
+                <!-- Right: Actions per Account -->
+                <div class="flex items-center gap-1.5 shrink-0 flex-wrap">
+                  <button @click="handleSyncAccountPages(acc.id)" :disabled="isSyncingPages || acc.status !== 'connected'" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition disabled:opacity-40 flex items-center gap-1" title="Đồng bộ lại danh sách Fanpage của tài khoản này">
+                    <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    <span>Đồng Bộ</span>
+                  </button>
 
-                  <!-- Token info & Expiry -->
-                  <div class="text-[11px] text-slate-400">
-                    <span>Hạn token: <b class="text-slate-300">{{ acc.token_expires_at || 'Không thời hạn' }}</b></span>
-                    <span v-if="acc.days_remaining != null" class="ml-1" :class="acc.days_remaining < 7 ? 'text-amber-400 font-bold' : 'text-slate-400'">
-                      ({{ acc.days_remaining }} ngày còn lại)
-                    </span>
-                  </div>
+                  <button @click="handleReconnectAccount(acc.id)" class="px-2.5 py-1.5 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-800/60 text-xs font-semibold transition flex items-center gap-1" title="Kết nối lại tài khoản Facebook này">
+                    <span>🔗 Kết Nối Lại</span>
+                  </button>
+
+                  <button @click="promptDeleteAccount(acc)" class="px-2.5 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 text-xs font-semibold transition" title="Xóa tài khoản này và các Fanpage liên kết khỏi ứng dụng">
+                    <span>🗑 Xóa tài khoản</span>
+                  </button>
                 </div>
               </div>
 
-              <!-- Right: Actions per Account -->
-              <div class="flex items-center gap-1.5 shrink-0 flex-wrap">
-                <!-- Đồng bộ Page của riêng Admin này -->
-                <button @click="handleSyncAccountPages(acc.id)" :disabled="isSyncingPages || acc.status !== 'connected'" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition disabled:opacity-40 flex items-center gap-1" title="Đồng bộ danh sách Fanpage của riêng tài khoản này">
-                  <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                  <span>Đồng Bộ</span>
-                </button>
-
-                <!-- Kết nối lại (khi hết hạn hoặc muốn làm mới) -->
-                <button @click="handleReconnectAccount(acc.id)" class="px-2.5 py-1.5 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-800/60 text-xs font-semibold transition flex items-center gap-1" title="Cấp lại quyền OAuth cho tài khoản này">
-                  <span>🔗 Kết Nối Lại</span>
-                </button>
-
-                <!-- Ngắt kết nối (nếu đang connected) -->
-                <button v-if="acc.status === 'connected'" @click="handleDisconnectAccount(acc.id)" class="px-2.5 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border border-amber-800/50 text-xs font-semibold transition" title="Tạm thời ngắt kết nối tài khoản này">
-                  <span>✕ Ngắt</span>
-                </button>
-
-                <!-- Xóa tài khoản -->
-                <button @click="handleDeleteAccount(acc.id)" class="px-2.5 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 text-xs font-semibold transition" title="Xóa vĩnh viễn tài khoản này khỏi hệ thống">
-                  <span>🗑 Xóa</span>
-                </button>
+              <!-- Danh sách Fanpage thuộc tài khoản này -->
+              <div v-if="acc.pages && acc.pages.length > 0" class="pt-2.5 border-t border-slate-800/80 flex items-center gap-1.5 flex-wrap">
+                <span class="text-[11px] text-slate-400 mr-1">Fanpage quản lý:</span>
+                <span v-for="pg in acc.pages" :key="pg.facebook_page_id"
+                      class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] text-slate-200">
+                  <span class="w-1.5 h-1.5 rounded-full" :class="pg.can_post ? 'bg-emerald-400' : 'bg-amber-400'"></span>
+                  <span class="font-medium">{{ pg.page_name }}</span>
+                </span>
               </div>
-
-            </div>
-          </div>
-
-          <!-- Explanatory note -->
-          <div class="p-3 bg-blue-950/20 border border-blue-800/40 rounded-xl text-[11px] text-blue-300/90 space-y-1">
-            <div class="font-bold flex items-center gap-1.5">
-              <span>💡 Cơ chế Đa Admin & Tổng hợp Fanpage (Many-to-Many):</span>
-            </div>
-            <div class="leading-relaxed">
-              • Bạn có thể kết nối không giới hạn tài khoản Facebook cá nhân. Hệ thống tự tổng hợp toàn bộ Fanpage từ tất cả tài khoản.<br>
-              • Nếu nhiều Admin cùng quản lý 1 Fanpage, hệ thống sẽ khử trùng lặp và giữ duy nhất 1 bản ghi Fanpage.<br>
-              • Khi ngắt kết nối một Admin, Fanpage dùng chung <b>vẫn được duy trì hoạt động</b> nếu còn ít nhất một Admin khác kết nối.
+              <div v-else class="pt-2 border-t border-slate-800/80 text-[11px] text-slate-500 italic">
+                Tài khoản này chưa quản lý Fanpage nào.
+              </div>
             </div>
           </div>
 
@@ -886,123 +867,119 @@
       </div>
     </div>
 
-    <!-- ================= MODAL: KẾT NỐI FACEBOOK ADMIN (TOKEN TRỰC TIẾP & OAUTH) ================= -->
+    <!-- ================= MODAL: THÊM TÀI KHOẢN FACEBOOK (ĐƠN GIẢN - DUY NHẤT 1 NÚT) ================= -->
     <div v-if="showConnectModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col">
         
-        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
-          <div class="flex items-center gap-2">
-            <span class="text-xl">🔗</span>
-            <h3 class="font-bold text-white text-base">Kết Nối Tài Khoản Facebook Admin</h3>
-          </div>
-          <button @click="showConnectModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <h3 class="font-bold text-white text-base">Thêm tài khoản Facebook</h3>
+          <button @click="showConnectModal = false" :disabled="isConnectingOAuth" class="text-slate-400 hover:text-white text-xl font-bold disabled:opacity-40">&times;</button>
         </div>
 
-        <div class="p-5 overflow-y-auto space-y-4">
-          
-          <!-- Chuyển đổi 2 phương thức kết nối -->
-          <div class="grid grid-cols-2 gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
-            <button @click="connectMethodTab = 'token'"
-                    class="py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
-                    :class="connectMethodTab === 'token' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'">
-              <span>⚡ Cách 1: Dán Access Token (Khuyên dùng)</span>
+        <div class="p-6 text-center space-y-5">
+          <div class="w-14 h-14 rounded-2xl bg-blue-600/15 border border-blue-500/30 text-blue-400 flex items-center justify-center mx-auto shadow-inner">
+            <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+          </div>
+
+          <div class="space-y-1.5">
+            <p class="text-sm text-slate-200 font-medium">
+              Kết nối tài khoản Facebook để quản lý các Fanpage của bạn.
+            </p>
+          </div>
+
+          <!-- Trạng thái giao diện (Đang mở / Đang xử lý / Thành công / Từ chối / Không có Fanpage / Lỗi) -->
+          <div v-if="oauthFlowState === 'opening' || oauthFlowState === 'processing'"
+               class="p-3.5 rounded-xl bg-blue-950/40 border border-blue-700/50 text-xs text-blue-200 flex items-center justify-center gap-2.5">
+            <svg class="animate-spin h-4 w-4 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="none">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span class="font-medium">{{ oauthFlowMessage || 'Đang kết nối với Facebook...' }}</span>
+          </div>
+
+          <div v-else-if="oauthFlowState === 'success'"
+               class="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-600/50 text-xs text-emerald-300 font-semibold">
+            ✓ {{ oauthFlowMessage || 'Đã kết nối tài khoản Facebook thành công' }}
+          </div>
+
+          <div v-else-if="oauthFlowState === 'denied'"
+               class="p-3.5 rounded-xl bg-amber-950/40 border border-amber-600/50 text-xs text-amber-300 font-semibold">
+            {{ oauthFlowMessage || 'Bạn chưa cấp quyền kết nối Facebook' }}
+          </div>
+
+          <div v-else-if="oauthFlowState === 'no_pages'"
+               class="p-3.5 rounded-xl bg-amber-950/40 border border-amber-600/50 text-xs text-amber-300 font-semibold">
+            {{ oauthFlowMessage || 'Tài khoản này chưa quản lý Fanpage nào' }}
+          </div>
+
+          <div v-else-if="oauthFlowState === 'missing_permissions'"
+               class="p-3.5 rounded-xl bg-rose-950/40 border border-rose-600/50 text-xs text-rose-300 font-semibold">
+            {{ oauthFlowMessage || 'Facebook chưa cấp đủ quyền cần thiết' }}
+          </div>
+
+          <div v-else-if="oauthFlowState === 'invalid_token'"
+               class="p-3.5 rounded-xl bg-rose-950/40 border border-rose-600/50 text-xs text-rose-300 font-semibold">
+            {{ oauthFlowMessage || 'Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại' }}
+          </div>
+
+          <div v-else-if="oauthFlowState === 'error'"
+               class="p-3.5 rounded-xl bg-rose-950/40 border border-rose-600/50 text-xs text-rose-300 font-semibold">
+            {{ oauthFlowMessage || 'Không thể kết nối Facebook lúc này, vui lòng thử lại' }}
+          </div>
+
+          <!-- Nút duy nhất: + Kết nối Facebook -->
+          <div class="space-y-3 pt-1">
+            <button @click="startMetaOAuthFlow()"
+                    :disabled="isConnectingOAuth"
+                    class="w-full py-3 px-6 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-lg shadow-blue-900/40 transition flex items-center justify-center gap-2 active:scale-95">
+              <svg v-if="isConnectingOAuth" class="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24" fill="none">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+              </svg>
+              <span>{{ isConnectingOAuth ? 'Đang kết nối...' : '+ Kết nối Facebook' }}</span>
             </button>
-            <button @click="connectMethodTab = 'oauth'"
-                    class="py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
-                    :class="connectMethodTab === 'oauth' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'">
-              <span>🔗 Cách 2: Đăng Nhập Facebook OAuth</span>
-            </button>
+
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Bạn sẽ được chuyển đến Facebook để đăng nhập và xác nhận quyền truy cập.
+            </p>
           </div>
-
-          <!-- ================= TAB 1: KẾT NỐI NHANH BẰNG ACCESS TOKEN (KHÔNG BAO GIỜ LỖI DOMAIN) ================= -->
-          <div v-if="connectMethodTab === 'token'" class="space-y-3.5">
-            <div class="p-3 bg-emerald-950/30 border border-emerald-800/40 rounded-xl text-xs text-emerald-300 leading-relaxed">
-              <b>✅ Ưu điểm tuyệt đối:</b> Không bao giờ gặp lỗi <i>"Không thể tải URL: Miền của URL này không được đưa vào miền của ứng dụng"</i>. Hệ thống tự động đổi sang <b>Long-Lived Token (60 ngày)</b>, mã hóa AES-256-GCM và đồng bộ toàn bộ Fanpage ngay lập tức!
-            </div>
-
-            <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs text-slate-300">
-              <div class="font-bold text-white flex items-center justify-between">
-                <span>Hướng dẫn lấy Token trong 15 giây:</span>
-                <a :href="metaStatus.graph_explorer_url || 'https://developers.facebook.com/tools/explorer/1469615908436980/?method=GET&path=me%2Faccounts&version=v19.0'"
-                   target="_blank" rel="noopener"
-                   class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-[11px] transition shadow">
-                  ↗ 1. Mở Graph API Explorer (App 1469615908436980)
-                </a>
-              </div>
-              <div class="space-y-1.5 text-[11px] leading-relaxed text-slate-300">
-                <div><b class="text-emerald-400">Bước 1:</b> Bấm nút <b>Mở Graph API Explorer</b> ở trên. Ở cột bên phải, mục <b>Meta App</b> chọn <code class="text-cyan-300">Quản lý page</code>, mục <b>User or Page</b> chọn <code class="text-cyan-300">Get User Access Token</code>.</div>
-                <div><b class="text-emerald-400">Bước 2:</b> Tại mục <b>Permissions</b>, thêm các quyền: <code class="text-cyan-300">pages_show_list</code>, <code class="text-cyan-300">pages_read_engagement</code>, <code class="text-cyan-300">pages_manage_posts</code>, <code class="text-cyan-300">pages_manage_engagement</code> rồi bấm nút xanh <b>Generate Access Token</b>.</div>
-                <div><b class="text-emerald-400">Bước 3:</b> Copy chuỗi mã ở ô <b>Access Token</b> phía trên cùng và dán vào ô bên dưới:</div>
-              </div>
-            </div>
-
-            <div class="space-y-1.5">
-              <label class="block text-xs font-bold text-slate-200">Dán Access Token, URL Graph API Explorer hoặc JSON /me/accounts vào đây:</label>
-              <textarea v-model="directAccessToken" rows="4"
-                        placeholder="Hỗ trợ dán: (1) Mã Access Token EAA..., (2) URL https://graph.facebook.com/.../me/accounts?access_token=..., hoặc (3) Kết quả JSON { &quot;data&quot;: [ ... ] }"
-                        class="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl p-3 text-xs text-white font-mono focus:outline-none"></textarea>
-            </div>
-          </div>
-
-          <!-- ================= TAB 2: ĐĂNG NHẬP QUA FACEBOOK OAUTH REDIRECT ================= -->
-          <div v-else class="space-y-3.5">
-            <div class="p-3.5 bg-amber-950/25 border border-amber-700/50 rounded-xl text-xs text-amber-200 space-y-2.5">
-              <div class="font-bold text-amber-300 flex items-center gap-1.5">
-                <span>🛠️ Cách sửa dứt điểm lỗi "Không thể tải URL: Miền của URL này không được đưa vào miền của ứng dụng":</span>
-              </div>
-              <div class="text-[11px] text-slate-300 space-y-2 leading-relaxed">
-                <div class="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1.5">
-                  <div class="flex items-center justify-between">
-                    <b class="text-white">Bước 1: Khai báo Miền ứng dụng &amp; Nền tảng Website</b>
-                    <a href="https://developers.facebook.com/apps/1469615908436980/settings/basic/" target="_blank" rel="noopener" class="text-blue-400 hover:underline font-bold">↗ Mở Cài đặt Cơ bản App</a>
-                  </div>
-                  <div>• Tại ô <b>Miền ứng dụng (App Domains)</b>: gõ tên miền bên dưới rồi <b>nhấn phím Enter</b> để tạo thẻ tag:</div>
-                  <div class="flex items-center justify-between bg-black/50 px-2.5 py-1.5 rounded font-mono text-cyan-300">
-                    <span>pagefb.namnangno.click</span>
-                    <button @click="copyToClipboard('pagefb.namnangno.click')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px] font-sans">Sao chép</button>
-                  </div>
-                  <div>• Kéo xuống cuối trang &rarr; Bấm <b>+ Thêm nền tảng (Add Platform)</b> &rarr; Chọn <b>Trang web (Website)</b> &rarr; Điền <b>URL trang web (Site URL)</b> là <code class="text-cyan-300">https://pagefb.namnangno.click/</code> &rarr; Bấm <b>Lưu thay đổi</b>.</div>
-                </div>
-
-                <div class="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1.5">
-                  <div class="flex items-center justify-between">
-                    <b class="text-white">Bước 2: Thêm URI chuyển hướng OAuth hợp lệ</b>
-                    <a href="https://developers.facebook.com/apps/1469615908436980/fb-login/settings/" target="_blank" rel="noopener" class="text-blue-400 hover:underline font-bold">↗ Mở Facebook Login Settings</a>
-                  </div>
-                  <div>• Tại ô <b>URI chuyển hướng OAuth hợp lệ (Valid OAuth Redirect URIs)</b>, dán URL bên dưới rồi <b>nhấn phím Enter</b> &rarr; Bấm <b>Lưu thay đổi</b>:</div>
-                  <div class="flex items-center justify-between bg-black/50 px-2.5 py-1.5 rounded font-mono text-cyan-300">
-                    <span>https://pagefb.namnangno.click/api/meta/callback</span>
-                    <button @click="copyToClipboard('https://pagefb.namnangno.click/api/meta/callback')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px] font-sans">Sao chép</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="space-y-1">
-              <label class="block text-[11px] font-bold text-slate-300">Redirect URI sử dụng khi gọi OAuth:</label>
-              <input type="text" v-model="customRedirectUri"
-                     class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-cyan-300 font-mono focus:outline-none focus:border-blue-500">
-            </div>
-          </div>
-
         </div>
 
-        <div class="px-5 py-3.5 border-t border-slate-800 flex justify-end gap-2.5 bg-slate-900">
-          <button @click="showConnectModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
-          <button v-if="connectMethodTab === 'token'"
-                  @click="handleConnectWithToken"
-                  :disabled="isConnectingToken"
-                  class="flex items-center gap-2 px-6 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-emerald-900/40 transition active:scale-95">
-            <span>{{ isConnectingToken ? '⏳ Đang xác thực & đồng bộ Fanpage...' : '⚡ Kết Nối & Đồng Bộ Fanpage Ngay' }}</span>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: XÁC NHẬN XÓA TÀI KHOẢN FACEBOOK ================= -->
+    <div v-if="showDeleteAccountModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col">
+        <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <h3 class="font-bold text-white text-base">Xóa tài khoản Facebook?</h3>
+          <button @click="cancelDeleteAccount" :disabled="isDeletingAccount" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <div class="p-5 space-y-4">
+          <p class="text-xs text-slate-200 leading-relaxed">
+            Bạn có chắc chắn muốn xóa tài khoản Facebook này khỏi ứng dụng? Toàn bộ Fanpage liên kết với tài khoản này cũng sẽ bị xóa khỏi danh sách quản lý.
+          </p>
+          <div v-if="accountToDelete && accountToDelete.user_name" class="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs flex items-center justify-between">
+            <span class="font-bold text-white">{{ accountToDelete.user_name }}</span>
+            <span class="text-slate-400">{{ accountToDelete.managed_pages_count || 0 }} Fanpage</span>
+          </div>
+        </div>
+
+        <div class="px-5 py-3.5 border-t border-slate-800 bg-slate-900 flex justify-end gap-2.5">
+          <button type="button"
+                  @click="cancelDeleteAccount"
+                  :disabled="isDeletingAccount"
+                  class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition">
+            Hủy
           </button>
-          <button v-else
-                  @click="startMetaOAuthFlow()"
-                  class="flex items-center gap-2 px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-900/40 transition active:scale-95">
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
-            <span>Tiếp Tục Tới Facebook OAuth</span>
+          <button type="button"
+                  @click="confirmDeleteAccount"
+                  :disabled="isDeletingAccount"
+                  class="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-rose-950/40 transition">
+            {{ isDeletingAccount ? 'Đang xóa...' : 'Xóa tài khoản' }}
           </button>
         </div>
-
       </div>
     </div>
 
@@ -1306,9 +1283,7 @@
       <div class="flex items-center gap-2">
         <span class="text-slate-400 font-semibold">Quản lý fanpage</span>
         <span class="text-slate-600">•</span>
-        <span class="text-slate-500 font-mono">App ID: 1469615908436980</span>
-        <span class="text-slate-600">•</span>
-        <span class="text-slate-500">Domain: https://pagefb.namnangno.click</span>
+        <span class="text-slate-500">https://pagefb.namnangno.click</span>
       </div>
       <div class="flex items-center gap-3 text-xs">
         <a href="/privacy" target="_blank" class="text-slate-400 hover:text-blue-400 transition hover:underline">Chính Sách Quyền Riêng Tư</a>

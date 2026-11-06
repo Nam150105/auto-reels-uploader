@@ -187,12 +187,23 @@ export interface SessionRecord {
   created_at: string;
 }
 
+export interface FacebookAccountPageSummary {
+  facebook_page_id: string;
+  page_name: string;
+  category: string;
+  avatar_url: string;
+  can_post: boolean;
+}
+
 export interface FacebookAccountRecord {
   id: string;
   owner_user_id: string | null;
   facebook_user_id: string;
+  user_id?: string;
   facebook_user_name: string | null;
+  user_name?: string | null;
   facebook_user_email: string | null;
+  avatar_url?: string | null;
   access_token?: string;
   token_version?: string;
   token_type: string;
@@ -202,19 +213,25 @@ export interface FacebookAccountRecord {
   token_status: string;
   connected_at: string | null;
   token_expires_at: string | null;
+  expires_at?: string | null;
   last_synced_at: string | null;
   last_error: string | null;
   created_at: string | null;
   updated_at: string | null;
   page_count?: number;
+  managed_pages_count?: number;
+  postable_pages_count?: number;
   days_remaining?: number | null;
   is_expired?: boolean;
+  pages?: FacebookAccountPageSummary[];
 }
 
 export interface AdminAccountLink {
   account_id: string;
   facebook_user_id: string;
+  user_id?: string;
   facebook_user_name: string | null;
+  user_name?: string | null;
   account_status: string;
   token_status: string;
   tasks: string[];

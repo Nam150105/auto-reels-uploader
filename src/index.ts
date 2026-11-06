@@ -22,9 +22,8 @@ import {
   getFacebookAccounts,
   getFacebookAccountById,
   disconnectFacebookAccount,
-  deleteFacebookAccountLocal,
+  deleteFacebookAccountWithPages,
   disconnectAllUserAccounts,
-  upsertFacebookPage,
   getFacebookPages,
   updatePageSelection,
   bulkUpdatePageSelection,
@@ -45,7 +44,6 @@ import {
   PRODUCTION_DOMAIN,
   generateOAuthUrl,
   exchangeCodeForToken,
-  connectWithAccessToken,
   getConnectionStatus
 } from "./services/metaOAuthService.ts";
 import {
@@ -285,51 +283,29 @@ export async function handleWorkerRequest(
   // ==========================================
   if (pathname === "/api/meta/callback" && method === "GET") {
     const error = url.searchParams.get("error");
-    const errorDesc = url.searchParams.get("error_description");
+    const errorReason = url.searchParams.get("error_reason");
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
-    const directToken = url.searchParams.get("access_token");
 
-    if (error) {
+    if (error || errorReason === "user_denied") {
       return renderOAuthCallbackHtml({
         success: false,
-        title: "Kết Nối Facebook Bị Từ Chối",
-        message: errorDesc || error
+        statusCode: 200,
+        oauthStatus: "denied",
+        title: "Chưa Cấp Quyền Kết Nối",
+        message: "Bạn chưa cấp quyền kết nối Facebook"
       });
-    }
-
-    if (directToken && currentUser) {
-      const connRes = await connectWithAccessToken(
-        db,
-        env,
-        directToken,
-        currentUser.id,
-        null
-      );
-      if (connRes.success && connRes.account_id) {
-        const syncRes = await syncPagesForAccount(
-          db,
-          env,
-          connRes.account_id,
-          currentUser.id
-        );
-        return renderOAuthCallbackHtml({
-          success: true,
-          title: "Kết Nối Tài Khoản Facebook Thành Công!",
-          subtitle: `${connRes.user_name || ""} (ID: ${connRes.user_id || ""})`,
-          message: `Đã tự động đồng bộ ${syncRes.synced_count || 0} Fanpage từ Meta Graph API. Đang chuyển về trang Quản Lý Fanpage...`
-        });
-      }
     }
 
     if (!code) {
       return renderOAuthCallbackHtml({
         success: false,
         statusCode: 200,
+        oauthStatus: "ready",
         isEndpointReadyProbe: true,
-        title: "Cổng Xác Thực Meta OAuth 2.0 Đang Hoạt Động",
+        title: "Cổng Kết Nối Facebook Sẵn Sàng",
         message:
-          "Điểm cuối Callback OAuth 2.0 (HTTP 200 OK) đã sẵn sàng cho Meta App 1469615908436980. Bấm nút bên dưới để bắt đầu đăng nhập Facebook hoặc dán trực tiếp Access Token:"
+          "Điểm cuối xác thực đang hoạt động. Vui lòng quay về trang Quản lý để kết nối tài khoản Facebook."
       });
     }
 
@@ -341,26 +317,66 @@ export async function handleWorkerRequest(
       currentUser?.id || null
     );
     if (!res.success) {
+      const oauthStatus =
+        res.error_code === "missing_permissions"
+          ? "missing_permissions"
+          : res.error_code === "invalid_token"
+            ? "invalid_token"
+            : "error";
       return renderOAuthCallbackHtml({
         success: false,
-        title: "Lỗi Xác Thực Meta OAuth",
-        message: res.message || "Không thể trao đổi Access Token với Facebook."
+        statusCode: 400,
+        oauthStatus,
+        title: "Không Thể Kết Nối Facebook",
+        message: res.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại"
       });
     }
 
     const effectiveUserId = res.owner_user_id || currentUser?.id || "usr_admin";
-    let syncRes: { synced_count?: number } = { synced_count: 0 };
-    if (res.account_id) {
-      syncRes = await syncPagesForAccount(db, env, res.account_id, effectiveUserId);
-    } else {
-      syncRes = await syncPagesFromMeta(db, env, effectiveUserId);
+    const syncRes = res.account_id
+      ? await syncPagesForAccount(db, env, res.account_id, effectiveUserId)
+      : await syncPagesFromMeta(db, env, effectiveUserId);
+
+    if (!syncRes.success) {
+      const syncStatus =
+        "error_code" in syncRes && syncRes.error_code === "missing_permissions"
+          ? "missing_permissions"
+          : "error_code" in syncRes && syncRes.error_code === "invalid_token"
+            ? "invalid_token"
+            : "error";
+      return renderOAuthCallbackHtml({
+        success: false,
+        statusCode: 400,
+        oauthStatus: syncStatus,
+        title: "Không Thể Đồng Bộ Fanpage",
+        message: syncRes.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại",
+        accountId: res.account_id
+      });
+    }
+
+    const syncedCount = syncRes.synced_count || 0;
+    if (syncedCount === 0) {
+      return renderOAuthCallbackHtml({
+        success: false,
+        statusCode: 200,
+        oauthStatus: "no_pages",
+        title: "Chưa Có Fanpage",
+        subtitle: res.user_name || "",
+        message: "Tài khoản này chưa quản lý Fanpage nào",
+        syncedCount: 0,
+        accountId: res.account_id
+      });
     }
 
     return renderOAuthCallbackHtml({
       success: true,
-      title: "Kết Nối Tài Khoản Facebook Thành Công!",
-      subtitle: `${res.user_name || ""} (ID: ${res.user_id || ""})`,
-      message: `Đã tự động đồng bộ ${syncRes.synced_count || 0} Fanpage từ Meta Graph API. Đang chuyển về trang Quản Lý Fanpage...`
+      statusCode: 200,
+      oauthStatus: "success",
+      title: "Đã kết nối tài khoản Facebook thành công",
+      subtitle: `${res.user_name || ""} (${syncedCount} Fanpage)`,
+      message: "Đã kết nối tài khoản Facebook thành công",
+      syncedCount,
+      accountId: res.account_id
     });
   }
 
@@ -415,7 +431,10 @@ export async function handleWorkerRequest(
         customRedirectUri || null
       );
       if (!res.success) {
-        return jsonResponse({ detail: res.message }, 400);
+        return jsonResponse(
+          { detail: res.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại" },
+          400
+        );
       }
       return jsonResponse(res);
     }
@@ -432,88 +451,22 @@ export async function handleWorkerRequest(
         customRedirectUri || null
       );
       if (!res.success || !res.oauth_url) {
-        return jsonResponse({ detail: res.message || "Lỗi khởi tạo OAuth" }, 400);
+        return jsonResponse(
+          { detail: res.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại" },
+          400
+        );
       }
       return Response.redirect(res.oauth_url, 302);
     }
 
     if (pathname === "/api/meta/connect-token" && method === "POST") {
-      try {
-        const body = (await request.json()) as {
-          access_token?: string;
-          account_id?: string | null;
-        };
-        const connRes = await connectWithAccessToken(
-          db,
-          env,
-          body.access_token || "",
-          ownerUserId,
-          body.account_id || null
-        );
-        if (!connRes.success || !connRes.account_id) {
-          return jsonResponse(
-            { detail: connRes.message || "Không thể kết nối bằng Access Token." },
-            400
-          );
-        }
-
-        let directSyncedCount = 0;
-        if (Array.isArray(connRes.extracted_pages) && connRes.extracted_pages.length > 0) {
-          for (const p of connRes.extracted_pages) {
-            await upsertFacebookPage(db, encryptionKey, {
-              facebookPageId: p.id,
-              pageName: p.name,
-              category: p.category || "Brand / Page",
-              avatarUrl: p.avatar_url || "",
-              pageAccessToken: p.access_token,
-              tasks: p.tasks || ["CREATE_CONTENT", "MANAGE"],
-              canPost: true,
-              isPublished: p.is_published !== false,
-              connectedAccountId: connRes.account_id,
-              tokenStatus: "valid",
-              ownerUserId
-            });
-            directSyncedCount++;
-          }
-        }
-
-        let apiSyncedCount = 0;
-        let syncMessage = "";
-        if (connRes.has_user_token !== false) {
-          const syncRes = await syncPagesForAccount(
-            db,
-            env,
-            connRes.account_id,
-            ownerUserId
-          );
-          apiSyncedCount = syncRes.synced_count || 0;
-          syncMessage = syncRes.message || "";
-        }
-
-        const totalSynced = Math.max(directSyncedCount, apiSyncedCount);
-        const pages = await getFacebookPages(db, encryptionKey, {
-          includeToken: false,
-          ownerUserId
-        });
-
-        return jsonResponse({
-          success: true,
-          account_id: connRes.account_id,
-          user_id: connRes.user_id,
-          user_name: connRes.user_name,
-          token_expires_at: connRes.token_expires_at,
-          is_long_lived: connRes.is_long_lived,
-          synced_count: totalSynced,
-          sync_message: syncMessage,
-          pages,
-          message: `${connRes.message}. Đã đồng bộ ${totalSynced} Fanpage.`
-        });
-      } catch (err) {
-        return jsonResponse(
-          { detail: `Dữ liệu gửi lên không hợp lệ: ${(err as Error).message}` },
-          400
-        );
-      }
+      return jsonResponse(
+        {
+          detail:
+            "Phương thức nhập Access Token thủ công đã được loại bỏ. Vui lòng sử dụng nút Kết nối Facebook."
+        },
+        410
+      );
     }
 
     if (pathname === "/api/meta/sync-pages" && method === "POST") {
@@ -528,7 +481,7 @@ export async function handleWorkerRequest(
       await disconnectAllUserAccounts(db, ownerUserId);
       return jsonResponse({
         success: true,
-        message: "Đã ngắt kết nối toàn bộ tài khoản Facebook Admin của bạn."
+        message: "Đã xóa kết nối toàn bộ tài khoản Facebook và Fanpage của bạn."
       });
     }
 
@@ -539,11 +492,12 @@ export async function handleWorkerRequest(
       if (!res.success) {
         return jsonResponse({ detail: res.message }, 400);
       }
+      const accounts = await getFacebookAccounts(db, encryptionKey, false, ownerUserId);
       const pages = await getFacebookPages(db, encryptionKey, {
         includeToken: false,
         ownerUserId
       });
-      return jsonResponse({ ...res, pages });
+      return jsonResponse({ ...res, accounts, pages });
     }
 
     const reconnectAccMatch = /^\/api\/meta\/accounts\/([^/]+)\/reconnect(?:-url)?$/.exec(pathname);
@@ -558,7 +512,7 @@ export async function handleWorkerRequest(
       );
       if (!acc) {
         return jsonResponse(
-          { detail: "Không tìm thấy tài khoản Facebook Admin thuộc quyền sở hữu của bạn." },
+          { detail: "Không tìm thấy tài khoản Facebook thuộc quyền sở hữu của bạn." },
           404
         );
       }
@@ -581,23 +535,37 @@ export async function handleWorkerRequest(
       }
       return jsonResponse({
         success: true,
-        message: "Đã ngắt kết nối tài khoản Facebook Admin."
+        message: "Đã ngắt kết nối tài khoản Facebook."
       });
     }
 
     const deleteAccMatch = /^\/api\/meta\/accounts\/([^/]+)$/.exec(pathname);
     if (deleteAccMatch && method === "DELETE") {
       const accountId = decodeURIComponent(deleteAccMatch[1]);
-      const ok = await deleteFacebookAccountLocal(db, accountId, ownerUserId);
-      if (!ok) {
+      const delRes = await deleteFacebookAccountWithPages(db, accountId, ownerUserId);
+      if (!delRes.deleted) {
         return jsonResponse(
           { detail: "Không tìm thấy tài khoản hoặc không có quyền xóa." },
           404
         );
       }
+      const accounts = await getFacebookAccounts(db, encryptionKey, false, ownerUserId);
+      const pages = await getFacebookPages(db, encryptionKey, {
+        includeToken: false,
+        ownerUserId
+      });
       return jsonResponse({
         success: true,
-        message: "Đã xóa tài khoản Facebook Admin khỏi danh sách."
+        deleted_id: accountId,
+        deleted_pages_count: delRes.deleted_pages_count,
+        deleted_page_ids: delRes.deleted_page_ids,
+        shared_pages_kept_count: delRes.shared_pages_kept_count,
+        accounts,
+        pages,
+        message:
+          delRes.deleted_pages_count > 0
+            ? `Đã xóa tài khoản Facebook và ${delRes.deleted_pages_count} Fanpage liên quan khỏi danh sách quản lý.`
+            : "Đã xóa tài khoản Facebook và cập nhật danh sách Fanpage."
       });
     }
 

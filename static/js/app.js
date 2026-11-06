@@ -116,11 +116,13 @@
     });
 
     const showConnectModal = ref(false);
-    const connectMethodTab = ref('token'); // 'token' (Khuyên dùng - không lỗi domain) | 'oauth'
-    const directAccessToken = ref('');
-    const isConnectingToken = ref(false);
+    const oauthFlowState = ref('idle'); // 'idle' | 'opening' | 'processing' | 'success' | 'denied' | 'no_pages' | 'missing_permissions' | 'invalid_token' | 'error'
+    const oauthFlowMessage = ref('');
+    const isConnectingOAuth = ref(false);
     const reconnectTargetAccountId = ref(null);
-    const customRedirectUri = ref(window.location.origin + '/api/meta/callback');
+    const showDeleteAccountModal = ref(false);
+    const accountToDelete = ref(null);
+    const isDeletingAccount = ref(false);
     const showSingleTaskModal = ref(false);
     const showBulkTaskModal = ref(false);
     const showEditTaskModal = ref(false);
@@ -317,8 +319,22 @@
     // ==========================================
     // 6. META OAUTH & PAGE MANAGEMENT ACTIONS
     // ==========================================
+    let oauthPopupRef = null;
+    let oauthPopupWatcher = null;
+
+    function clearOAuthPopupWatcher() {
+      if (oauthPopupWatcher) {
+        clearInterval(oauthPopupWatcher);
+        oauthPopupWatcher = null;
+      }
+    }
+
     function openConnectModal(accountId = null) {
       reconnectTargetAccountId.value = accountId && typeof accountId === 'string' ? accountId : null;
+      if (!isConnectingOAuth.value) {
+        oauthFlowState.value = 'idle';
+        oauthFlowMessage.value = '';
+      }
       showConnectModal.value = true;
     }
 
@@ -327,60 +343,116 @@
       loadAccounts();
     }
 
-    async function handleConnectWithToken() {
-      const token = (directAccessToken.value || '').trim();
-      if (!token) {
-        showToast("Vui lòng dán chuỗi Access Token (EAAB...) từ Graph API Explorer.", "error");
-        return;
-      }
-      isConnectingToken.value = true;
-      try {
-        const res = await fetch('/api/meta/connect-token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            access_token: token,
-            account_id: reconnectTargetAccountId.value
-          })
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          directAccessToken.value = '';
-          reconnectTargetAccountId.value = null;
-          showConnectModal.value = false;
-          showToast(data.message || "Kết nối Facebook Admin và đồng bộ Fanpage thành công!", "success");
-          await loadAll();
-        } else {
-          showToast(data.detail || data.message || "Kết nối bằng Access Token thất bại.", "error");
-        }
-      } catch (err) {
-        showToast("Lỗi gọi API kết nối Token: " + err.message, "error");
-      } finally {
-        isConnectingToken.value = false;
+    async function handleOAuthResultPayload(payload) {
+      clearOAuthPopupWatcher();
+      isConnectingOAuth.value = false;
+      const status = payload.status || (payload.success ? 'success' : 'error');
+      const msg = payload.message || (payload.success
+        ? 'Đã kết nối tài khoản Facebook thành công'
+        : 'Không thể kết nối Facebook lúc này, vui lòng thử lại');
+
+      oauthFlowState.value = status;
+      oauthFlowMessage.value = msg;
+
+      await loadAll();
+
+      if (status === 'success') {
+        showToast(msg, 'success');
+        setTimeout(() => {
+          if (oauthFlowState.value === 'success') {
+            showConnectModal.value = false;
+            oauthFlowState.value = 'idle';
+            oauthFlowMessage.value = '';
+          }
+        }, 1200);
+      } else if (status === 'denied' || status === 'no_pages') {
+        showToast(msg, 'warning');
+      } else {
+        showToast(msg, 'error');
       }
     }
 
-    function startMetaOAuthFlow(accountId = null) {
+    function onWindowMessage(event) {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data;
+      if (!data || data.type !== 'META_OAUTH_RESULT') return;
+      handleOAuthResultPayload(data);
+    }
+
+    async function startMetaOAuthFlow(accountId = null) {
+      if (isConnectingOAuth.value) return;
       const targetId = (accountId && typeof accountId === 'string') ? accountId : reconnectTargetAccountId.value;
-      const params = new URLSearchParams({ auth_type: 'rerequest' });
-      if (targetId) {
-        params.set('account_id', targetId);
+
+      isConnectingOAuth.value = true;
+      oauthFlowState.value = 'opening';
+      oauthFlowMessage.value = 'Đang mở Facebook...';
+
+      try {
+        const params = new URLSearchParams();
+        if (targetId) {
+          params.set('account_id', targetId);
+        }
+        const queryStr = params.toString();
+        const res = await fetch(`/api/meta/oauth-url${queryStr ? '?' + queryStr : ''}`);
+        const data = await res.json();
+
+        if (!res.ok || !data.success || !data.oauth_url) {
+          isConnectingOAuth.value = false;
+          oauthFlowState.value = 'error';
+          oauthFlowMessage.value = data.detail || data.message || 'Không thể kết nối Facebook lúc này, vui lòng thử lại';
+          showToast(oauthFlowMessage.value, 'error');
+          return;
+        }
+
+        // Mở cửa sổ Facebook Login (Popup) ở chính giữa màn hình
+        const width = 620;
+        const height = 720;
+        const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+        const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+        const features = `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=yes,status=no,scrollbars=yes,resizable=yes`;
+
+        oauthPopupRef = window.open(data.oauth_url, 'fb_oauth_popup', features);
+
+        // Nếu trình duyệt chặn popup -> tự động chuyển hướng toàn trang trên cùng một luồng OAuth
+        if (!oauthPopupRef || oauthPopupRef.closed || typeof oauthPopupRef.closed === 'undefined') {
+          oauthFlowState.value = 'processing';
+          oauthFlowMessage.value = 'Đang chuyển hướng đến Facebook...';
+          window.location.href = data.oauth_url;
+          return;
+        }
+
+        oauthFlowState.value = 'processing';
+        oauthFlowMessage.value = 'Đang chờ xác nhận quyền truy cập từ Facebook...';
+
+        clearOAuthPopupWatcher();
+        oauthPopupWatcher = setInterval(() => {
+          if (!oauthPopupRef || oauthPopupRef.closed) {
+            clearOAuthPopupWatcher();
+            if (isConnectingOAuth.value) {
+              isConnectingOAuth.value = false;
+              if (oauthFlowState.value === 'opening' || oauthFlowState.value === 'processing') {
+                oauthFlowState.value = 'idle';
+                oauthFlowMessage.value = '';
+              }
+            }
+          }
+        }, 600);
+      } catch {
+        isConnectingOAuth.value = false;
+        oauthFlowState.value = 'error';
+        oauthFlowMessage.value = 'Không thể kết nối Facebook lúc này, vui lòng thử lại';
+        showToast(oauthFlowMessage.value, 'error');
       }
-      if (customRedirectUri.value && customRedirectUri.value.trim()) {
-        params.set('redirect_uri', customRedirectUri.value.trim());
-      }
-      window.location.href = `/api/meta/login?${params.toString()}`;
     }
 
     async function handleDisconnectMeta() {
-      if (!confirm("Bạn có chắc chắn muốn ngắt kết nối Facebook Admin hiện tại không?")) return;
       try {
         const res = await fetch('/api/meta/disconnect', { method: 'POST' });
         const data = await res.json();
         showToast(data.message || "Đã ngắt kết nối.", "success");
         await loadAll();
-      } catch (err) {
-        showToast("Lỗi ngắt kết nối: " + err.message, "error");
+      } catch {
+        showToast("Không thể thực hiện lúc này, vui lòng thử lại.", "error");
       }
     }
 
@@ -393,10 +465,10 @@
           showToast(data.message || "Đồng bộ Fanpage thành công!", "success");
           await loadAll();
         } else {
-          showToast(data.detail || data.message || "Đồng bộ Fanpage thất bại.", "error");
+          showToast(data.detail || data.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại", "error");
         }
-      } catch (err) {
-        showToast("Lỗi gọi API đồng bộ: " + err.message, "error");
+      } catch {
+        showToast("Không thể kết nối Facebook lúc này, vui lòng thử lại", "error");
       } finally {
         isSyncingPages.value = false;
       }
@@ -408,52 +480,74 @@
         const res = await fetch(`/api/meta/accounts/${accountId}/sync`, { method: 'POST' });
         const data = await res.json();
         if (res.ok) {
-          showToast(data.message || "Đồng bộ Fanpage của tài khoản thành công!", "success");
+          showToast(data.message || "Đồng bộ Fanpage thành công!", data.no_pages ? "warning" : "success");
           await loadAll();
         } else {
-          showToast(data.detail || data.message || "Đồng bộ Fanpage thất bại.", "error");
+          showToast(data.detail || data.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại", "error");
         }
-      } catch (err) {
-        showToast("Lỗi gọi API đồng bộ: " + err.message, "error");
+      } catch {
+        showToast("Không thể kết nối Facebook lúc này, vui lòng thử lại", "error");
       } finally {
         isSyncingPages.value = false;
       }
     }
 
     async function handleReconnectAccount(accountId) {
-      openConnectModal(accountId);
+      reconnectTargetAccountId.value = accountId;
+      showConnectModal.value = true;
+      await startMetaOAuthFlow(accountId);
     }
 
     async function handleDisconnectAccount(accountId) {
-      if (!confirm("Bạn có chắc chắn muốn ngắt kết nối tài khoản Facebook Admin này không? Các Fanpage vẫn được giữ nếu còn Admin khác cùng quản lý.")) return;
-      try {
-        const res = await fetch(`/api/meta/accounts/${accountId}/disconnect`, { method: 'POST' });
-        const data = await res.json();
-        if (res.ok) {
-          showToast(data.message || "Đã ngắt kết nối tài khoản.", "success");
-          await loadAll();
-        } else {
-          showToast(data.detail || "Lỗi ngắt kết nối.", "error");
-        }
-      } catch (err) {
-        showToast("Lỗi ngắt kết nối: " + err.message, "error");
-      }
+      const acc = accounts.value.find(a => a.id === accountId) || { id: accountId };
+      promptDeleteAccount(acc);
     }
 
-    async function handleDeleteAccount(accountId) {
-      if (!confirm("Bạn có chắc chắn muốn XÓA vĩnh viễn tài khoản Facebook Admin này khỏi hệ thống?")) return;
+    function promptDeleteAccount(accountOrId) {
+      const acc = typeof accountOrId === 'object' && accountOrId !== null
+        ? accountOrId
+        : (accounts.value.find(a => a.id === accountOrId) || { id: accountOrId, user_name: 'Facebook' });
+      accountToDelete.value = acc;
+      showDeleteAccountModal.value = true;
+    }
+
+    function cancelDeleteAccount() {
+      if (isDeletingAccount.value) return;
+      showDeleteAccountModal.value = false;
+      accountToDelete.value = null;
+    }
+
+    async function confirmDeleteAccount() {
+      if (!accountToDelete.value || isDeletingAccount.value) return;
+      const accountId = accountToDelete.value.id;
+      isDeletingAccount.value = true;
       try {
         const res = await fetch(`/api/meta/accounts/${accountId}`, { method: 'DELETE' });
         const data = await res.json();
-        if (res.ok) {
-          showToast(data.message || "Đã xóa tài khoản.", "success");
+        if (res.ok && data.success) {
+          showDeleteAccountModal.value = false;
+          accountToDelete.value = null;
+          if (Array.isArray(data.accounts)) {
+            accounts.value = data.accounts;
+          }
+          if (Array.isArray(data.pages)) {
+            pages.value = data.pages;
+          }
+          selectedAdminFilterIds.value = selectedAdminFilterIds.value.filter(id => id !== accountId);
+          showToast(data.message || "Đã xóa tài khoản Facebook và các Fanpage liên quan.", "success");
           await loadAll();
         } else {
-          showToast(data.detail || "Lỗi xóa tài khoản.", "error");
+          showToast(data.detail || "Không thể xóa tài khoản, vui lòng thử lại.", "error");
         }
-      } catch (err) {
-        showToast("Lỗi xóa tài khoản: " + err.message, "error");
+      } catch {
+        showToast("Không thể xóa tài khoản, vui lòng thử lại.", "error");
+      } finally {
+        isDeletingAccount.value = false;
       }
+    }
+
+    function handleDeleteAccount(accountOrId) {
+      promptDeleteAccount(accountOrId);
     }
 
     function toggleAdminFilter(accountId) {
@@ -1043,11 +1137,29 @@
         }
       });
 
+      window.addEventListener('message', onWindowMessage);
+
       // Kiểm tra xác thực người dùng
       const authed = await checkAuth();
       if (!authed) return;
 
       await loadAll();
+
+      // Xử lý kết quả OAuth nếu quay lại từ chế độ redirect toàn trang
+      const urlParams = new URLSearchParams(window.location.search);
+      const oauthStatus = urlParams.get('oauth_status');
+      const oauthMsg = urlParams.get('oauth_msg');
+      if (oauthStatus) {
+        history.replaceState(null, '', window.location.pathname);
+        if (oauthStatus !== 'success') {
+          showConnectModal.value = true;
+        }
+        await handleOAuthResultPayload({
+          success: oauthStatus === 'success',
+          status: oauthStatus,
+          message: oauthMsg || ''
+        });
+      }
 
       // Smart Polling tối ưu cho Cloudflare Workers Free Plan:
       // - Chỉ poll nhanh (5 giây) khi có tác vụ đang chạy/queued
@@ -1071,6 +1183,8 @@
 
     onUnmounted(() => {
       if (pollInterval) clearInterval(pollInterval);
+      clearOAuthPopupWatcher();
+      window.removeEventListener('message', onWindowMessage);
     });
 
     return {
@@ -1102,11 +1216,13 @@
       showRunTestModal,
       testResult,
       showConnectModal,
-      connectMethodTab,
-      directAccessToken,
-      isConnectingToken,
+      oauthFlowState,
+      oauthFlowMessage,
+      isConnectingOAuth,
       reconnectTargetAccountId,
-      customRedirectUri,
+      showDeleteAccountModal,
+      accountToDelete,
+      isDeletingAccount,
       showAccountsModal,
       showSingleTaskModal,
       showBulkTaskModal,
@@ -1127,13 +1243,15 @@
       loadTasks,
       openConnectModal,
       openAccountsModal,
-      handleConnectWithToken,
       startMetaOAuthFlow,
       handleDisconnectMeta,
       handleSyncPages,
       handleSyncAccountPages,
       handleReconnectAccount,
       handleDisconnectAccount,
+      promptDeleteAccount,
+      cancelDeleteAccount,
+      confirmDeleteAccount,
       handleDeleteAccount,
       toggleAdminFilter,
       clearAdminFilter,

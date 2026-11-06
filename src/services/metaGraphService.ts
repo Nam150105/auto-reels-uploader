@@ -13,6 +13,7 @@ import {
   getFacebookAccountById,
   updateFacebookAccountStatus,
   upsertFacebookPage,
+  removeStaleAccountPages,
   getFacebookPages,
   getFacebookPageByFbId,
   getTasks,
@@ -35,6 +36,8 @@ export async function syncPagesForAccount(
   ownerUserId: string
 ): Promise<{
   success: boolean;
+  error_code?: string;
+  no_pages?: boolean;
   account_id?: string;
   facebook_user_name?: string | null;
   synced_count?: number;
@@ -53,8 +56,8 @@ export async function syncPagesForAccount(
   if (!account) {
     return {
       success: false,
-      message:
-        "Không tìm thấy tài khoản Facebook Admin hoặc bạn không có quyền truy cập tài khoản này."
+      error_code: "not_found",
+      message: "Không tìm thấy tài khoản Facebook hoặc bạn không có quyền truy cập."
     };
   }
 
@@ -64,14 +67,15 @@ export async function syncPagesForAccount(
       db,
       accountId,
       "expired",
-      "Token không tồn tại hoặc không thể giải mã. Vui lòng kết nối lại.",
+      "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại",
       null,
       "invalid"
     );
     return {
       success: false,
+      error_code: "invalid_token",
       account_id: accountId,
-      message: `Tài khoản '${account.facebook_user_name}' thiếu Access Token hợp lệ. Vui lòng nhấn 'Kết nối lại'.`
+      message: "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại"
     };
   }
 
@@ -80,20 +84,20 @@ export async function syncPagesForAccount(
       `${cfg.graphBase}/me/accounts?fields=id,name,global_brand_page_name,access_token,category,picture{url},tasks,is_published&limit=100&access_token=${encodeURIComponent(userToken)}`;
 
     let syncedCount = 0;
+    const syncedPageIds: string[] = [];
     let pageGuard = 0;
 
-    while (nextUrl && pageGuard < 20) {
+    while (nextUrl && pageGuard < 50) {
       pageGuard++;
       let resp = await fetch(nextUrl);
       let data = (await resp.json()) as Record<string, unknown>;
 
-      // Nếu một số field mở rộng (như tasks, is_published) bị từ chối quyền trên Brand Page, tự động fallback sang fields tối giản giống Graph API Explorer
+      // Fallback nếu Brand Page không hỗ trợ một số field mở rộng
       if ((!resp.ok || data.error) && pageGuard === 1 && nextUrl.includes("is_published")) {
         const err = (data.error || {}) as Record<string, unknown>;
         const code = Number(err.code || 0);
-        const rawErrMsg = String(err.message || "");
-        if (code !== 190 && !/node type \(Page\)/i.test(rawErrMsg)) {
-          const fallbackUrl = `${cfg.graphBase}/me/accounts?fields=id,name,global_brand_page_name,access_token&limit=100&access_token=${encodeURIComponent(userToken)}`;
+        if (code !== 190 && code !== 102) {
+          const fallbackUrl = `${cfg.graphBase}/me/accounts?fields=id,name,global_brand_page_name,access_token,tasks&limit=100&access_token=${encodeURIComponent(userToken)}`;
           const fbResp = await fetch(fallbackUrl);
           const fbData = (await fbResp.json()) as Record<string, unknown>;
           if (fbResp.ok && !fbData.error) {
@@ -109,81 +113,69 @@ export async function syncPagesForAccount(
         const rawErrMsg = String(err.message || "Lỗi gọi /me/accounts");
         const msg = sanitizeSensitiveText(rawErrMsg);
 
-        // Trường hợp người dùng dán trực tiếp Page Access Token (node type Page không có /accounts)
-        if (code === 100 && /node type \(Page\)/i.test(rawErrMsg)) {
-          const pageMeResp = await fetch(
-            `${cfg.graphBase}/me?fields=id,name,global_brand_page_name,category,picture{url},tasks,is_published&access_token=${encodeURIComponent(userToken)}`
-          );
-          if (pageMeResp.ok) {
-            const pageMe = (await pageMeResp.json()) as Record<string, unknown>;
-            if (pageMe.id) {
-              const picObj = (pageMe.picture as { data?: { url?: string } }) || {};
-              const tasksList = Array.isArray(pageMe.tasks)
-                ? pageMe.tasks.map((t) => String(t).toUpperCase())
-                : ["CREATE_CONTENT", "MANAGE"];
-              await upsertFacebookPage(db, cfg.encryptionKey, {
-                facebookPageId: String(pageMe.id),
-                pageName: String(
-                  pageMe.name || pageMe.global_brand_page_name || account.facebook_user_name || "Fanpage"
-                ),
-                category: String(pageMe.category || "Page"),
-                avatarUrl: String(picObj.data?.url || ""),
-                pageAccessToken: userToken,
-                tasks: tasksList,
-                canPost: true,
-                isPublished: pageMe.is_published !== false,
-                connectedAccountId: accountId,
-                tokenStatus: "valid",
-                ownerUserId
-              });
-              syncedCount++;
-              break;
-            }
-          }
-        }
-
-        const isAuthErr = code === 190 || code === 102 || code === 10 || code === 200;
+        const isTokenErr = code === 190 || code === 102;
+        const isPermErr = code === 10 || code === 200;
 
         await updateFacebookAccountStatus(
           db,
           accountId,
-          isAuthErr ? "expired" : "error",
+          isTokenErr || isPermErr ? "expired" : "error",
           `Meta Error (${code}): ${msg}`,
           null,
-          isAuthErr ? "expired" : "error"
+          isTokenErr || isPermErr ? "expired" : "error"
         );
 
         return {
           success: false,
+          error_code: isTokenErr
+            ? "invalid_token"
+            : isPermErr
+              ? "missing_permissions"
+              : "facebook_error",
           account_id: accountId,
-          message: `Lỗi đồng bộ Fanpage cho '${account.facebook_user_name}': ${msg}`
+          message: isTokenErr
+            ? "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại"
+            : isPermErr
+              ? "Facebook chưa cấp đủ quyền cần thiết"
+              : "Không thể kết nối Facebook lúc này, vui lòng thử lại"
         };
       }
 
       const items = (data.data as Array<Record<string, unknown>>) || [];
       for (const item of items) {
-        const pageId = String(item.id || "");
+        const pageId = String(item.id || "").trim();
         const pageName = String(
           item.name || item.global_brand_page_name || "Unnamed Page"
-        );
-        const pageToken = String(item.access_token || "");
+        ).trim();
+        const pageToken = String(item.access_token || "").trim();
+        // Không lấy hoặc lưu Page thiếu Page ID hoặc thiếu Page Access Token
         if (!pageId || !pageToken) continue;
+
+        const hasTasksField = Array.isArray(item.tasks);
+        const tasksList = hasTasksField ? (item.tasks as unknown[]).map(String) : [];
+        const upperTasks = hasTasksField
+          ? tasksList.map((t) => t.toUpperCase())
+          : ["CREATE_CONTENT", "MANAGE"];
+
+        // Không lấy hoặc lưu những Page mà tài khoản không có quyền quản lý phù hợp
+        if (hasTasksField) {
+          const hasValidManagementTask = upperTasks.some((t) =>
+            ["MANAGE", "CREATE_CONTENT", "MODERATE", "ADVERTISE"].includes(t)
+          );
+          if (!hasValidManagementTask) {
+            continue;
+          }
+        }
 
         const category = String(item.category || "Brand / Page");
         const picObj = (item.picture as { data?: { url?: string } }) || {};
         const avatarUrl = String(picObj.data?.url || "");
-        const tasksList = Array.isArray(item.tasks) ? item.tasks.map(String) : [];
         const isPublished = item.is_published !== false;
 
-        const upperTasks =
-          tasksList.length > 0
-            ? tasksList.map((t) => t.toUpperCase())
-            : ["CREATE_CONTENT", "MANAGE"];
         const canPost =
           upperTasks.includes("CREATE_CONTENT") ||
           upperTasks.includes("MANAGE") ||
-          upperTasks.includes("MODERATE") ||
-          Boolean(pageToken);
+          upperTasks.includes("MODERATE");
 
         await upsertFacebookPage(db, cfg.encryptionKey, {
           facebookPageId: pageId,
@@ -199,6 +191,7 @@ export async function syncPagesForAccount(
           ownerUserId
         });
 
+        syncedPageIds.push(pageId);
         syncedCount++;
       }
 
@@ -206,23 +199,39 @@ export async function syncPagesForAccount(
       nextUrl = paging.next || null;
     }
 
+    // Đồng bộ lại các liên kết Page cũ không còn thuộc quyền quản lý của Admin này
+    await removeStaleAccountPages(db, accountId, ownerUserId, syncedPageIds);
+
     const nowIso = new Date().toISOString();
     await updateFacebookAccountStatus(db, accountId, "connected", null, nowIso, "valid");
 
+    if (syncedCount === 0) {
+      return {
+        success: true,
+        no_pages: true,
+        account_id: accountId,
+        facebook_user_name: account.facebook_user_name,
+        synced_count: 0,
+        message: "Tài khoản này chưa quản lý Fanpage nào"
+      };
+    }
+
     return {
       success: true,
+      no_pages: false,
       account_id: accountId,
       facebook_user_name: account.facebook_user_name,
       synced_count: syncedCount,
-      message: `Đã đồng bộ ${syncedCount} Fanpage từ tài khoản ${account.facebook_user_name}.`
+      message: `Đã kết nối tài khoản Facebook thành công (${syncedCount} Fanpage).`
     };
   } catch (err) {
     const errMsg = sanitizeSensitiveText(`Lỗi mạng khi đồng bộ Fanpage: ${(err as Error).message}`);
     await updateFacebookAccountStatus(db, accountId, "error", errMsg, null, "error");
     return {
       success: false,
+      error_code: "facebook_error",
       account_id: accountId,
-      message: errMsg
+      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
     };
   }
 }

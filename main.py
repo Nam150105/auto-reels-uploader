@@ -342,7 +342,7 @@ def sync_account_pages_endpoint(account_id: str):
 
 @app.get("/api/meta/accounts/{account_id}/reconnect-url")
 def reconnect_account_url_endpoint(account_id: str, request: Request = None):
-    """Tạo link OAuth để kết nối lại tài khoản Admin cụ thể."""
+    """Tạo link OAuth để kết nối lại  cụ thể."""
     user, owner_uid, _ = get_user_context(request)
     res = generate_oauth_url(account_id=account_id, user_id=owner_uid, auth_type="rerequest")
     if res["status"] == "error":
@@ -515,7 +515,7 @@ def list_pages_endpoint(
     only_selected: bool = False,
     request: Request = None
 ):
-    """Lấy danh sách Fanpage đã khử trùng lặp, hỗ trợ phân quyền người dùng và lọc theo tài khoản Admin."""
+    """Lấy danh sách Fanpage đã khử trùng lặp, hỗ trợ phân quyền người dùng và lọc theo ."""
     parsed_account_ids = None
     if isinstance(account_ids, str) and account_ids.strip():
         parsed_account_ids = [a.strip() for a in account_ids.split(",") if a.strip()]

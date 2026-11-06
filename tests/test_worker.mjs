@@ -405,6 +405,12 @@ async function runAll30Tests() {
       if (u.includes("code=code_user_a_acc2")) {
         return new Response(JSON.stringify({ access_token: "EAAB_TOKEN_A2", expires_in: 5184000 }), { status: 200 });
       }
+      if (u.includes("code=code_user_a_nopages")) {
+        return new Response(JSON.stringify({ access_token: "EAAB_TOKEN_NOPAGES", expires_in: 5184000 }), { status: 200 });
+      }
+      if (u.includes("code=code_user_a_missing_perm")) {
+        return new Response(JSON.stringify({ access_token: "EAAB_TOKEN_MISSING_PERM", expires_in: 5184000 }), { status: 200 });
+      }
       if (u.includes("code=code_user_b_acc1")) {
         return new Response(JSON.stringify({ access_token: "EAAB_TOKEN_B1", expires_in: 5184000 }), { status: 200 });
       }
@@ -425,6 +431,12 @@ async function runAll30Tests() {
       if (u.includes("EAAB_TOKEN_A2")) {
         return new Response(JSON.stringify({ id: "fb_uid_a2", name: "Alice FB Admin 2" }), { status: 200 });
       }
+      if (u.includes("EAAB_TOKEN_NOPAGES")) {
+        return new Response(JSON.stringify({ id: "fb_uid_nopages", name: "Alice Empty Admin" }), { status: 200 });
+      }
+      if (u.includes("EAAB_TOKEN_MISSING_PERM")) {
+        return new Response(JSON.stringify({ id: "fb_uid_missing", name: "Alice Missing Perm" }), { status: 200 });
+      }
       if (u.includes("EAAB_TOKEN_B1")) {
         return new Response(JSON.stringify({ id: "fb_uid_b1", name: "Bob FB Admin 1" }), { status: 200 });
       }
@@ -432,6 +444,17 @@ async function runAll30Tests() {
 
     // 3. /me/permissions
     if (u.includes("/me/permissions")) {
+      if (u.includes("EAAB_TOKEN_MISSING_PERM")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { permission: "public_profile", status: "granted" },
+              { permission: "pages_show_list", status: "declined" }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
       return new Response(
         JSON.stringify({
           data: [
@@ -439,8 +462,7 @@ async function runAll30Tests() {
             { permission: "pages_show_list", status: "granted" },
             { permission: "pages_read_engagement", status: "granted" },
             { permission: "pages_manage_posts", status: "granted" },
-            { permission: "pages_manage_engagement", status: "granted" },
-            { permission: "pages_read_user_content", status: "granted" }
+            { permission: "pages_manage_engagement", status: "granted" }
           ]
         }),
         { status: 200 }
@@ -449,6 +471,9 @@ async function runAll30Tests() {
 
     // 4. /me/accounts (with multi-page cursor pagination for Alice Admin 1, and overlapping Page for Alice Admin 2)
     if (u.includes("/me/accounts")) {
+      if (u.includes("EAAB_TOKEN_NOPAGES")) {
+        return new Response(JSON.stringify({ data: [], paging: {} }), { status: 200 });
+      }
       if (u.includes("EAAB_TOKEN_A1") && !u.includes("after=cursor_page_2")) {
         return new Response(
           JSON.stringify({
@@ -663,23 +688,71 @@ async function runAll30Tests() {
   });
   assert.equal(cbA2.status, 200);
 
-  // Kiểm tra kết nối trực tiếp bằng Access Token / URL Graph API Explorer (/api/meta/connect-token) không cần Redirect URI
+  // Kết nối lại cùng tài khoản Admin 2 -> Phải cập nhật chứ không tạo trùng bản ghi Admin
+  const oauthAResp2Reconnect = await callWorker("/api/meta/oauth-url", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  const oauthA2Reconnect = await oauthAResp2Reconnect.json();
+  const cbA2Reconnect = await callWorker(`/api/meta/callback?code=code_user_a_acc2&state=${oauthA2Reconnect.state}`, {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(cbA2Reconnect.status, 200);
+
+  // Kiểm tra endpoint nhập token thủ công cũ (/api/meta/connect-token) đã bị vô hiệu hóa hoàn toàn (410 Gone)
   const directConnResp = await callWorker("/api/meta/connect-token", {
     method: "POST",
     headers: {
       Cookie: `session_token=${tokenA}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      access_token:
-        'https://graph.facebook.com/v27.0/me/accounts?access_token=EAAB_TOKEN_A2_SHORT&fields=id%2C%20global_brand_page_name%2C%20access_token,{"data":[{"id":"page_101","global_brand_page_name":"Fanpage Điện Ảnh A1","access_token":"EAAB_PAGE_TOKEN_101_FROM_A2"}]}'
-    })
+    body: JSON.stringify({ access_token: "EAAB_MANUAL_TOKEN" })
   });
-  assert.equal(directConnResp.status, 200);
-  const directConnData = await directConnResp.json();
-  assert.equal(directConnData.success, true);
-  assert.equal(directConnData.is_long_lived, true);
-  assert.equal(directConnData.synced_count, 1);
+  assert.equal(directConnResp.status, 410, "Phương thức nhập Access Token thủ công phải bị vô hiệu hóa (410 Gone)");
+
+  // Kiểm tra trường hợp người dùng bấm Hủy trên Facebook (?error=access_denied)
+  const cbDenied = await callWorker("/api/meta/callback?error=access_denied&error_reason=user_denied", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(cbDenied.status, 200);
+  const cbDeniedHtml = await cbDenied.text();
+  assert.ok(cbDeniedHtml.includes("Bạn chưa cấp quyền kết nối Facebook"));
+
+  // Kiểm tra trường hợp Facebook thiếu quyền bắt buộc
+  const oauthMissingPerm = await (
+    await callWorker("/api/meta/oauth-url", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const cbMissingPerm = await callWorker(
+    `/api/meta/callback?code=code_user_a_missing_perm&state=${oauthMissingPerm.state}`,
+    { headers: { Cookie: `session_token=${tokenA}` } }
+  );
+  assert.equal(cbMissingPerm.status, 400);
+  const cbMissingPermHtml = await cbMissingPerm.text();
+  assert.ok(cbMissingPermHtml.includes("Facebook chưa cấp đủ quyền cần thiết"));
+
+  // Kiểm tra trường hợp tài khoản không quản lý Fanpage nào
+  const oauthNoPages = await (
+    await callWorker("/api/meta/oauth-url", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const cbNoPages = await callWorker(
+    `/api/meta/callback?code=code_user_a_nopages&state=${oauthNoPages.state}`,
+    { headers: { Cookie: `session_token=${tokenA}` } }
+  );
+  assert.equal(cbNoPages.status, 200);
+  const cbNoPagesHtml = await cbNoPages.text();
+  assert.ok(cbNoPagesHtml.includes("Tài khoản này chưa quản lý Fanpage nào"));
+
+  // Kiểm tra danh sách Admin của User A (không lộ access_token / masked_token, kèm danh sách pages của từng Admin)
+  const accsAResp = await callWorker("/api/meta/accounts", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  const accsA = await accsAResp.json();
+  const mainAdminsA = accsA.filter((a) => a.facebook_user_id === "fb_uid_a1" || a.facebook_user_id === "fb_uid_a2");
+  assert.equal(mainAdminsA.length, 2, "Kết nối lại Admin đã tồn tại không được tạo trùng bản ghi");
+  for (const acc of accsA) {
+    assert.equal(acc.access_token, undefined, "Không được trả access_token về frontend");
+    assert.equal(acc.masked_token, undefined, "Không được trả masked_token về frontend");
+    assert.ok(Array.isArray(acc.pages), "Mỗi Admin phải kèm danh sách Fanpage đang quản lý");
+  }
 
   // Kiểm tra danh sách Fanpage của User A (Phân trang /me/accounts + Chống trùng lặp Page)
   const pagesAResp = await callWorker("/api/pages", {
@@ -1045,12 +1118,68 @@ async function runAll30Tests() {
   assert.ok(statusPageHtml.includes(delCbJson.confirmation_code));
   assert.ok(statusPageHtml.includes("COMPLETED"));
 
-  // Kiểm tra tài khoản fb_uid_b1 của Bob đã thực sự bị xóa khỏi D1
+  // Kiểm tra tài khoản fb_uid_b1 của Bob đã thực sự bị xóa khỏi D1 và Page của Bob cũng bị xóa hoàn toàn
   const bobAccsAfterDel = await (
     await callWorker("/api/meta/accounts", { headers: { Cookie: `session_token=${tokenB}` } })
   ).json();
   assert.equal(bobAccsAfterDel.length, 0, "Dữ liệu Facebook Account phải được xóa thật khỏi D1");
+  const bobPagesAfterDel = await (
+    await callWorker("/api/pages", { headers: { Cookie: `session_token=${tokenB}` } })
+  ).json();
+  assert.equal(bobPagesAfterDel.length, 0, "Fanpage của Bob phải bị xóa hoàn toàn khi xóa Admin");
   console.log("  ✓ [Test 26] Meta Data Deletion xóa dữ liệu thật trong D1 & lưu biên bản tra cứu");
+
+  // --------------------------------------------------------------------------
+  // [TEST 26B] Xóa Admin & Cascade Xóa Toàn Bộ Fanpage Liên Kết (Mục V & VIII)
+  // --------------------------------------------------------------------------
+  const aliceAccsBefore = await (
+    await callWorker("/api/meta/accounts", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const adminA1 = aliceAccsBefore.find((a) => a.facebook_user_id === "fb_uid_a1");
+  const adminA2 = aliceAccsBefore.find((a) => a.facebook_user_id === "fb_uid_a2");
+  assert.ok(adminA1 && adminA2, "Alice phải có đủ 2 Admin chính trước khi test xóa");
+
+  // 1. Bob thử xóa Admin của Alice -> Phải trả về 404 (Kiểm tra quyền sở hữu)
+  const bobDeleteAliceAdmin = await callWorker(`/api/meta/accounts/${adminA1.id}`, {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenB}` }
+  });
+  assert.equal(bobDeleteAliceAdmin.status, 404, "User khác không được phép xóa Admin của Alice");
+
+  // 2. Alice xóa Admin 1 (quản lý độc quyền page_102 và dùng chung page_101 với Admin 2)
+  const delAdminA1Resp = await callWorker(`/api/meta/accounts/${adminA1.id}`, {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(delAdminA1Resp.status, 200);
+  const delAdminA1Data = await delAdminA1Resp.json();
+  assert.equal(delAdminA1Data.success, true);
+  assert.equal(delAdminA1Data.deleted_pages_count, 1, "page_102 độc quyền của Admin 1 phải bị xóa");
+  assert.ok(delAdminA1Data.deleted_page_ids.includes("page_102"), "Danh sách xóa phải có page_102");
+  assert.equal(delAdminA1Data.shared_pages_kept_count, 1, "page_101 còn Admin 2 quản lý nên phải giữ lại");
+
+  const alicePagesAfterDelA1 = await (
+    await callWorker("/api/pages", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  assert.equal(alicePagesAfterDelA1.length, 1, "Sau khi xóa Admin 1, chỉ còn lại page_101");
+  assert.equal(alicePagesAfterDelA1[0].facebook_page_id, "page_101");
+  assert.equal(alicePagesAfterDelA1[0].connected_account_id, adminA2.id, "page_101 phải chuyển sang Admin 2");
+
+  // 3. Alice xóa tiếp Admin 2 (đang quản lý page_101) -> page_101 phải bị xóa hoàn toàn khỏi ứng dụng
+  const delAdminA2Resp = await callWorker(`/api/meta/accounts/${adminA2.id}`, {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(delAdminA2Resp.status, 200);
+  const delAdminA2Data = await delAdminA2Resp.json();
+  assert.equal(delAdminA2Data.deleted_pages_count, 1, "page_101 phải bị xóa khi xóa Admin cuối cùng");
+  assert.ok(delAdminA2Data.deleted_page_ids.includes("page_101"));
+
+  const alicePagesAfterDelAll = await (
+    await callWorker("/api/pages", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  assert.equal(alicePagesAfterDelAll.length, 0, "Toàn bộ Fanpage phải biến mất sau khi xóa hết Admin");
+  console.log("  ✓ [Test 26B] Xóa Admin tự động xóa toàn bộ Fanpage độc quyền & bảo toàn Fanpage chung");
 
   // --------------------------------------------------------------------------
   // [TEST 27, 28, 29, 30] Production Cleanliness & Security Audits
@@ -1096,6 +1225,17 @@ async function runAll30Tests() {
   assert.ok(!allDeps.includes("puppeteer"), "package.json không được chứa puppeteer");
   assert.ok(!allDeps.includes("gemlogin"), "package.json không được chứa gemlogin");
   assert.ok(!fs.existsSync(path.join(process.cwd(), "requirements.txt")), "requirements.txt ở root phải được dời sang legacy/");
+
+  // Kiểm tra UI Thêm Admin mới (Mục II): Không còn Graph API Explorer / nhập token thủ công, có đủ UI OAuth đơn giản & Modal Xóa
+  const indexHtmlContent = fs.readFileSync(path.join(process.cwd(), "static/index.html"), "utf8");
+  const appJsContent = fs.readFileSync(path.join(process.cwd(), "static/js/app.js"), "utf8");
+  assert.ok(!indexHtmlContent.includes("Graph API Explorer"), "static/index.html không được chứa Graph API Explorer");
+  assert.ok(!appJsContent.includes("Graph API Explorer"), "static/js/app.js không được chứa Graph API Explorer");
+  assert.ok(!indexHtmlContent.includes("directAccessToken"), "static/index.html không được chứa ô nhập directAccessToken");
+  assert.ok(!appJsContent.includes("directAccessToken"), "static/js/app.js không được chứa biến directAccessToken");
+  assert.ok(indexHtmlContent.includes("Thêm tài khoản Facebook"), "static/index.html phải có tiêu đề Thêm tài khoản Facebook");
+  assert.ok(indexHtmlContent.includes("+ Kết nối Facebook"), "static/index.html phải có nút + Kết nối Facebook");
+  assert.ok(indexHtmlContent.includes("Xóa tài khoản Facebook?"), "static/index.html phải có modal Xóa tài khoản Facebook?");
 
   console.log("  ✓ [Test 27] Không còn bất kỳ URL localhost:8000 / 127.0.0.1:8000 trong Production");
   console.log("  ✓ [Test 28] Không lộ META_APP_SECRET hoặc Access Token trong Frontend & Config");

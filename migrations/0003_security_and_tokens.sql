@@ -41,3 +41,25 @@ CREATE TABLE IF NOT EXISTS security_key_metadata (
 INSERT OR IGNORE INTO security_key_metadata (key_version, algorithm, is_current, created_at)
 VALUES ('v2', 'AES-256-GCM', 1, '2026-11-06T00:00:00Z');
 
+-- View quản lý tập trung Access Token của các Admin và Fanpage trong D1 Database
+CREATE VIEW IF NOT EXISTS admin_token_registry AS
+SELECT
+    fa.id AS token_record_id,
+    fa.owner_user_id AS admin_user_id,
+    fa.facebook_user_id,
+    fa.facebook_user_name,
+    fap.facebook_page_id AS page_id,
+    fp.page_name,
+    fa.token_type,
+    fa.token_version,
+    fa.status AS account_status,
+    COALESCE(fap.token_status, fa.token_status) AS token_status,
+    fa.token_expires_at AS expires_at,
+    COALESCE(fap.last_synced_at, fa.last_synced_at) AS last_synced_at,
+    fa.updated_at
+FROM facebook_accounts fa
+LEFT JOIN facebook_account_pages fap ON fap.facebook_account_id = fa.id
+LEFT JOIN facebook_pages fp
+  ON fp.facebook_page_id = fap.facebook_page_id
+  AND COALESCE(fp.owner_user_id, '') = COALESCE(fa.owner_user_id, '');
+

@@ -1,14 +1,13 @@
 /**
  * Meta Facebook OAuth 2.0 Service (Cloudflare Workers + D1)
- * - Authorization Code Flow chuẩn Meta Graph API
+ * - Duy nhất phương thức kết nối: Facebook OAuth 2.0 Authorization Code Flow
  * - Lưu CSRF State trong D1 (`oauth_states`), chỉ sử dụng 1 lần (One-Time Use)
- * - Hỗ trợ nhiều người dùng thực hiện OAuth đồng thời
+ * - Ràng buộc chặt chẽ phiên OAuth với người dùng đang đăng nhập
  * - Nâng cấp Long-Lived User Access Token (~60 ngày) và kiểm tra quyền (/me/permissions)
  */
 
 import type { D1Database, Env, FacebookAccountRecord } from "../types.ts";
 import { randomHex, getEncryptionKeyMaterial } from "../utils/crypto.ts";
-import { sanitizeSensitiveText } from "../utils/sanitize.ts";
 import {
   createOAuthState,
   consumeOAuthState,
@@ -25,8 +24,13 @@ export const REQUIRED_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_posts",
-  "pages_manage_engagement",
-  "pages_read_user_content"
+  "pages_manage_engagement"
+];
+
+export const ESSENTIAL_PAGE_SCOPES = [
+  "pages_show_list",
+  "pages_read_engagement",
+  "pages_manage_posts"
 ];
 
 export function getMetaConfig(env: Env) {
@@ -76,20 +80,33 @@ export async function generateOAuthUrl(
   redirect_uri?: string;
   app_id?: string;
   scopes?: string[];
+  error_code?: string;
   message?: string;
 }> {
   const cfg = getMetaConfig(env);
   if (!cfg.appId || !cfg.appSecret) {
     return {
       success: false,
-      message:
-        "Thiếu cấu hình META_APP_ID hoặc META_APP_SECRET trên Cloudflare Worker Secrets. Vui lòng chạy `npx wrangler secret put META_APP_SECRET` hoặc dùng Cách 1: Dán trực tiếp Access Token."
+      error_code: "facebook_error",
+      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
     };
   }
 
   let effectiveRedirectUri = cfg.redirectUri;
-  if (customRedirectUri && /^https?:\/\/[^/\s]+\/api\/meta\/callback$/i.test(customRedirectUri.trim())) {
-    effectiveRedirectUri = customRedirectUri.trim();
+  if (customRedirectUri) {
+    const trimmed = customRedirectUri.trim();
+    try {
+      const parsedCustom = new URL(trimmed);
+      const parsedConfigured = new URL(cfg.redirectUri);
+      if (
+        parsedCustom.origin === parsedConfigured.origin &&
+        parsedCustom.pathname === "/api/meta/callback"
+      ) {
+        effectiveRedirectUri = trimmed;
+      }
+    } catch {
+      // Giữ nguyên cfg.redirectUri nếu customRedirectUri không hợp lệ
+    }
   }
 
   const state = randomHex(24);
@@ -127,9 +144,10 @@ export async function exchangeCodeForToken(
   env: Env,
   code: string,
   state: string,
-  fallbackOwnerUserId: string | null = null
+  currentUserId: string | null = null
 ): Promise<{
   success: boolean;
+  error_code?: string;
   account_id?: string;
   owner_user_id?: string;
   user_id?: string;
@@ -139,16 +157,42 @@ export async function exchangeCodeForToken(
   missing_scopes?: string[];
   message?: string;
 }> {
-  const stateCheck = await consumeOAuthState(db, state);
-  if (!stateCheck.valid) {
-    return { success: false, message: stateCheck.message };
+  if (!code || !state) {
+    return {
+      success: false,
+      error_code: "invalid_state",
+      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+    };
   }
 
-  const ownerUserId = stateCheck.owner_user_id || fallbackOwnerUserId;
+  const stateCheck = await consumeOAuthState(db, state);
+  if (!stateCheck.valid) {
+    return {
+      success: false,
+      error_code: "invalid_state",
+      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+    };
+  }
+
+  // Ràng buộc OAuth callback với đúng người dùng đang đăng nhập ứng dụng
+  if (
+    currentUserId &&
+    stateCheck.owner_user_id &&
+    stateCheck.owner_user_id !== currentUserId
+  ) {
+    return {
+      success: false,
+      error_code: "user_mismatch",
+      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+    };
+  }
+
+  const ownerUserId = stateCheck.owner_user_id || currentUserId;
   if (!ownerUserId) {
     return {
       success: false,
-      message: "Không xác định được phiên người dùng thực hiện kết nối OAuth."
+      error_code: "unauthenticated",
+      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
     };
   }
 
@@ -156,7 +200,8 @@ export async function exchangeCodeForToken(
   if (!cfg.appId || !cfg.appSecret) {
     return {
       success: false,
-      message: "Thiếu META_APP_ID hoặc META_APP_SECRET trên Cloudflare Worker."
+      error_code: "facebook_error",
+      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
     };
   }
 
@@ -166,7 +211,7 @@ export async function exchangeCodeForToken(
       : cfg.redirectUri;
 
   try {
-    // Bước 1: Đổi code lấy Short-Lived User Access Token
+    // Bước 1: Đổi authorization code lấy Short-Lived User Access Token
     const tokenParams = new URLSearchParams({
       client_id: cfg.appId,
       redirect_uri: effectiveRedirectUri,
@@ -180,12 +225,10 @@ export async function exchangeCodeForToken(
     const tokenData = (await tokenResp.json()) as Record<string, unknown>;
 
     if (!tokenResp.ok || tokenData.error) {
-      const errObj = (tokenData.error || {}) as Record<string, unknown>;
       return {
         success: false,
-        message: sanitizeSensitiveText(
-          `Lỗi đổi mã OAuth code: ${errObj.message || tokenResp.statusText}`
-        )
+        error_code: "facebook_error",
+        message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
       };
     }
 
@@ -193,7 +236,8 @@ export async function exchangeCodeForToken(
     if (!shortToken) {
       return {
         success: false,
-        message: "Meta không trả về access_token hợp lệ."
+        error_code: "invalid_token",
+        message: "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại"
       };
     }
 
@@ -201,56 +245,50 @@ export async function exchangeCodeForToken(
     let finalToken = shortToken;
     let expiresIn = Number(tokenData.expires_in || 0);
 
-    const llParams = new URLSearchParams({
-      grant_type: "fb_exchange_token",
-      client_id: cfg.appId,
-      client_secret: cfg.appSecret,
-      fb_exchange_token: shortToken
-    });
+    try {
+      const llParams = new URLSearchParams({
+        grant_type: "fb_exchange_token",
+        client_id: cfg.appId,
+        client_secret: cfg.appSecret,
+        fb_exchange_token: shortToken
+      });
 
-    const llResp = await fetch(`${cfg.graphBase}/oauth/access_token?${llParams.toString()}`);
-    if (llResp.ok) {
-      const llData = (await llResp.json()) as Record<string, unknown>;
-      if (llData.access_token) {
-        finalToken = String(llData.access_token);
-        expiresIn = Number(llData.expires_in || expiresIn || 60 * 86400);
+      const llResp = await fetch(`${cfg.graphBase}/oauth/access_token?${llParams.toString()}`);
+      if (llResp.ok) {
+        const llData = (await llResp.json()) as Record<string, unknown>;
+        if (llData.access_token) {
+          finalToken = String(llData.access_token);
+          expiresIn = Number(llData.expires_in || expiresIn || 60 * 86400);
+        }
       }
+    } catch {
+      // Giữ nguyên shortToken nếu bước nâng cấp long-lived tạm thời không phản hồi
     }
 
-    // Bước 3: Lấy thông tin cá nhân Facebook (/me) với fallback nếu thiếu quyền email
-    let fbUserId = "";
-    let fbUserName = "Facebook Admin";
-    let fbUserEmail: string | null = null;
-
+    // Bước 3: Lấy thông tin tài khoản Facebook (GET /me?fields=id,name)
     const meResp = await fetch(
-      `${cfg.graphBase}/me?fields=id,name,email&access_token=${encodeURIComponent(finalToken)}`
+      `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(finalToken)}`
     );
     const meData = (await meResp.json()) as Record<string, unknown>;
-    if (meResp.ok && meData.id) {
-      fbUserId = String(meData.id);
-      fbUserName = String(meData.name || "Facebook Admin");
-      fbUserEmail = meData.email ? String(meData.email) : null;
-    } else {
-      const meFallbackResp = await fetch(
-        `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(finalToken)}`
-      );
-      const meFallbackData = (await meFallbackResp.json()) as Record<string, unknown>;
-      if (meFallbackResp.ok && meFallbackData.id) {
-        fbUserId = String(meFallbackData.id);
-        fbUserName = String(meFallbackData.name || "Facebook Admin");
-      } else {
-        const errObj = (meData.error || {}) as Record<string, unknown>;
-        return {
-          success: false,
-          message: sanitizeSensitiveText(
-            `Không thể lấy thông tin người dùng Facebook (/me): ${errObj.message || "Lỗi Graph API"}`
-          )
-        };
-      }
+    if (!meResp.ok || !meData.id) {
+      const errObj = (meData.error || {}) as Record<string, unknown>;
+      const codeNum = Number(errObj.code || 0);
+      return {
+        success: false,
+        error_code: codeNum === 190 ? "invalid_token" : "facebook_error",
+        message:
+          codeNum === 190
+            ? "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại"
+            : "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+      };
     }
 
-    // Bước 4: Kiểm tra danh sách quyền đã cấp (/me/permissions)
+    const fbUserId = String(meData.id);
+    const fbUserName = String(meData.name || "Facebook User");
+
+    // Bước 4: Kiểm tra các quyền thực tế đã cấp (GET /me/permissions)
     const grantedScopes: string[] = [];
+    const declinedScopes: string[] = [];
     const permResp = await fetch(
       `${cfg.graphBase}/me/permissions?access_token=${encodeURIComponent(finalToken)}`
     );
@@ -261,8 +299,26 @@ export async function exchangeCodeForToken(
       for (const item of permData.data || []) {
         if (item.status === "granted") {
           grantedScopes.push(item.permission);
+        } else if (item.status === "declined") {
+          declinedScopes.push(item.permission);
         }
       }
+    }
+
+    const missingEssential = ESSENTIAL_PAGE_SCOPES.filter(
+      (s) =>
+        declinedScopes.includes(s) ||
+        (grantedScopes.length > 0 && !grantedScopes.includes(s))
+    );
+
+    if (missingEssential.length > 0) {
+      return {
+        success: false,
+        error_code: "missing_permissions",
+        scopes: grantedScopes,
+        missing_scopes: missingEssential,
+        message: "Facebook chưa cấp đủ quyền cần thiết"
+      };
     }
 
     const missingScopes = REQUIRED_SCOPES.filter((s) => !grantedScopes.includes(s));
@@ -271,310 +327,29 @@ export async function exchangeCodeForToken(
         ? new Date(Date.now() + expiresIn * 1000).toISOString()
         : new Date(Date.now() + 60 * 86400 * 1000).toISOString();
 
-    const accountId = await saveFacebookAccount(db, cfg.encryptionKey, {
-      facebookUserId: fbUserId,
-      facebookUserName: fbUserName,
-      facebookUserEmail: fbUserEmail,
-      accessToken: finalToken,
-      tokenType: "long_lived_user",
-      scopes: grantedScopes,
-      missingScopes,
-      tokenExpiresAt: expiresAtIso,
-      status: "connected",
-      tokenStatus: "valid",
-      accountId: stateCheck.reconnect_account_id,
-      ownerUserId
-    });
-
-    return {
-      success: true,
-      account_id: accountId,
-      owner_user_id: ownerUserId,
-      user_id: fbUserId,
-      user_name: fbUserName,
-      token_expires_at: expiresAtIso,
-      scopes: grantedScopes,
-      missing_scopes: missingScopes,
-      message: `Kết nối thành công tài khoản Facebook Admin: ${fbUserName} (ID: ${fbUserId})`
-    };
-  } catch (err) {
-    return {
-      success: false,
-      message: sanitizeSensitiveText(
-        `Lỗi kết nối đến máy chủ Meta Graph API: ${(err as Error).message}`
-      )
-    };
-  }
-}
-
-export interface ParsedPageItem {
-  id: string;
-  name: string;
-  access_token: string;
-  category?: string;
-  avatar_url?: string;
-  tasks?: string[];
-  is_published?: boolean;
-}
-
-export function parseFlexibleMetaInput(rawInput: string): {
-  extractedToken: string;
-  extractedPages: ParsedPageItem[];
-} {
-  const input = (rawInput || "").trim();
-  const extractedPages: ParsedPageItem[] = [];
-  let extractedToken = "";
-
-  // 1. Kiểm tra nếu người dùng dán kèm JSON từ Graph API Explorer ({ "data": [...] } hoặc object Page)
-  const firstBrace = input.indexOf("{");
-  const lastBrace = input.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    const jsonCandidate = input.slice(firstBrace, lastBrace + 1);
+    let accountId: string;
     try {
-      const parsed = JSON.parse(jsonCandidate) as Record<string, unknown>;
-      if (Array.isArray(parsed.data)) {
-        for (const item of parsed.data as Array<Record<string, unknown>>) {
-          const pid = String(item.id || "").trim();
-          const ptoken = String(item.access_token || "").trim();
-          const pname = String(
-            item.name || item.global_brand_page_name || item.username || `Fanpage ${pid}`
-          ).trim();
-          if (pid && ptoken) {
-            const picObj = (item.picture as { data?: { url?: string } }) || {};
-            extractedPages.push({
-              id: pid,
-              name: pname,
-              access_token: ptoken,
-              category: String(item.category || "Brand / Page"),
-              avatar_url: String(picObj.data?.url || ""),
-              tasks: Array.isArray(item.tasks)
-                ? item.tasks.map((t) => String(t).toUpperCase())
-                : ["CREATE_CONTENT", "MANAGE"],
-              is_published: item.is_published !== false
-            });
-          }
-        }
-      } else if (parsed.id && parsed.access_token) {
-        const pid = String(parsed.id).trim();
-        const ptoken = String(parsed.access_token).trim();
-        const pname = String(
-          parsed.name || parsed.global_brand_page_name || `Fanpage ${pid}`
-        ).trim();
-        extractedPages.push({
-          id: pid,
-          name: pname,
-          access_token: ptoken,
-          category: String(parsed.category || "Brand / Page"),
-          tasks: ["CREATE_CONTENT", "MANAGE"],
-          is_published: true
-        });
-      } else if (parsed.access_token && typeof parsed.access_token === "string") {
-        extractedToken = parsed.access_token.trim();
-      }
-    } catch {
-      // Không phải JSON hợp lệ thì tiếp tục tách URL/Token
-    }
-  }
-
-  // 2. Kiểm tra nếu người dùng dán URL Graph API Explorer có chứa ?access_token=... hoặc &access_token=...
-  const textOutsideJson =
-    firstBrace !== -1 ? input.slice(0, firstBrace) + " " + input.slice(lastBrace + 1) : input;
-  const urlTokenMatch = /(?:[?&#]|^)access_token=([^&#\s,"']+)/i.exec(textOutsideJson);
-  if (urlTokenMatch && urlTokenMatch[1]) {
-    try {
-      extractedToken = decodeURIComponent(urlTokenMatch[1].trim());
-    } catch {
-      extractedToken = urlTokenMatch[1].trim();
-    }
-  }
-
-  // 3. Nếu chưa có token từ URL, tìm chuỗi token EAA... hoặc chuỗi token trần bên ngoài khối JSON
-  if (!extractedToken) {
-    const cleanOutside = textOutsideJson.trim().replace(/^["',]+|["',]+$/g, "");
-    const eaaMatch = /\b(EAA[A-Za-z0-9_-]{12,})\b/.exec(cleanOutside);
-    if (eaaMatch && eaaMatch[1]) {
-      extractedToken = eaaMatch[1];
-    } else if (cleanOutside.length >= 15 && !cleanOutside.includes("{") && !cleanOutside.includes(" ")) {
-      extractedToken = cleanOutside;
-    }
-  }
-
-  return { extractedToken, extractedPages };
-}
-
-export async function connectWithAccessToken(
-  db: D1Database,
-  env: Env,
-  rawAccessToken: string,
-  ownerUserId: string,
-  reconnectAccountId: string | null = null
-): Promise<{
-  success: boolean;
-  account_id?: string;
-  owner_user_id?: string;
-  user_id?: string;
-  user_name?: string;
-  token_expires_at?: string | null;
-  scopes?: string[];
-  missing_scopes?: string[];
-  is_long_lived?: boolean;
-  has_user_token?: boolean;
-  extracted_pages?: ParsedPageItem[];
-  message?: string;
-}> {
-  const { extractedToken, extractedPages } = parseFlexibleMetaInput(rawAccessToken);
-
-  if ((!extractedToken || extractedToken.length < 15) && extractedPages.length === 0) {
-    return {
-      success: false,
-      message:
-        "Vui lòng dán Access Token (EAA...), URL Graph API Explorer hoặc JSON /me/accounts hợp lệ."
-    };
-  }
-
-  const cfg = getMetaConfig(env);
-
-  try {
-    // Trường hợp người dùng chỉ dán trực tiếp JSON danh sách Page ({ "data": [...] }) mà không kèm User Token
-    if (!extractedToken && extractedPages.length > 0) {
-      const firstPage = extractedPages[0];
-      const expiresAtIso = new Date(Date.now() + 60 * 86400 * 1000).toISOString();
-      const accountId = await saveFacebookAccount(db, cfg.encryptionKey, {
-        facebookUserId: `admin_${firstPage.id}`,
-        facebookUserName: `Admin (${firstPage.name})`,
+      accountId = await saveFacebookAccount(db, cfg.encryptionKey, {
+        facebookUserId: fbUserId,
+        facebookUserName: fbUserName,
         facebookUserEmail: null,
-        accessToken: firstPage.access_token,
-        tokenType: "json_imported",
-        scopes: REQUIRED_SCOPES,
-        missingScopes: [],
+        accessToken: finalToken,
+        tokenType: "long_lived_user",
+        scopes: grantedScopes,
+        missingScopes,
         tokenExpiresAt: expiresAtIso,
         status: "connected",
         tokenStatus: "valid",
-        accountId: reconnectAccountId,
+        accountId: stateCheck.reconnect_account_id,
         ownerUserId
       });
-
+    } catch {
       return {
-        success: true,
-        account_id: accountId,
-        owner_user_id: ownerUserId,
-        user_id: `admin_${firstPage.id}`,
-        user_name: `Admin (${firstPage.name})`,
-        token_expires_at: expiresAtIso,
-        scopes: REQUIRED_SCOPES,
-        missing_scopes: [],
-        is_long_lived: true,
-        has_user_token: false,
-        extracted_pages: extractedPages,
-        message: `Đã nhập trực tiếp ${extractedPages.length} Fanpage từ dữ liệu JSON Graph API Explorer`
+        success: false,
+        error_code: "db_error",
+        message: "Không thể lưu tài khoản, vui lòng thử lại"
       };
     }
-
-    // Bước 1: Nếu có META_APP_ID và META_APP_SECRET, tự động nâng cấp sang Long-Lived User Token (~60 ngày)
-    let finalToken = extractedToken;
-    let expiresIn = 60 * 86400;
-    let isLongLived = false;
-
-    if (cfg.appId && cfg.appSecret) {
-      try {
-        const llParams = new URLSearchParams({
-          grant_type: "fb_exchange_token",
-          client_id: cfg.appId,
-          client_secret: cfg.appSecret,
-          fb_exchange_token: extractedToken
-        });
-        const llResp = await fetch(
-          `${cfg.graphBase}/oauth/access_token?${llParams.toString()}`
-        );
-        if (llResp.ok) {
-          const llData = (await llResp.json()) as Record<string, unknown>;
-          if (llData.access_token) {
-            finalToken = String(llData.access_token);
-            expiresIn = Number(llData.expires_in || 60 * 86400);
-            isLongLived = true;
-          }
-        }
-      } catch {
-        // Nếu token thuộc App Graph API Explorer hoặc đã là System User / Long-Lived thì giữ nguyên extractedToken
-      }
-    }
-
-    // Bước 2: Xác thực Token với Meta Graph API (/me) với fallback nếu thiếu quyền email/name
-    let fbUserId = "";
-    let fbUserName = "Facebook Admin";
-    let fbUserEmail: string | null = null;
-
-    const meResp = await fetch(
-      `${cfg.graphBase}/me?fields=id,name,email&access_token=${encodeURIComponent(finalToken)}`
-    );
-    const meData = (await meResp.json()) as Record<string, unknown>;
-    if (meResp.ok && meData.id) {
-      fbUserId = String(meData.id);
-      fbUserName = String(meData.name || meData.global_brand_page_name || "Facebook Admin");
-      fbUserEmail = meData.email ? String(meData.email) : null;
-    } else {
-      // Fallback gọi /me?fields=id,name (phòng trường hợp token không cấp quyền email)
-      const meFallbackResp = await fetch(
-        `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(finalToken)}`
-      );
-      const meFallbackData = (await meFallbackResp.json()) as Record<string, unknown>;
-      if (meFallbackResp.ok && meFallbackData.id) {
-        fbUserId = String(meFallbackData.id);
-        fbUserName = String(meFallbackData.name || "Facebook Admin");
-      } else if (extractedPages.length > 0) {
-        fbUserId = `admin_${extractedPages[0].id}`;
-        fbUserName = `Admin (${extractedPages[0].name})`;
-      } else {
-        const errObj = (meData.error || {}) as Record<string, unknown>;
-        return {
-          success: false,
-          message: sanitizeSensitiveText(
-            `Access Token không hợp lệ hoặc đã hết hạn: ${errObj.message || "Lỗi xác thực /me trên Graph API"}`
-          )
-        };
-      }
-    }
-
-    // Bước 3: Kiểm tra danh sách quyền đã cấp (/me/permissions)
-    const grantedScopes: string[] = [];
-    try {
-      const permResp = await fetch(
-        `${cfg.graphBase}/me/permissions?access_token=${encodeURIComponent(finalToken)}`
-      );
-      if (permResp.ok) {
-        const permData = (await permResp.json()) as {
-          data?: Array<{ permission: string; status: string }>;
-        };
-        for (const item of permData.data || []) {
-          if (item.status === "granted") {
-            grantedScopes.push(item.permission);
-          }
-        }
-      }
-    } catch {
-      // Nếu là Page Access Token không có node /permissions thì bỏ qua
-    }
-
-    const missingScopes =
-      grantedScopes.length > 0
-        ? REQUIRED_SCOPES.filter((s) => !grantedScopes.includes(s))
-        : [];
-    const expiresAtIso = new Date(Date.now() + expiresIn * 1000).toISOString();
-
-    const accountId = await saveFacebookAccount(db, cfg.encryptionKey, {
-      facebookUserId: fbUserId,
-      facebookUserName: fbUserName,
-      facebookUserEmail: fbUserEmail,
-      accessToken: finalToken,
-      tokenType: isLongLived ? "long_lived_user" : "direct_token",
-      scopes: grantedScopes.length > 0 ? grantedScopes : REQUIRED_SCOPES,
-      missingScopes,
-      tokenExpiresAt: expiresAtIso,
-      status: "connected",
-      tokenStatus: "valid",
-      accountId: reconnectAccountId,
-      ownerUserId
-    });
 
     return {
       success: true,
@@ -585,17 +360,13 @@ export async function connectWithAccessToken(
       token_expires_at: expiresAtIso,
       scopes: grantedScopes,
       missing_scopes: missingScopes,
-      is_long_lived: isLongLived,
-      has_user_token: true,
-      extracted_pages: extractedPages,
-      message: `Kết nối thành công tài khoản Facebook Admin: ${fbUserName} (ID: ${fbUserId})`
+      message: "Đã kết nối tài khoản Facebook thành công"
     };
-  } catch (err) {
+  } catch {
     return {
       success: false,
-      message: sanitizeSensitiveText(
-        `Lỗi kết nối đến máy chủ Meta Graph API: ${(err as Error).message}`
-      )
+      error_code: "facebook_error",
+      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
     };
   }
 }
@@ -608,13 +379,6 @@ export async function getConnectionStatus(
   const cfg = getMetaConfig(env);
   const accounts = await getFacebookAccounts(db, cfg.encryptionKey, false, ownerUserId);
   const connectedAccounts = accounts.filter((a) => a.status === "connected");
-  let appDomain = "pagefb.namnangno.click";
-  try {
-    appDomain = new URL(cfg.redirectUri).hostname;
-  } catch {
-    // giữ nguyên default
-  }
-  const graphExplorerUrl = `https://developers.facebook.com/tools/explorer/${cfg.appId}/?method=GET&path=me%2Faccounts&version=${cfg.graphVersion}`;
 
   if (accounts.length === 0) {
     return {
@@ -628,10 +392,6 @@ export async function getConnectionStatus(
       days_remaining: null,
       scopes: [],
       missing_scopes: REQUIRED_SCOPES,
-      app_id: cfg.appId,
-      redirect_uri: cfg.redirectUri,
-      app_domain: appDomain,
-      graph_explorer_url: graphExplorerUrl,
       accounts: []
     };
   }
@@ -650,11 +410,6 @@ export async function getConnectionStatus(
     missing_scopes: primary.missing_scopes,
     last_synced_at: primary.last_synced_at,
     last_error: primary.last_error,
-    app_id: cfg.appId,
-    redirect_uri: cfg.redirectUri,
-    app_domain: appDomain,
-    graph_explorer_url: graphExplorerUrl,
     accounts
   };
 }
-

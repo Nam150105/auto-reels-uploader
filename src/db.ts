@@ -258,6 +258,26 @@ export async function ensureDatabaseInitialized(
       JOIN facebook_accounts fa ON fa.id = fap.facebook_account_id
       LEFT JOIN facebook_pages fp
         ON fp.facebook_page_id = fap.facebook_page_id
+        AND COALESCE(fp.owner_user_id, '') = COALESCE(fa.owner_user_id, '')`,
+    `CREATE VIEW IF NOT EXISTS admin_token_registry AS
+      SELECT
+        fa.id AS token_record_id,
+        fa.owner_user_id AS admin_user_id,
+        fa.facebook_user_id,
+        fa.facebook_user_name,
+        fap.facebook_page_id AS page_id,
+        fp.page_name,
+        fa.token_type,
+        fa.token_version,
+        fa.status AS account_status,
+        COALESCE(fap.token_status, fa.token_status) AS token_status,
+        fa.token_expires_at AS expires_at,
+        COALESCE(fap.last_synced_at, fa.last_synced_at) AS last_synced_at,
+        fa.updated_at
+      FROM facebook_accounts fa
+      LEFT JOIN facebook_account_pages fap ON fap.facebook_account_id = fa.id
+      LEFT JOIN facebook_pages fp
+        ON fp.facebook_page_id = fap.facebook_page_id
         AND COALESCE(fp.owner_user_id, '') = COALESCE(fa.owner_user_id, '')`
   ];
 
@@ -665,12 +685,21 @@ export async function saveFacebookAccount(
   const status = params.status || "connected";
   const tokenStatus = params.tokenStatus || (status === "connected" ? "valid" : status);
 
-  const existing = await db
+  let existing = await db
     .prepare(
       "SELECT id FROM facebook_accounts WHERE facebook_user_id = ? AND owner_user_id = ?"
     )
     .bind(params.facebookUserId, params.ownerUserId)
     .first<{ id: string }>();
+
+  if (!existing && params.accountId) {
+    existing = await db
+      .prepare(
+        "SELECT id FROM facebook_accounts WHERE id = ? AND owner_user_id = ?"
+      )
+      .bind(params.accountId, params.ownerUserId)
+      .first<{ id: string }>();
+  }
 
   let targetId = params.accountId || existing?.id || `fb_acc_${params.facebookUserId}_${randomHex(3)}`;
   if (existing?.id) {
@@ -681,7 +710,8 @@ export async function saveFacebookAccount(
     await db
       .prepare(
         `UPDATE facebook_accounts
-         SET facebook_user_name = ?,
+         SET facebook_user_id = ?,
+             facebook_user_name = ?,
              facebook_user_email = COALESCE(?, facebook_user_email),
              access_token = ?,
              token_version = ?,
@@ -697,6 +727,7 @@ export async function saveFacebookAccount(
          WHERE id = ? AND owner_user_id = ?`
       )
       .bind(
+        params.facebookUserId,
         params.facebookUserName,
         params.facebookUserEmail || null,
         encryptedToken,
@@ -754,16 +785,62 @@ export async function getFacebookAccounts(
   includeToken = false,
   ownerUserId: string
 ): Promise<FacebookAccountRecord[]> {
-  const { results: rows } = await db
-    .prepare(
-      `SELECT fa.*,
-              (SELECT COUNT(*) FROM facebook_account_pages fap WHERE fap.facebook_account_id = fa.id) AS page_count
-       FROM facebook_accounts fa
-       WHERE fa.owner_user_id = ?
-       ORDER BY fa.connected_at DESC, fa.created_at DESC`
-    )
-    .bind(ownerUserId)
-    .all<Record<string, unknown>>();
+  const [accountsResult, linksResult] = await db.batch([
+    db
+      .prepare(
+        `SELECT fa.*,
+                (SELECT COUNT(*) FROM facebook_account_pages fap WHERE fap.facebook_account_id = fa.id) AS page_count,
+                (SELECT COUNT(*) FROM facebook_account_pages fap WHERE fap.facebook_account_id = fa.id AND fap.can_post = 1) AS postable_count
+         FROM facebook_accounts fa
+         WHERE fa.owner_user_id = ?
+         ORDER BY fa.connected_at DESC, fa.created_at DESC`
+      )
+      .bind(ownerUserId),
+    db
+      .prepare(
+        `SELECT fap.facebook_account_id,
+                fap.facebook_page_id,
+                fap.can_post,
+                COALESCE(fp.page_name, fap.facebook_page_id) AS page_name,
+                COALESCE(fp.category, '') AS category,
+                COALESCE(fp.avatar_url, '') AS avatar_url
+         FROM facebook_account_pages fap
+         LEFT JOIN facebook_pages fp
+           ON fp.facebook_page_id = fap.facebook_page_id
+           AND fp.owner_user_id = fap.owner_user_id
+         WHERE fap.owner_user_id = ?
+         ORDER BY fp.page_name COLLATE NOCASE ASC`
+      )
+      .bind(ownerUserId)
+  ]);
+
+  const rows = (accountsResult.results || []) as Record<string, unknown>[];
+  const linkRows = (linksResult.results || []) as Record<string, unknown>[];
+
+  const pagesByAccountId = new Map<
+    string,
+    Array<{
+      facebook_page_id: string;
+      page_name: string;
+      category: string;
+      avatar_url: string;
+      can_post: boolean;
+    }>
+  >();
+
+  for (const lr of linkRows) {
+    const accId = String(lr.facebook_account_id || "");
+    if (!accId) continue;
+    const list = pagesByAccountId.get(accId) || [];
+    list.push({
+      facebook_page_id: String(lr.facebook_page_id || ""),
+      page_name: String(lr.page_name || lr.facebook_page_id || ""),
+      category: String(lr.category || ""),
+      avatar_url: String(lr.avatar_url || ""),
+      can_post: Boolean(lr.can_post)
+    });
+    pagesByAccountId.set(accId, list);
+  }
 
   const out: FacebookAccountRecord[] = [];
 
@@ -790,11 +867,20 @@ export async function getFacebookAccounts(
       tokenStatus = "expired";
     }
 
+    const accId = String(r.id);
+    const linkedPages = pagesByAccountId.get(accId) || [];
+    const pageCount = Number(r.page_count ?? linkedPages.length);
+    const postableCount = Number(r.postable_count ?? pageCount);
+    const fbUserId = String(r.facebook_user_id);
+    const fbUserName = (r.facebook_user_name as string) || null;
+
     const item: FacebookAccountRecord = {
-      id: String(r.id),
+      id: accId,
       owner_user_id: (r.owner_user_id as string) || null,
-      facebook_user_id: String(r.facebook_user_id),
-      facebook_user_name: (r.facebook_user_name as string) || null,
+      facebook_user_id: fbUserId,
+      user_id: fbUserId,
+      facebook_user_name: fbUserName,
+      user_name: fbUserName,
       facebook_user_email: (r.facebook_user_email as string) || null,
       token_version: (r.token_version as string) || "v2",
       token_type: (r.token_type as string) || "long_lived_user",
@@ -804,13 +890,17 @@ export async function getFacebookAccounts(
       token_status: tokenStatus,
       connected_at: (r.connected_at as string) || null,
       token_expires_at: expStr,
+      expires_at: expStr,
       last_synced_at: (r.last_synced_at as string) || null,
       last_error: (r.last_error as string) || null,
       created_at: (r.created_at as string) || null,
       updated_at: (r.updated_at as string) || null,
-      page_count: Number(r.page_count || 0),
+      page_count: pageCount,
+      managed_pages_count: pageCount,
+      postable_pages_count: postableCount,
       days_remaining: daysRemaining,
-      is_expired: isExpired
+      is_expired: isExpired,
+      pages: linkedPages
     };
 
     if (includeToken) {
@@ -904,58 +994,231 @@ export async function disconnectFacebookAccount(
 
 const encryptionKeyFallback = "";
 
+export interface DeleteAccountResult {
+  deleted: boolean;
+  account_id?: string;
+  facebook_user_name?: string | null;
+  deleted_pages_count: number;
+  deleted_page_ids: string[];
+  shared_pages_kept_count: number;
+}
+
+export async function deleteFacebookAccountWithPages(
+  db: D1Database,
+  accountId: string,
+  ownerUserId: string
+): Promise<DeleteAccountResult> {
+  const acc = await db
+    .prepare(
+      "SELECT id, facebook_user_id, facebook_user_name FROM facebook_accounts WHERE id = ? AND owner_user_id = ?"
+    )
+    .bind(accountId, ownerUserId)
+    .first<{ id: string; facebook_user_id: string; facebook_user_name: string | null }>();
+
+  if (!acc) {
+    return {
+      deleted: false,
+      deleted_pages_count: 0,
+      deleted_page_ids: [],
+      shared_pages_kept_count: 0
+    };
+  }
+
+  const [pagesRes, accountLinksRes, otherLinksRes] = await db.batch([
+    db
+      .prepare(
+        "SELECT id, facebook_page_id, connected_account_id FROM facebook_pages WHERE owner_user_id = ?"
+      )
+      .bind(ownerUserId),
+    db
+      .prepare(
+        "SELECT facebook_page_id FROM facebook_account_pages WHERE facebook_account_id = ? AND owner_user_id = ?"
+      )
+      .bind(accountId, ownerUserId),
+    db
+      .prepare(
+        `SELECT fap.*
+         FROM facebook_account_pages fap
+         JOIN facebook_accounts fa ON fa.id = fap.facebook_account_id
+         WHERE fa.owner_user_id = ?
+           AND fa.id != ?
+           AND fa.status = 'connected'
+           AND fap.page_access_token != ''
+         ORDER BY fap.can_post DESC, fap.last_synced_at DESC`
+      )
+      .bind(ownerUserId, accountId)
+  ]);
+
+  const allUserPages = (pagesRes.results || []) as Array<{
+    id: string;
+    facebook_page_id: string;
+    connected_account_id: string | null;
+  }>;
+  const targetLinkedSet = new Set<string>(
+    ((accountLinksRes.results || []) as Array<{ facebook_page_id: string }>).map((r) =>
+      String(r.facebook_page_id)
+    )
+  );
+  const otherLinks = (otherLinksRes.results || []) as Array<Record<string, unknown>>;
+  const bestOtherLinkByPageId = new Map<string, Record<string, unknown>>();
+  for (const lnk of otherLinks) {
+    const pid = String(lnk.facebook_page_id || "");
+    if (pid && !bestOtherLinkByPageId.has(pid)) {
+      bestOtherLinkByPageId.set(pid, lnk);
+    }
+  }
+
+  const now = new Date().toISOString();
+  const batchStmts = [
+    db
+      .prepare("DELETE FROM oauth_states WHERE reconnect_account_id = ? AND owner_user_id = ?")
+      .bind(accountId, ownerUserId),
+    db
+      .prepare(
+        "DELETE FROM facebook_account_pages WHERE facebook_account_id = ? AND owner_user_id = ?"
+      )
+      .bind(accountId, ownerUserId)
+  ];
+
+  const deletedPageIds: string[] = [];
+  let sharedPagesKeptCount = 0;
+
+  for (const p of allUserPages) {
+    const wasLinkedToDeletedAdmin =
+      targetLinkedSet.has(p.facebook_page_id) || p.connected_account_id === accountId;
+    const otherLink = bestOtherLinkByPageId.get(p.facebook_page_id);
+
+    if (otherLink) {
+      if (wasLinkedToDeletedAdmin) {
+        sharedPagesKeptCount++;
+      }
+      batchStmts.push(
+        db
+          .prepare(
+            `UPDATE facebook_pages
+             SET page_access_token = ?,
+                 tasks_json = ?,
+                 can_post = ?,
+                 is_published = ?,
+                 status = 'active',
+                 token_status = 'valid',
+                 connected_account_id = ?,
+                 updated_at = ?
+             WHERE id = ? AND owner_user_id = ?`
+          )
+          .bind(
+            String(otherLink.page_access_token || ""),
+            String(otherLink.tasks_json || "[]"),
+            Number(otherLink.can_post ?? 1),
+            Number(otherLink.is_published ?? 1),
+            String(otherLink.facebook_account_id),
+            now,
+            p.id,
+            ownerUserId
+          )
+      );
+    } else {
+      deletedPageIds.push(p.facebook_page_id);
+      batchStmts.push(
+        db
+          .prepare(
+            "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?)"
+          )
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare(
+            "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?)"
+          )
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare("DELETE FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?")
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare("DELETE FROM profiles WHERE facebook_page_id = ? AND owner_user_id = ?")
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare(
+            "DELETE FROM facebook_account_pages WHERE facebook_page_id = ? AND owner_user_id = ?"
+          )
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare("DELETE FROM facebook_pages WHERE id = ? AND owner_user_id = ?")
+          .bind(p.id, ownerUserId)
+      );
+    }
+  }
+
+  batchStmts.push(
+    db
+      .prepare("DELETE FROM facebook_accounts WHERE id = ? AND owner_user_id = ?")
+      .bind(accountId, ownerUserId)
+  );
+
+  await db.batch(batchStmts);
+
+  return {
+    deleted: true,
+    account_id: accountId,
+    facebook_user_name: acc.facebook_user_name,
+    deleted_pages_count: deletedPageIds.length,
+    deleted_page_ids: deletedPageIds,
+    shared_pages_kept_count: sharedPagesKeptCount
+  };
+}
+
 export async function deleteFacebookAccountLocal(
   db: D1Database,
   accountId: string,
   ownerUserId: string
 ): Promise<boolean> {
-  const acc = await db
-    .prepare("SELECT id FROM facebook_accounts WHERE id = ? AND owner_user_id = ?")
+  const res = await deleteFacebookAccountWithPages(db, accountId, ownerUserId);
+  return res.deleted;
+}
+
+export async function removeStaleAccountPages(
+  db: D1Database,
+  accountId: string,
+  ownerUserId: string,
+  activeFacebookPageIds: string[]
+): Promise<void> {
+  const { results: currentLinks } = await db
+    .prepare(
+      "SELECT facebook_page_id FROM facebook_account_pages WHERE facebook_account_id = ? AND owner_user_id = ?"
+    )
     .bind(accountId, ownerUserId)
-    .first<{ id: string }>();
+    .all<{ facebook_page_id: string }>();
 
-  if (!acc) return false;
+  const activeSet = new Set(activeFacebookPageIds);
+  const staleIds = (currentLinks || [])
+    .map((r) => String(r.facebook_page_id))
+    .filter((pid) => !activeSet.has(pid));
 
-  await db.batch([
+  if (staleIds.length === 0) return;
+
+  const stmts = staleIds.map((pid) =>
     db
-      .prepare("DELETE FROM facebook_account_pages WHERE facebook_account_id = ? AND owner_user_id = ?")
-      .bind(accountId, ownerUserId),
-    db
-      .prepare("DELETE FROM facebook_accounts WHERE id = ? AND owner_user_id = ?")
-      .bind(accountId, ownerUserId)
-  ]);
-
+      .prepare(
+        "DELETE FROM facebook_account_pages WHERE facebook_account_id = ? AND facebook_page_id = ? AND owner_user_id = ?"
+      )
+      .bind(accountId, pid, ownerUserId)
+  );
+  await db.batch(stmts);
   await reconcileOrphanPages(db, encryptionKeyFallback, ownerUserId);
-  return true;
 }
 
 export async function disconnectAllUserAccounts(
   db: D1Database,
   ownerUserId: string
 ): Promise<void> {
-  const now = new Date().toISOString();
   await db.batch([
-    db
-      .prepare(
-        `UPDATE facebook_accounts
-         SET status = 'disconnected', token_status = 'revoked', access_token = '', updated_at = ?
-         WHERE owner_user_id = ?`
-      )
-      .bind(now, ownerUserId),
-    db
-      .prepare("DELETE FROM facebook_account_pages WHERE owner_user_id = ?")
-      .bind(ownerUserId),
-    db
-      .prepare(
-        `UPDATE facebook_pages
-         SET status = 'disconnected', token_status = 'revoked', page_access_token = '', updated_at = ?
-         WHERE owner_user_id = ?`
-      )
-      .bind(now, ownerUserId)
+    db.prepare("DELETE FROM oauth_states WHERE owner_user_id = ?").bind(ownerUserId),
+    db.prepare("DELETE FROM facebook_account_pages WHERE owner_user_id = ?").bind(ownerUserId),
+    db.prepare("DELETE FROM facebook_pages WHERE owner_user_id = ?").bind(ownerUserId),
+    db.prepare("DELETE FROM facebook_accounts WHERE owner_user_id = ?").bind(ownerUserId)
   ]);
 }
 
-async function reconcileOrphanPages(
+export async function reconcileOrphanPages(
   db: D1Database,
   _encryptionKey: string,
   ownerUserId: string
@@ -1009,17 +1272,32 @@ async function reconcileOrphanPages(
         )
         .run();
     } else {
-      await db
-        .prepare(
-          `UPDATE facebook_pages
-           SET status = 'disconnected',
-               token_status = 'revoked',
-               page_access_token = '',
-               updated_at = ?
-           WHERE id = ?`
-        )
-        .bind(now, p.id)
-        .run();
+      await db.batch([
+        db
+          .prepare(
+            "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?)"
+          )
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare(
+            "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?)"
+          )
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare("DELETE FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?")
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare("DELETE FROM profiles WHERE facebook_page_id = ? AND owner_user_id = ?")
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare(
+            "DELETE FROM facebook_account_pages WHERE facebook_page_id = ? AND owner_user_id = ?"
+          )
+          .bind(p.facebook_page_id, ownerUserId),
+        db
+          .prepare("DELETE FROM facebook_pages WHERE id = ? AND owner_user_id = ?")
+          .bind(p.id, ownerUserId)
+      ]);
     }
   }
 }
@@ -1254,7 +1532,9 @@ export async function getFacebookPages(
       adminAccounts.push({
         account_id: String(lnk.facebook_account_id),
         facebook_user_id: String(lnk.facebook_user_id),
+        user_id: String(lnk.facebook_user_id),
         facebook_user_name: (lnk.facebook_user_name as string) || null,
+        user_name: (lnk.facebook_user_name as string) || null,
         account_status: String(lnk.account_status || "connected"),
         token_status: String(lnk.token_status || "valid"),
         tasks: lTasks,
@@ -2210,17 +2490,12 @@ export async function executeUserDataDeletion(
       .all<{ id: string; owner_user_id: string }>();
 
     for (const a of accs.results || []) {
-      const r1 = await db
-        .prepare("DELETE FROM facebook_account_pages WHERE facebook_account_id = ?")
-        .bind(a.id)
-        .run();
-      summary.facebook_account_pages += r1.meta?.changes || 0;
-
-      const r2 = await db
-        .prepare("DELETE FROM facebook_accounts WHERE id = ?")
-        .bind(a.id)
-        .run();
-      summary.facebook_accounts += r2.meta?.changes || 0;
+      const delRes = await deleteFacebookAccountWithPages(db, a.id, a.owner_user_id);
+      if (delRes.deleted) {
+        summary.facebook_accounts += 1;
+        summary.facebook_pages += delRes.deleted_pages_count;
+        summary.facebook_account_pages += delRes.deleted_pages_count + delRes.shared_pages_kept_count;
+      }
     }
   } else if (targetUserId) {
     const [r1, r2, r3, r4, r5] = await db.batch([

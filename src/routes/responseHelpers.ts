@@ -62,10 +62,20 @@ export async function serveStaticHtmlAsset(
 export function renderOAuthCallbackHtml(options: {
   success: boolean;
   statusCode?: number;
+  oauthStatus?:
+    | "success"
+    | "denied"
+    | "no_pages"
+    | "missing_permissions"
+    | "invalid_token"
+    | "error"
+    | "ready";
   isEndpointReadyProbe?: boolean;
   title: string;
   subtitle?: string;
   message: string;
+  syncedCount?: number;
+  accountId?: string;
 }): Response {
   const statusCode =
     typeof options.statusCode === "number"
@@ -73,94 +83,61 @@ export function renderOAuthCallbackHtml(options: {
       : options.success
         ? 200
         : 400;
+  const oauthStatus =
+    options.oauthStatus || (options.success ? "success" : "error");
+  const isWarning = oauthStatus === "no_pages" || oauthStatus === "denied";
   const badgeClass =
     options.success || options.isEndpointReadyProbe
       ? "bg-emerald-500/20 text-emerald-400"
-      : "bg-rose-500/20 text-rose-400";
-  const icon = options.success || options.isEndpointReadyProbe ? "✓" : "✕";
-  const metaRefresh = options.success
-    ? `<meta http-equiv="refresh" content="2;url=/pages" />`
-    : "";
+      : isWarning
+        ? "bg-amber-500/20 text-amber-400"
+        : "bg-rose-500/20 text-rose-400";
+  const icon =
+    options.success || options.isEndpointReadyProbe
+      ? "✓"
+      : isWarning
+        ? "!"
+        : "✕";
 
   const ogTitle = options.isEndpointReadyProbe
-    ? "Quản lý fanpage - Cổng Xác Thực Meta OAuth 2.0"
+    ? "Quản lý fanpage - Kết nối Facebook"
     : `${options.title} - Quản lý fanpage`;
   const ogDesc = options.isEndpointReadyProbe
-    ? "Cổng xác thực Facebook OAuth 2.0 và đồng bộ Fanpage chính thức qua Meta Graph API."
+    ? "Hệ thống quản lý Fanpage và lên lịch đăng Reels tự động."
     : options.message;
 
-  const quickTokenConnectHtml = options.success
+  const redirectTarget = options.isEndpointReadyProbe
+    ? "/pages"
+    : `/pages?oauth_status=${encodeURIComponent(oauthStatus)}&oauth_msg=${encodeURIComponent(options.message)}`;
+
+  const payloadJson = JSON.stringify({
+    type: "META_OAUTH_RESULT",
+    success: options.success,
+    status: oauthStatus,
+    title: options.title,
+    message: options.message,
+    synced_count: options.syncedCount ?? 0,
+    account_id: options.accountId || null
+  }).replace(/</g, "\\u003c");
+
+  const popupAndRedirectScript = options.isEndpointReadyProbe
     ? ""
-    : `
-    <div class="mt-4">
-      <a href="/api/meta/login?auth_type=rerequest"
-         class="inline-flex items-center justify-center gap-2 w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition shadow-lg mb-2">
-        🔗 Bắt Đầu Đăng Nhập Qua Facebook OAuth
-      </a>
-    </div>
-    <div class="mt-4 pt-4 border-t border-slate-800 text-left space-y-3">
-      <div class="text-xs font-bold text-emerald-400">
-        ⚡ Hoặc dán trực tiếp Access Token / URL / JSON Graph API Explorer:
-      </div>
-      <textarea id="quick-token-input" rows="4"
-        placeholder="Dán chuỗi Access Token (EAA...), URL Graph API Explorer hoặc JSON /me/accounts vào đây..."
-        class="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl p-3 text-xs text-white font-mono focus:outline-none"></textarea>
-      <div id="quick-token-msg" class="text-xs hidden"></div>
-      <button id="quick-token-btn" onclick="submitQuickToken()"
-        class="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition shadow-lg">
-        ⚡ Kết Nối &amp; Đồng Bộ Fanpage Ngay
-      </button>
-    </div>
-    <script>
-      // Tự động bắt access_token nếu Facebook trả về trong URL hash (#access_token=...)
-      (function() {
-        if (window.location.hash && window.location.hash.includes('access_token=')) {
-          var input = document.getElementById('quick-token-input');
-          if (input) {
-            input.value = window.location.hash.substring(1);
-            submitQuickToken();
-          }
-        }
-      })();
-      async function submitQuickToken() {
-        var input = document.getElementById('quick-token-input');
-        var btn = document.getElementById('quick-token-btn');
-        var msg = document.getElementById('quick-token-msg');
-        var val = (input ? input.value : '').trim();
-        if (!val) {
-          msg.className = 'text-xs text-rose-400 font-semibold';
-          msg.textContent = 'Vui lòng dán Access Token, URL hoặc JSON từ Graph API Explorer.';
-          return;
-        }
-        btn.disabled = true;
-        btn.textContent = '⏳ Đang xác thực và đồng bộ Fanpage...';
-        msg.className = 'text-xs text-slate-300';
-        msg.textContent = 'Đang xử lý...';
-        try {
-          var res = await fetch('/api/meta/connect-token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ access_token: val })
-          });
-          var data = await res.json();
-          if (res.ok && data.success) {
-            msg.className = 'text-xs text-emerald-400 font-bold';
-            msg.textContent = data.message || 'Kết nối thành công! Đang chuyển hướng...';
-            setTimeout(function() { window.location.href = '/pages'; }, 1000);
-          } else {
-            msg.className = 'text-xs text-rose-400 font-semibold';
-            msg.textContent = data.detail || data.message || 'Kết nối thất bại.';
-            btn.disabled = false;
-            btn.textContent = '⚡ Kết Nối & Đồng Bộ Fanpage Ngay';
-          }
-        } catch (e) {
-          msg.className = 'text-xs text-rose-400 font-semibold';
-          msg.textContent = 'Lỗi kết nối: ' + e.message;
-          btn.disabled = false;
-          btn.textContent = '⚡ Kết Nối & Đồng Bộ Fanpage Ngay';
-        }
-      }
-    </script>`;
+    : `<script>
+(function() {
+  var payload = ${payloadJson};
+  var redirectUrl = ${JSON.stringify(redirectTarget)};
+  if (window.opener && !window.opener.closed) {
+    try {
+      window.opener.postMessage(payload, window.location.origin);
+      setTimeout(function() { window.close(); }, 350);
+      return;
+    } catch (e) {}
+  }
+  setTimeout(function() {
+    window.location.replace(redirectUrl);
+  }, 1500);
+})();
+</script>`;
 
   return htmlResponse(
     `<!DOCTYPE html>
@@ -175,21 +152,19 @@ export function renderOAuthCallbackHtml(options: {
   <meta property="og:site_name" content="Quản lý fanpage" />
   <meta property="og:title" content="${escapeHtml(ogTitle)}" />
   <meta property="og:description" content="${escapeHtml(ogDesc)}" />
-  ${metaRefresh}
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4">
-  <div class="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center shadow-2xl">
+  <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center shadow-2xl">
     <div class="w-12 h-12 rounded-full ${badgeClass} flex items-center justify-center mx-auto mb-4 text-2xl font-bold">${icon}</div>
     <h1 class="text-lg font-bold text-white mb-1">${escapeHtml(options.title)}</h1>
     ${options.subtitle ? `<p class="text-xs text-emerald-400 font-semibold mb-2">${escapeHtml(options.subtitle)}</p>` : ""}
-    <p class="text-xs text-slate-400 mb-5">${escapeHtml(options.message)}</p>
-    <a href="/pages" class="inline-block px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition">Quay về Bảng Điều Khiển</a>
-    ${quickTokenConnectHtml}
+    <p class="text-xs text-slate-300 mb-5">${escapeHtml(options.message)}</p>
+    <a href="${escapeHtml(redirectTarget)}" class="inline-block px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition">Quay về trang Quản lý</a>
   </div>
+  ${popupAndRedirectScript}
 </body>
 </html>`,
     statusCode
   );
 }
-
