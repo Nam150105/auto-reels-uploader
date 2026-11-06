@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="vi" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hướng Dẫn Xóa Dữ Liệu - Quản lý fanpage</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>body { font-family: 'Plus Jakarta Sans', sans-serif; }</style>
+</head>
+<body class="min-h-full bg-slate-950 text-slate-200 antialiased py-12 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-3xl mx-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-8 sm:p-10 shadow-2xl backdrop-blur-md">
+    
+    <!-- Header -->
+    <div class="border-b border-slate-800 pb-6 mb-8">
+      <div class="flex items-center gap-3 mb-3">
+        <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-rose-600 to-amber-600 flex items-center justify-center text-white font-black text-xl shadow-lg">
+          D
+        </div>
+        <div>
+          <h1 class="text-2xl font-bold text-white tracking-tight">Hướng Dẫn Xóa Dữ Liệu Người Dùng</h1>
+          <p class="text-xs text-slate-400 font-mono mt-0.5">Ứng dụng: Quản lý fanpage (App ID: 1469615908436980)</p>
+        </div>
+      </div>
+      <p class="text-xs text-slate-500">Tuân thủ Chính Sách Nền Tảng Meta về Quyền Riêng Tư và Xóa Dữ Liệu (User Data Deletion)</p>
+    </div>
+
+    <!-- Content Sections -->
+    <div class="space-y-6 text-sm text-slate-300 leading-relaxed">
+      <section>
+        <p>
+          Ứng dụng <b>"Quản lý fanpage"</b> không lưu trữ dữ liệu cá nhân ngoài mục đích điều khiển và hẹn lịch đăng Reels lên Fanpage của bạn. Nếu bạn muốn xóa toàn bộ thông tin tài khoản Facebook, token truy cập và các liên kết Fanpage khỏi hệ thống của chúng tôi, bạn có thể thực hiện theo một trong các phương thức dưới đây:
+        </p>
+      </section>
+
+      <!-- Method 1 -->
+      <section class="bg-slate-950/60 p-5 rounded-xl border border-slate-800">
+        <h2 class="text-base font-bold text-white mb-2 flex items-center gap-2">
+          <span class="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 text-xs font-mono font-bold">Cách 1</span>
+          Xóa trực tiếp qua cài đặt Facebook cá nhân (Khuyến nghị)
+        </h2>
+        <ol class="list-decimal pl-5 space-y-2 text-slate-400 mt-3">
+          <li>Đăng nhập vào tài khoản Facebook của bạn và đi đến mục <b>Cài đặt &amp; quyền riêng tư &gt; Cài đặt</b>.</li>
+          <li>Chọn mục <b>Ứng dụng và trang web</b> ở thanh điều hướng bên trái.</li>
+          <li>Tìm ứng dụng <b>"Quản lý fanpage"</b> trong danh sách các ứng dụng đã cấp quyền.</li>
+          <li>Bấm nút <b>Gỡ (Remove)</b>.</li>
+          <li>Đánh dấu vào ô xác nhận yêu cầu xóa dữ liệu và bấm <b>Xong</b>. Hệ thống Facebook sẽ gửi yêu cầu tự động đến máy chủ của chúng tôi để xóa sạch dữ liệu liên quan.</li>
+        </ol>
+      </section>
+
+      <!-- Method 2 -->
+      <section class="bg-slate-950/60 p-5 rounded-xl border border-slate-800">
+        <h2 class="text-base font-bold text-white mb-2 flex items-center gap-2">
+          <span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-xs font-mono font-bold">Cách 2</span>
+          Xóa ngay trên giao diện Bảng Điều Khiển
+        </h2>
+        <p class="text-slate-400">
+          Khi đăng nhập vào công cụ, tại phần <b>Tài khoản Facebook đã liên kết</b>, bạn chỉ cần bấm nút <b>"Xóa tài khoản"</b>. Hệ thống sẽ ngay lập tức:
+        </p>
+        <ul class="list-disc pl-5 space-y-1 text-slate-400 mt-2">
+          <li>Xóa sạch User Access Token và toàn bộ Page Access Token liên kết.</li>
+          <li>Hủy bỏ toàn bộ phiên kết nối OAuth trong cơ sở dữ liệu.</li>
+          <li>Không thể khôi phục lại dữ liệu đã xóa trừ khi bạn chủ động kết nối lại.</li>
+        </ul>
+      </section>
+
+      <!-- Method 3 -->
+      <section class="bg-slate-950/60 p-5 rounded-xl border border-slate-800">
+        <h2 class="text-base font-bold text-white mb-2 flex items-center gap-2">
+          <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-xs font-mono font-bold">Cách 3</span>
+          Gửi yêu cầu xóa thủ công qua Email
+        </h2>
+        <p class="text-slate-400">
+          Bạn có thể gửi email yêu cầu xóa dữ liệu đến: <a href="mailto:admin@namnangno.click" class="text-blue-400 font-semibold hover:underline">admin@namnangno.click</a> với tiêu đề <i>"Yêu cầu xóa dữ liệu Facebook"</i> kèm Facebook User ID của bạn. Đội ngũ kỹ thuật sẽ xử lý và phản hồi trong vòng 24 giờ làm việc.
+        </p>
+      </section>
+
+      <!-- Meta Callback URL details for verification -->
+      <section class="pt-2">
+        <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Thông số kỹ thuật Meta Data Deletion Callback</h3>
+        <p class="text-xs text-slate-500 font-mono">
+          Endpoint Callback: <span class="text-slate-300">https://namnangno.click/api/meta/data-deletion</span><br>
+          Kiểm tra trạng thái xóa dữ liệu: <a href="/data-deletion-status" class="text-blue-400 hover:underline">https://namnangno.click/data-deletion-status</a>
+        </p>
+      </section>
+    </div>
+
+    <!-- Footer Action -->
+    <div class="mt-10 pt-6 border-t border-slate-800 flex justify-between items-center text-xs text-slate-500">
+      <a href="/" class="text-rose-400 hover:text-rose-300 font-semibold transition">&larr; Về Trang Chủ</a>
+      <div class="flex gap-4">
+        <a href="/privacy" class="hover:text-slate-300 transition">Chính Sách Quyền Riêng Tư</a>
+        <a href="/terms" class="hover:text-slate-300 transition">Điều Khoản Dịch Vụ</a>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
+
