@@ -41,3 +41,4 @@ CREATE INDEX IF NOT EXISTS idx_tasks_media_id ON tasks(media_id);
 CREATE INDEX IF NOT EXISTS idx_task_attempts_task_id ON task_attempts(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id);
 CREATE INDEX IF NOT EXISTS idx_rate_limits_window ON rate_limits(window_start);
+

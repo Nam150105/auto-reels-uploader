@@ -106,3 +106,4 @@ export function formatUtcToVn(utcSeconds: number): {
     iso_vn: `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}+07:00`
   };
 }
+

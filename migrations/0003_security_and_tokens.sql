@@ -40,3 +40,4 @@ CREATE TABLE IF NOT EXISTS security_key_metadata (
 
 INSERT OR IGNORE INTO security_key_metadata (key_version, algorithm, is_current, created_at)
 VALUES ('v2', 'AES-256-GCM', 1, '2026-11-06T00:00:00Z');
+

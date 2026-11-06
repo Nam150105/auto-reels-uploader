@@ -231,3 +231,4 @@ export async function enforceAuthRateLimit(
   const res = await checkRateLimit(db, key, maxAttempts, windowSeconds);
   return { allowed: res.allowed, retryAfterSeconds: res.retryAfterSeconds };
 }
+

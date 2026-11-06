@@ -40,3 +40,4 @@ export function sanitizeSensitiveText(input: unknown): string {
 
   return text;
 }
+

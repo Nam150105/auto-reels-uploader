@@ -228,3 +228,4 @@ CREATE TABLE IF NOT EXISTS rate_limits (
     count INTEGER NOT NULL DEFAULT 1,
     updated_at INTEGER NOT NULL
 );
+
