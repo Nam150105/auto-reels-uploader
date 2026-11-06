@@ -98,12 +98,12 @@ def get_current_user(request: Request = None) -> Optional[Dict[str, Any]]:
 
 def get_user_context(request: Request = None) -> Tuple[Optional[Dict[str, Any]], Optional[str], bool]:
     if not request:
-        return None, None, True
+        return None, None, False
     user = get_current_user(request)
     if user:
         return user, user["id"], (user.get("role") == "admin")
-    # Khi không có user đăng nhập (ví dụ: test suite hoặc local mode không cookie):
-    return None, None, True
+    # Khi không có user đăng nhập: TUYỆT ĐỐI KHÔNG cấp quyền admin mặc định
+    return None, None, False
 
 
 # ==========================================

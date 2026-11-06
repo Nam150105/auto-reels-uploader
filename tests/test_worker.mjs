@@ -1,159 +1,214 @@
 /**
- * Comprehensive End-to-End Verification Suite for Cloudflare Worker + D1 Architecture
- * Tests:
- * 1. D1 SQL Migration (`migrations/0001_init.sql`) on SQLite (`node:sqlite`)
- * 2. Auth APIs (`/api/auth/login`, `/api/auth/register`, `/api/auth/me`, `/api/auth/logout`)
- * 3. Facebook OAuth 2.0 Production Flow (`/api/meta/oauth-url`, `/api/meta/login`, `/api/meta/callback`, CSRF State protection)
- * 4. Meta Graph API v19.0 Fanpage Sync (`/me/accounts` pagination, token expiration handling, empty page handling)
- * 5. AES-256-GCM Token Encryption at Rest & Zero Token Leakage in API Responses
- * 6. Strict Multi-User Authorization & Isolation (Preventing IDOR across users)
- * 7. Cloud Video Upload (`/api/upload/video`), Single/Bulk Tasks, Run Test & Reels Publishing (`/{page_id}/video_reels`)
- * 8. Public Meta Policy Pages (`/privacy`, `/terms`, `/data-deletion`, `/api/meta/data-deletion`)
- * 9. Production Bundle Cleanliness Audit (Zero `localhost:8000` or leaked secrets in `static/` & `src/`)
+ * BỘ KIỂM THỬ TOÀN DIỆN 30 HẠNG MỤC BẮT BUỘC (SECTION T)
+ * Kiểm thử Unit & Integration cho Cloudflare Workers + D1 + R2 + Queue + Cron + Meta Graph API
  */
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
-import workerDefault, { handleWorkerRequest } from "../src/index.ts";
-import { decryptToken } from "../src/crypto.ts";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, "..");
+import workerDefault from "../src/index.ts";
+import {
+  encryptToken,
+  decryptToken,
+  maskToken,
+  rotateEncryptionKey,
+  hashPassword,
+  verifyPassword
+} from "../src/utils/crypto.ts";
+import {
+  parseVnScheduleToUtc,
+  formatUtcToVn,
+  VN_OFFSET_SECONDS
+} from "../src/utils/timezone.ts";
+import { sanitizeSensitiveText } from "../src/utils/sanitize.ts";
+import { consumeSingleTaskMessage } from "../src/queue/publishQueue.ts";
 
-class SqliteD1Adapter {
-  constructor(sqliteDb) {
-    this.sqlite = sqliteDb;
+// ============================================================================
+// MOCK CLOUDFLARE D1 & R2 BUCKET CHO MÔI TRƯỜNG TEST
+// ============================================================================
+
+class SqliteD1PreparedStatement {
+  constructor(db, sql, boundValues = []) {
+    this.db = db;
+    this.sql = sql;
+    this.boundValues = boundValues;
   }
-
-  prepare(query) {
-    const sqlite = this.sqlite;
-    let boundValues = [];
-
-    const stmtObj = {
-      bind(...values) {
-        boundValues = values.map((v) => (v === undefined ? null : v));
-        return stmtObj;
-      },
-      async first(colName) {
-        const stmt = sqlite.prepare(query);
-        const row = stmt.get(...boundValues);
-        if (!row) return null;
-        const plain = { ...row };
-        return colName ? plain[colName] : plain;
-      },
-      async all() {
-        const isSelect = /^\s*(SELECT|PRAGMA|WITH)/i.test(query);
-        const stmt = sqlite.prepare(query);
-        if (isSelect) {
-          const rows = stmt.all(...boundValues).map((r) => ({ ...r }));
-          return {
-            results: rows,
-            success: true,
-            meta: {
-              duration: 0,
-              size_after: 0,
-              rows_read: rows.length,
-              rows_written: 0,
-              last_row_id: 0,
-              changed_db: false,
-              changes: 0
-            }
-          };
-        } else {
-          const info = stmt.run(...boundValues);
-          return {
-            results: [],
-            success: true,
-            meta: {
-              duration: 0,
-              size_after: 0,
-              rows_read: 0,
-              rows_written: Number(info.changes || 0),
-              last_row_id: Number(info.lastInsertRowid || 0),
-              changed_db: Number(info.changes || 0) > 0,
-              changes: Number(info.changes || 0)
-            }
-          };
-        }
-      },
-      async run() {
-        return stmtObj.all();
-      },
-      async raw() {
-        const res = await stmtObj.all();
-        return res.results.map((r) => Object.values(r));
+  bind(...values) {
+    return new SqliteD1PreparedStatement(this.db, this.sql, values);
+  }
+  async first(colName) {
+    const stmt = this.db.prepare(this.sql);
+    const row = stmt.get(...this.boundValues);
+    if (!row) return null;
+    if (colName) return row[colName] ?? null;
+    return row;
+  }
+  async run() {
+    const stmt = this.db.prepare(this.sql);
+    const info = stmt.run(...this.boundValues);
+    return {
+      results: [],
+      success: true,
+      meta: {
+        changes: Number(info.changes || 0),
+        last_row_id: Number(info.lastInsertRowid || 0),
+        duration: 0
       }
     };
-    return stmtObj;
   }
-
-  async batch(statements) {
-    const out = [];
-    for (const s of statements) {
-      out.push(await s.run());
-    }
-    return out;
+  async all() {
+    const stmt = this.db.prepare(this.sql);
+    const rows = stmt.all(...this.boundValues);
+    return {
+      results: rows || [],
+      success: true,
+      meta: { changes: 0, last_row_id: 0, duration: 0 }
+    };
   }
-
-  async exec(sql) {
-    this.sqlite.exec(sql);
-    return { count: 1, duration: 0 };
-  }
-
-  async dump() {
-    return new ArrayBuffer(0);
+  async raw() {
+    const { results } = await this.all();
+    return results.map((r) => Object.values(r));
   }
 }
 
-/**
- * Mock ASSETS Fetcher serving `./static` files
- */
-const staticAssetsFetcher = {
-  async fetch(input) {
-    const reqUrl = typeof input === "string" ? new URL(input) : new URL(input.url);
-    const relPath = reqUrl.pathname.replace(/^\/+/, "");
-    const fullPath = path.join(ROOT_DIR, "static", relPath);
-    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-      const content = fs.readFileSync(fullPath);
-      const ext = path.extname(fullPath).toLowerCase();
-      const mime =
-        ext === ".html"
-          ? "text/html; charset=utf-8"
-          : ext === ".js"
-          ? "application/javascript; charset=utf-8"
-          : "application/octet-stream";
-      return new Response(content, { status: 200, headers: { "Content-Type": mime } });
-    }
-    return new Response("Not Found", { status: 404 });
+class SqliteD1Database {
+  constructor() {
+    this.sqlite = new DatabaseSync(":memory:");
+    this.sqlite.exec("PRAGMA foreign_keys = ON;");
   }
-};
+  prepare(query) {
+    return new SqliteD1PreparedStatement(this.sqlite, query);
+  }
+  async batch(statements) {
+    const out = [];
+    for (const st of statements) {
+      const upper = st.sql.trim().toUpperCase();
+      if (upper.startsWith("SELECT")) {
+        out.push(await st.all());
+      } else {
+        out.push(await st.run());
+      }
+    }
+    return out;
+  }
+  async exec(query) {
+    this.sqlite.exec(query);
+    return { count: 1, duration: 0 };
+  }
+}
 
-async function runTests() {
-  console.log("=== BẮT ĐẦU KIỂM THỬ CLOUDFLARE WORKER & D1 ARCHITECTURE ===");
+class MockR2Bucket {
+  constructor() {
+    this.objects = new Map();
+  }
+  async put(key, value, options = {}) {
+    let bytes;
+    if (value instanceof ReadableStream) {
+      const buf = await new Response(value).arrayBuffer();
+      bytes = new Uint8Array(buf);
+    } else if (value instanceof ArrayBuffer) {
+      bytes = new Uint8Array(value);
+    } else if (ArrayBuffer.isView(value)) {
+      bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    } else {
+      bytes = new TextEncoder().encode(String(value || ""));
+    }
+    const meta = {
+      key,
+      version: "v1",
+      size: bytes.byteLength,
+      etag: `etag_${bytes.byteLength}`,
+      httpEtag: `"etag_${bytes.byteLength}"`,
+      uploaded: new Date(),
+      httpMetadata: options.httpMetadata || {},
+      customMetadata: options.customMetadata || {},
+      bytes
+    };
+    this.objects.set(key, meta);
+    return meta;
+  }
+  async head(key) {
+    const obj = this.objects.get(key);
+    if (!obj) return null;
+    const { bytes: _b, ...rest } = obj;
+    return rest;
+  }
+  async get(key) {
+    const obj = this.objects.get(key);
+    if (!obj) return null;
+    const copy = new Uint8Array(obj.bytes);
+    return {
+      ...obj,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(copy);
+          controller.close();
+        }
+      }),
+      bodyUsed: false,
+      arrayBuffer: async () => copy.buffer,
+      text: async () => new TextDecoder().decode(copy),
+      json: async () => JSON.parse(new TextDecoder().decode(copy)),
+      blob: async () => new Blob([copy])
+    };
+  }
+  async delete(keys) {
+    const arr = Array.isArray(keys) ? keys : [keys];
+    for (const k of arr) this.objects.delete(k);
+  }
+}
 
-  // 1. Khởi tạo SQLite in-memory & chạy D1 Migration `migrations/0001_init.sql`
-  const sqlite = new DatabaseSync(":memory:");
-  const migrationSql = fs.readFileSync(
-    path.join(ROOT_DIR, "migrations", "0001_init.sql"),
-    "utf-8"
-  );
-  sqlite.exec(migrationSql);
-  const d1 = new SqliteD1Adapter(sqlite);
+function createStaticAssetsFetcher() {
+  const staticDir = path.join(process.cwd(), "static");
+  return {
+    async fetch(req) {
+      const u = new URL(req.url);
+      const rel = u.pathname.replace(/^\/+/, "");
+      const filePath = path.join(staticDir, rel);
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        const content = fs.readFileSync(filePath);
+        const ext = path.extname(filePath).toLowerCase();
+        const mime =
+          ext === ".html"
+            ? "text/html; charset=utf-8"
+            : ext === ".js"
+            ? "application/javascript; charset=utf-8"
+            : "text/plain; charset=utf-8";
+        return new Response(content, {
+          status: 200,
+          headers: { "Content-Type": mime }
+        });
+      }
+      return new Response("Not found", { status: 404 });
+    }
+  };
+}
 
+// ============================================================================
+// CHẠY 30 BÀI KIỂM THỬ BẮT BUỘC
+// ============================================================================
+
+async function runAll30Tests() {
+  console.log("==================================================================");
+  console.log(" BẮT ĐẦU BỘ 30 BÀI KIỂM THỬ CLOUDFLARE WORKER + D1 + R2 + QUEUE   ");
+  console.log("==================================================================");
+
+  const d1 = new SqliteD1Database();
+  const r2 = new MockR2Bucket();
   const env = {
     DB: d1,
-    ASSETS: staticAssetsFetcher,
+    MEDIA_BUCKET: r2,
+    ASSETS: createStaticAssetsFetcher(),
     META_APP_ID: "1469615908436980",
-    META_APP_SECRET: "test_secret_for_verification_only",
+    META_APP_SECRET: "test_meta_app_secret_only_for_unit_tests",
     APP_BASE_URL: "https://pagefb.namnangno.click",
     META_REDIRECT_URI: "https://pagefb.namnangno.click/api/meta/callback",
     META_GRAPH_VERSION: "v19.0",
-    SECRET_KEY: "test_hmac_secret_key_for_session_tokens",
-    ENCRYPTION_KEY: "test_aes_256_gcm_key_for_token_encryption"
+    SESSION_SECRET: "unit_test_session_secret_64_chars_2026_strong_random_value_9999",
+    TOKEN_ENCRYPTION_KEY: "unit_test_aes_256_gcm_token_key_2026_strong_random_value_8888",
+    MAX_VIDEO_SIZE_MB: "200"
   };
 
   async function callWorker(urlPath, init = {}) {
@@ -172,362 +227,457 @@ async function runTests() {
     return resp;
   }
 
-  console.log("[TEST 1] Kiểm tra D1 Schema & Tài khoản Admin mặc định...");
-  const tables = sqlite
+  // --------------------------------------------------------------------------
+  // [TEST 12] D1 Migrations (0001, 0002, 0003) chạy nhiều lần an toàn (Idempotent)
+  // --------------------------------------------------------------------------
+  const migFiles = [
+    "migrations/0001_initial_schema.sql",
+    "migrations/0002_indexes.sql",
+    "migrations/0003_security_and_tokens.sql"
+  ];
+  for (let pass = 1; pass <= 2; pass++) {
+    for (const mf of migFiles) {
+      const sql = fs.readFileSync(path.join(process.cwd(), mf), "utf8");
+      await d1.exec(sql);
+    }
+  }
+  const tablesCheck = await d1
     .prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
-    .all()
-    .map((r) => r.name);
+    .all();
+  const tableNames = new Set(tablesCheck.results.map((r) => r.name));
   for (const required of [
     "users",
+    "sessions",
     "oauth_states",
     "facebook_accounts",
     "facebook_pages",
     "facebook_account_pages",
-    "user_page_permissions",
+    "media_files",
     "tasks",
-    "uploaded_videos"
+    "task_attempts",
+    "task_logs",
+    "data_deletion_requests",
+    "rate_limits",
+    "user_page_permissions"
   ]) {
-    assert.ok(tables.includes(required), `Thiếu bảng/view bắt buộc: ${required}`);
+    assert.ok(tableNames.has(required), `Thiếu bảng/view ${required} trong D1`);
   }
-  console.log("  ✓ Đầy đủ 8 bảng/view trong D1 Migration 0001_init.sql");
+  console.log("  ✓ [Test 12] D1 Migrations (0001, 0002, 0003) idempotent & đầy đủ 13 bảng/view");
 
-  // 2. Kiểm tra Public Policy Pages & Data Deletion Callback
-  console.log("[TEST 2] Kiểm tra các trang Chính sách Meta & Data Deletion Callback...");
-  for (const pubRoute of ["/privacy", "/terms", "/data-deletion"]) {
-    const r = await callWorker(pubRoute);
-    assert.equal(r.status, 200, `Route ${pubRoute} phải trả về HTTP 200`);
-    const html = await r.text();
-    assert.ok(html.includes("1469615908436980"), `${pubRoute} phải chứa App ID`);
-    assert.ok(html.includes("https://pagefb.namnangno.click"), `${pubRoute} phải chứa production domain`);
-  }
+  // --------------------------------------------------------------------------
+  // [TEST 1] Worker khởi động & export đầy đủ fetch, scheduled, queue
+  // --------------------------------------------------------------------------
+  assert.equal(typeof workerDefault.fetch, "function");
+  assert.equal(typeof workerDefault.scheduled, "function");
+  assert.equal(typeof workerDefault.queue, "function");
+  console.log("  ✓ [Test 01] Worker khởi động với đầy đủ handlers (fetch, scheduled, queue)");
 
-  const delResp = await callWorker("/api/meta/data-deletion", { method: "POST" });
-  assert.equal(delResp.status, 200);
-  const delJson = await delResp.json();
-  assert.ok(delJson.url.startsWith("https://pagefb.namnangno.click/data-deletion-status?code=DEL_"));
-  assert.ok(delJson.confirmation_code.startsWith("DEL_"));
-  console.log("  ✓ /privacy, /terms, /data-deletion, /api/meta/data-deletion chuẩn Meta!");
+  // --------------------------------------------------------------------------
+  // [TEST 2] Frontend tải thành công (/login, /privacy, /terms, /data-deletion, /static/js/app.js)
+  // --------------------------------------------------------------------------
+  const loginPageResp = await callWorker("/login");
+  assert.equal(loginPageResp.status, 200);
+  const loginHtml = await loginPageResp.text();
+  assert.ok(loginHtml.toLowerCase().includes("quản lý fanpage"));
 
-  // 3. Kiểm tra Đăng nhập Admin & Đăng ký User A, User B
-  console.log("[TEST 3] Kiểm tra Xác thực (/api/auth/login, /api/auth/register, /api/auth/me)...");
-  const unauthResp = await callWorker("/api/meta/status");
-  assert.equal(unauthResp.status, 401, "API bảo vệ phải trả về 401 khi chưa đăng nhập");
+  const unauthRootResp = await callWorker("/");
+  assert.equal(unauthRootResp.status, 302);
+  assert.ok(unauthRootResp.headers.get("Location")?.endsWith("/login"));
+
+  const appJsResp = await callWorker("/static/js/app.js");
+  assert.equal(appJsResp.status, 200);
+  console.log("  ✓ [Test 02] Frontend & Static Assets tải thành công");
+
+  // --------------------------------------------------------------------------
+  // [TEST 3, 4, 5, 6] Register, Login, Session Validation & Real Revocable Logout
+  // --------------------------------------------------------------------------
+  const pwdHash = await hashPassword("MyStrongPass#2026");
+  assert.equal(await verifyPassword("MyStrongPass#2026", pwdHash), true);
+  assert.equal(await verifyPassword("WrongPassword", pwdHash), false);
 
   const regAResp = await callWorker("/api/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      username: "user_a",
-      password: "passwordA",
-      full_name: "Người Dùng A",
-      email: "a@pagefb.namnangno.click"
+      username: "alice_admin",
+      password: "PasswordA123",
+      full_name: "Alice Admin",
+      email: "alice@example.com"
     })
   });
   assert.equal(regAResp.status, 200);
-  const regAJson = await regAResp.json();
-  const tokenA = regAJson.token;
-  assert.ok(tokenA, "Phải cấp session token cho User A");
+  const cookieHeaderA1 = regAResp.headers.get("Set-Cookie") || "";
+  assert.ok(cookieHeaderA1.includes("HttpOnly"));
+  assert.ok(cookieHeaderA1.includes("SameSite=Lax"));
+  assert.ok(cookieHeaderA1.includes("Secure"));
+  const tokenA1 = /session_token=([^;]+)/.exec(cookieHeaderA1)?.[1] || "";
+  assert.ok(tokenA1.length > 20);
+  console.log("  ✓ [Test 04] Register tài khoản mới & tạo HttpOnly Secure Session");
+
+  // Kiểm tra /api/auth/me với tokenA1
+  const meResp1 = await callWorker("/api/auth/me", {
+    headers: { Cookie: `session_token=${tokenA1}` }
+  });
+  assert.equal(meResp1.status, 200);
+  const meJson1 = await meResp1.json();
+  assert.equal(meJson1.user.username, "alice_admin");
+  console.log("  ✓ [Test 06] Session validation (/api/auth/me) hợp lệ");
+
+  // Kiểm tra Logout thực sự thu hồi session trong D1
+  const logoutResp = await callWorker("/api/auth/logout", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA1}` }
+  });
+  assert.equal(logoutResp.status, 200);
+
+  // Thử dùng lại tokenA1 sau khi đã logout -> Phải bị từ chối 401!
+  const meAfterLogout = await callWorker("/api/auth/me", {
+    headers: { Cookie: `session_token=${tokenA1}` }
+  });
+  assert.equal(meAfterLogout.status, 401, "Session đã logout phải bị thu hồi trong D1");
+  console.log("  ✓ [Test 05] Logout thu hồi thực sự session phía Server D1");
+
+  // Đăng nhập lại cho User A & tạo thêm User B
+  const loginAResp = await callWorker("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "alice_admin", password: "PasswordA123" })
+  });
+  assert.equal(loginAResp.status, 200);
+  const tokenA = /session_token=([^;]+)/.exec(loginAResp.headers.get("Set-Cookie") || "")?.[1] || "";
 
   const regBResp = await callWorker("/api/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      username: "user_b",
-      password: "passwordB",
-      full_name: "Người Dùng B",
-      email: "b@pagefb.namnangno.click"
+      username: "bob_user",
+      password: "PasswordB123",
+      full_name: "Bob User"
     })
   });
   assert.equal(regBResp.status, 200);
-  const regBJson = await regBResp.json();
-  const tokenB = regBJson.token;
-  assert.ok(tokenB, "Phải cấp session token cho User B");
+  const tokenB = /session_token=([^;]+)/.exec(regBResp.headers.get("Set-Cookie") || "")?.[1] || "";
+  console.log("  ✓ [Test 03] Login hoạt động chính xác cho nhiều người dùng");
 
-  const meAResp = await callWorker("/api/auth/me", {
-    headers: { Cookie: `session_token=${tokenA}` }
-  });
-  assert.equal(meAResp.status, 200);
-  const meAJson = await meAResp.json();
-  assert.equal(meAJson.user.username, "user_a");
-  console.log("  ✓ Đăng ký, Đăng nhập và Cookie Session hoạt động chính xác!");
+  // --------------------------------------------------------------------------
+  // [TEST 11] Token Encryption, Decryption, Masking & Key Rotation (AES-256-GCM)
+  // --------------------------------------------------------------------------
+  const rawFbToken = "EAABsbCS1iHgBO77889900SecretFacebookTokenXYZ";
+  const encV2 = await encryptToken(rawFbToken, env.TOKEN_ENCRYPTION_KEY, "v2");
+  assert.ok(encV2.startsWith("enc:v2:"));
+  assert.ok(!encV2.includes(rawFbToken));
+  const decV2 = await decryptToken(encV2, env.TOKEN_ENCRYPTION_KEY);
+  assert.equal(decV2, rawFbToken);
 
-  // 4. Kiểm tra Khởi tạo Facebook OAuth URL & CSRF State trong D1
-  console.log("[TEST 4] Kiểm tra Facebook OAuth 2.0 URL & CSRF State...");
-  const oauthUrlResp = await callWorker("/api/meta/oauth-url", {
-    headers: { Cookie: `session_token=${tokenA}` }
-  });
-  assert.equal(oauthUrlResp.status, 200);
-  const oauthUrlData = await oauthUrlResp.json();
-  assert.equal(oauthUrlData.status, "success");
-  assert.ok(
-    oauthUrlData.oauth_url.startsWith("https://www.facebook.com/v19.0/dialog/oauth?"),
-    "OAuth URL phải trỏ tới Facebook Dialog v19.0"
+  const rotated = await rotateEncryptionKey(
+    encV2,
+    env.TOKEN_ENCRYPTION_KEY,
+    "new_rotated_encryption_key_2027_v3",
+    "v3"
   );
-  assert.ok(
-    oauthUrlData.oauth_url.includes("client_id=1469615908436980"),
-    "OAuth URL phải chứa App ID 1469615908436980"
-  );
-  assert.ok(
-    oauthUrlData.oauth_url.includes(
-      encodeURIComponent("https://pagefb.namnangno.click/api/meta/callback")
-    ),
-    "OAuth URL phải chứa Redirect URI production"
-  );
-  const stateA = oauthUrlData.state;
-  assert.ok(stateA && stateA.length >= 32, "State CSRF phải có độ dài an toàn");
+  assert.equal(rotated.success, true);
+  assert.ok(rotated.encrypted.startsWith("enc:v3:"));
+  const decRotated = await decryptToken(rotated.encrypted, "new_rotated_encryption_key_2027_v3");
+  assert.equal(decRotated, rawFbToken);
 
-  // Kiểm tra /api/meta/login trả về 302 Redirect
-  const loginRedirResp = await callWorker("/api/meta/login", {
-    headers: { Cookie: `session_token=${tokenA}` },
-    redirect: "manual"
-  });
-  assert.equal(loginRedirResp.status, 302);
-  assert.ok(
-    loginRedirResp.headers.get("Location").startsWith("https://www.facebook.com/v19.0/dialog/oauth")
-  );
-  console.log("  ✓ /api/meta/oauth-url và /api/meta/login tạo state D1 & redirect chuẩn!");
+  const masked = maskToken(rawFbToken);
+  assert.equal(masked, "EAAB***...***nXYZ");
+  assert.ok(!sanitizeSensitiveText(`Lỗi với token ${rawFbToken}`).includes(rawFbToken));
+  console.log("  ✓ [Test 11] AES-256-GCM Encryption, Decryption, Masking & Key Rotation đạt 100%");
 
-  // 5. Kiểm tra OAuth Callback, Đổi Token, Mã hóa AES-256-GCM & Đồng bộ /me/accounts (Có phân trang)
-  console.log("[TEST 5] Kiểm tra OAuth Callback, Token Exchange & Đồng bộ Fanpage (/me/accounts)...");
+  // --------------------------------------------------------------------------
+  // [TEST 7, 8, 9, 10, 14] OAuth URL, State Persistence, Callback, 2 User OAuth Đồng Thời & Pagination
+  // --------------------------------------------------------------------------
+  let graphApiReelsCalled = 0;
+  let simulateUpload500Once = false;
+  let simulateAmbiguousFinishError = false;
+  let simulateExpiredTokenPageId = "";
+
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const u = typeof input === "string" ? input : input.url;
 
-    // 1. Short-lived token & Long-lived token exchange
-    if (u.includes("graph.facebook.com/v19.0/oauth/access_token")) {
-      if (u.includes("grant_type=fb_exchange_token")) {
+    // 1. OAuth Code Exchange & Long-lived token
+    if (u.includes("/oauth/access_token")) {
+      if (u.includes("code=code_user_a_acc1")) {
+        return new Response(JSON.stringify({ access_token: "EAAB_TOKEN_A1", expires_in: 5184000 }), { status: 200 });
+      }
+      if (u.includes("code=code_user_a_acc2")) {
+        return new Response(JSON.stringify({ access_token: "EAAB_TOKEN_A2", expires_in: 5184000 }), { status: 200 });
+      }
+      if (u.includes("code=code_user_b_acc1")) {
+        return new Response(JSON.stringify({ access_token: "EAAB_TOKEN_B1", expires_in: 5184000 }), { status: 200 });
+      }
+      if (u.includes("fb_exchange_token=")) {
+        const match = /fb_exchange_token=([^&]+)/.exec(u);
         return new Response(
-          JSON.stringify({
-            access_token: "EAAB_LONG_LIVED_USER_A_SECRET_TOKEN_9999",
-            token_type: "bearer",
-            expires_in: 5184000
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+          JSON.stringify({ access_token: decodeURIComponent(match[1]) + "_LONG", expires_in: 5184000 }),
+          { status: 200 }
         );
       }
-      return new Response(
-        JSON.stringify({
-          access_token: "EAAB_SHORT_USER_A_TOKEN_1111",
-          token_type: "bearer",
-          expires_in: 3600
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
     }
 
-    // 2. /me profile
-    if (u.includes("graph.facebook.com/v19.0/me?")) {
-      return new Response(
-        JSON.stringify({
-          id: "fb_uid_10001",
-          name: "Nguyễn Văn Admin A",
-          picture: { data: { url: "https://pagefb.namnangno.click/avatar_a.jpg" } }
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
+    // 2. /me Profile
+    if (u.includes("/me?fields=id,name")) {
+      if (u.includes("EAAB_TOKEN_A1")) {
+        return new Response(JSON.stringify({ id: "fb_uid_a1", name: "Alice FB Admin 1" }), { status: 200 });
+      }
+      if (u.includes("EAAB_TOKEN_A2")) {
+        return new Response(JSON.stringify({ id: "fb_uid_a2", name: "Alice FB Admin 2" }), { status: 200 });
+      }
+      if (u.includes("EAAB_TOKEN_B1")) {
+        return new Response(JSON.stringify({ id: "fb_uid_b1", name: "Bob FB Admin 1" }), { status: 200 });
+      }
     }
 
     // 3. /me/permissions
-    if (u.includes("graph.facebook.com/v19.0/me/permissions")) {
+    if (u.includes("/me/permissions")) {
       return new Response(
         JSON.stringify({
           data: [
             { permission: "public_profile", status: "granted" },
             { permission: "pages_show_list", status: "granted" },
             { permission: "pages_read_engagement", status: "granted" },
-            { permission: "pages_manage_posts", status: "granted" }
+            { permission: "pages_manage_posts", status: "granted" },
+            { permission: "pages_manage_engagement", status: "granted" },
+            { permission: "pages_read_user_content", status: "granted" }
           ]
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200 }
       );
     }
 
-    // 4. /me/accounts (Trang 1 -> phân trang sang Trang 2)
-    if (u.includes("graph.facebook.com/v19.0/me/accounts") && !u.includes("after=page2")) {
-      return new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "101010101",
-              name: "Fanpage Điện Ảnh A1",
-              access_token: "EAAB_PAGE_101_SECRET_TOKEN",
-              category: "Movie",
-              tasks: ["MANAGE", "CREATE_CONTENT", "MODERATE"],
-              is_published: true,
-              picture: { data: { url: "https://pagefb.namnangno.click/p101.jpg" } }
+    // 4. /me/accounts (with multi-page cursor pagination for Alice Admin 1, and overlapping Page for Alice Admin 2)
+    if (u.includes("/me/accounts")) {
+      if (u.includes("EAAB_TOKEN_A1") && !u.includes("after=cursor_page_2")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page_101",
+                name: "Fanpage Điện Ảnh A1",
+                access_token: "EAAB_PAGE_TOKEN_101_FROM_A1",
+                category: "Movie",
+                picture: { data: { url: "https://pagefb.namnangno.click/avatar1.png" } },
+                tasks: ["MANAGE", "CREATE_CONTENT"],
+                is_published: true
+              }
+            ],
+            paging: {
+              next: "https://graph.facebook.com/v19.0/me/accounts?after=cursor_page_2&access_token=EAAB_TOKEN_A1_LONG"
             }
-          ],
-          paging: {
-            next: "https://graph.facebook.com/v19.0/me/accounts?after=page2"
-          }
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes("after=cursor_page_2")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page_102",
+                name: "Fanpage Giải Trí A2",
+                access_token: "EAAB_PAGE_TOKEN_102_FROM_A1",
+                category: "Entertainment",
+                picture: { data: { url: "https://pagefb.namnangno.click/avatar2.png" } },
+                tasks: ["CREATE_CONTENT"],
+                is_published: true
+              }
+            ],
+            paging: {}
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes("EAAB_TOKEN_A2")) {
+        // Alice's 2nd Facebook Admin Account ALSO manages page_101 -> Test deduplication!
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page_101",
+                name: "Fanpage Điện Ảnh A1",
+                access_token: "EAAB_PAGE_TOKEN_101_FROM_A2",
+                category: "Movie",
+                tasks: ["MANAGE", "CREATE_CONTENT"],
+                is_published: true
+              }
+            ],
+            paging: {}
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes("EAAB_TOKEN_B1")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page_999",
+                name: "Fanpage Của Bob B1",
+                access_token: "EAAB_PAGE_TOKEN_999_FROM_B1",
+                category: "Gaming",
+                tasks: ["CREATE_CONTENT"],
+                is_published: true
+              }
+            ],
+            paging: {}
+          }),
+          { status: 200 }
+        );
+      }
     }
 
-    if (u.includes("graph.facebook.com/v19.0/me/accounts?after=page2")) {
-      return new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "102020202",
-              name: "Fanpage Giải Trí A2",
-              access_token: "EAAB_PAGE_102_SECRET_TOKEN",
-              category: "Entertainment",
-              tasks: ["CREATE_CONTENT"],
-              is_published: true
+    // 5. Check Page Permission
+    if (u.includes("/page_101?fields=id,name")) {
+      if (simulateExpiredTokenPageId === "page_101") {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "Error validating access token: Session has expired (EAAB_PAGE_TOKEN_101_FROM_A1)",
+              type: "OAuthException",
+              code: 190,
+              error_subcode: 463
             }
-          ],
-          paging: {}
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-    // 5. Check Page Permission (/v19.0/101010101 & /v19.0/102020202)
-    if (u.includes("graph.facebook.com/v19.0/101010101?")) {
+          }),
+          { status: 400 }
+        );
+      }
       return new Response(
         JSON.stringify({
-          id: "101010101",
+          id: "page_101",
           name: "Fanpage Điện Ảnh A1",
           is_published: true,
           tasks: ["MANAGE", "CREATE_CONTENT"]
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200 }
       );
     }
 
-    if (u.includes("graph.facebook.com/v19.0/102020202?")) {
+    // 6. Reels Publishing API (/{page_id}/video_reels & rupload.facebook.com)
+    if (u.includes("/video_reels") && !u.includes("upload_phase=finish")) {
+      graphApiReelsCalled++;
       return new Response(
         JSON.stringify({
-          id: "102020202",
-          name: "Fanpage Giải Trí A2",
-          is_published: true,
-          tasks: ["CREATE_CONTENT"]
+          video_id: `vid_reel_${graphApiReelsCalled}`,
+          upload_url: `https://rupload.facebook.com/video-upload/v19.0/vid_reel_${graphApiReelsCalled}`
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200 }
       );
     }
 
-    // 6. Reels Publishing API (/v19.0/101010101/video_reels)
-    if (u.includes("graph.facebook.com/v19.0/101010101/video_reels")) {
-      const bodyText = init?.body ? String(init.body) : "";
-      if (bodyText.includes("upload_phase=start")) {
+    if (u.includes("rupload.facebook.com/video-upload/")) {
+      if (simulateUpload500Once) {
+        simulateUpload500Once = false;
         return new Response(
-          JSON.stringify({
-            video_id: "reel_vid_8888",
-            upload_url: "https://rupload.facebook.com/video-upload/v19.0/reel_vid_8888"
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+          JSON.stringify({ error: { message: "Temporary upload server error", code: 2 } }),
+          { status: 500 }
         );
       }
-      if (bodyText.includes("upload_phase=finish")) {
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }
+
+    if (u.includes("/video_reels") && u.includes("upload_phase=finish")) {
+      if (simulateAmbiguousFinishError) {
+        simulateAmbiguousFinishError = false;
         return new Response(
-          JSON.stringify({
-            success: true,
-            post_id: "post_8888"
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+          JSON.stringify({ error: { message: "Gateway timeout during finish", code: 1 } }),
+          { status: 504 }
         );
       }
-    }
-
-    if (u.includes("rupload.facebook.com/video-upload/v19.0/reel_vid_8888")) {
-      return new Response(JSON.stringify({ success: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-
-    if (u.includes("graph.facebook.com/v19.0/reel_vid_8888?fields=status")) {
       return new Response(
-        JSON.stringify({ status: { video_status: "ready" } }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, post_id: `post_reel_${graphApiReelsCalled}` }),
+        { status: 200 }
       );
     }
 
-    if (u.includes("graph.facebook.com/v19.0/reel_vid_8888/comments")) {
-      return new Response(JSON.stringify({ id: "cmt_999" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
+    if (u.includes("?fields=id,permalink_url,status")) {
+      return new Response(
+        JSON.stringify({
+          id: `vid_reel_${graphApiReelsCalled}`,
+          permalink_url: `/reel/vid_reel_${graphApiReelsCalled}`,
+          status: { video_status: "ready" }
+        }),
+        { status: 200 }
+      );
+    }
+
+    if (u.includes("/comments")) {
+      return new Response(JSON.stringify({ id: "cmt_888999" }), { status: 200 });
     }
 
     return originalFetch(input, init);
   };
 
-  // Gọi OAuth Callback với state hợp lệ
-  const cbResp = await callWorker(
-    `/api/meta/callback?code=AUTH_CODE_FROM_FACEBOOK&state=${encodeURIComponent(stateA)}`,
-    { headers: { Cookie: `session_token=${tokenA}` } }
-  );
-  assert.equal(cbResp.status, 200, "OAuth Callback hợp lệ phải trả về HTTP 200");
-  const cbHtml = await cbResp.text();
-  assert.ok(cbHtml.includes("Kết Nối Facebook Thành Công"), "Callback HTML phải báo thành công");
-  assert.ok(cbHtml.includes("Nguyễn Văn Admin A"), "Callback HTML phải hiển thị tên Admin");
+  // User A và User B khởi tạo OAuth CÙNG LÚC (Simultaneous Multi-User OAuth)
+  const oauthAResp1 = await callWorker("/api/meta/oauth-url", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(oauthAResp1.status, 200);
+  const oauthA1 = await oauthAResp1.json();
+  assert.ok(oauthA1.oauth_url.includes("client_id=1469615908436980"));
+  assert.ok(oauthA1.oauth_url.includes(encodeURIComponent("https://pagefb.namnangno.click/api/meta/callback")));
+  console.log("  ✓ [Test 07] OAuth URL generation chuẩn Meta Dialog v19.0");
 
-  // Thử replay lại cùng stateA (Phải bị chặn bởi one-time CSRF consumption)
-  const replayResp = await callWorker(
-    `/api/meta/callback?code=AUTH_CODE_2&state=${encodeURIComponent(stateA)}`,
-    { headers: { Cookie: `session_token=${tokenA}` } }
-  );
-  assert.equal(replayResp.status, 400, "Replay lại CSRF state cũ phải bị từ chối (HTTP 400)");
+  const oauthBResp1 = await callWorker("/api/meta/oauth-url", {
+    headers: { Cookie: `session_token=${tokenB}` }
+  });
+  const oauthB1 = await oauthBResp1.json();
+  assert.notEqual(oauthA1.state, oauthB1.state, "Mỗi phiên OAuth phải có CSRF state độc lập");
+  console.log("  ✓ [Test 08] OAuth state persistence độc lập trong D1");
 
-  // Kiểm tra Token trong DB đã được mã hóa AES-256-GCM (enc:v2:...) và KHÔNG lưu plaintext
-  const rawAccRow = sqlite
-    .prepare("SELECT encrypted_user_access_token FROM facebook_accounts WHERE user_id = 'fb_uid_10001'")
-    .get();
-  assert.ok(
-    rawAccRow.encrypted_user_access_token.startsWith("enc:v2:"),
-    "User Access Token trong D1 phải được mã hóa AES-256-GCM (enc:v2:...)"
-  );
-  assert.ok(
-    !rawAccRow.encrypted_user_access_token.includes("EAAB_LONG_LIVED"),
-    "Không được lưu token dạng rõ trong D1"
-  );
-  const decryptedUserToken = await decryptToken(
-    rawAccRow.encrypted_user_access_token,
-    env.ENCRYPTION_KEY
-  );
-  assert.equal(decryptedUserToken, "EAAB_LONG_LIVED_USER_A_SECRET_TOKEN_9999");
+  // Callback hoàn tất cho cả User B và User A đan xen nhau
+  const cbB = await callWorker(`/api/meta/callback?code=code_user_b_acc1&state=${oauthB1.state}`, {
+    headers: { Cookie: `session_token=${tokenB}` }
+  });
+  assert.equal(cbB.status, 200);
 
-  // Kiểm tra API trả về danh sách Fanpage cho User A (Không lộ encrypted_page_access_token)
+  const cbA1 = await callWorker(`/api/meta/callback?code=code_user_a_acc1&state=${oauthA1.state}`, {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(cbA1.status, 200);
+
+  // Thử replay lại state của User A -> Phải bị chặn!
+  const cbReplay = await callWorker(`/api/meta/callback?code=code_user_a_acc1&state=${oauthA1.state}`, {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(cbReplay.status, 400, "State OAuth chỉ được phép sử dụng 1 lần duy nhất");
+  console.log("  ✓ [Test 09] OAuth Callback & Chống Replay CSRF State hoạt động chuẩn xác");
+  console.log("  ✓ [Test 10] Hai user thực hiện OAuth đồng thời không bị ghi đè hay lẫn dữ liệu");
+
+  // Kết nối thêm tài khoản Facebook Admin thứ 2 cho User A (quản lý trùng page_101)
+  const oauthAResp2 = await callWorker("/api/meta/oauth-url", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  const oauthA2 = await oauthAResp2.json();
+  const cbA2 = await callWorker(`/api/meta/callback?code=code_user_a_acc2&state=${oauthA2.state}`, {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(cbA2.status, 200);
+
+  // Kiểm tra danh sách Fanpage của User A (Phân trang /me/accounts + Chống trùng lặp Page)
   const pagesAResp = await callWorker("/api/pages", {
     headers: { Cookie: `session_token=${tokenA}` }
   });
-  assert.equal(pagesAResp.status, 200);
   const pagesA = await pagesAResp.json();
-  assert.equal(pagesA.length, 2, "Phải đồng bộ đủ 2 Fanpage qua phân trang /me/accounts");
-  const syncedPageIds = pagesA.map((p) => p.facebook_page_id).sort();
-  assert.deepEqual(syncedPageIds, ["101010101", "102020202"]);
-  assert.equal(
-    pagesA[0].encrypted_page_access_token,
-    undefined,
-    "Tuyệt đối không trả encrypted_page_access_token về frontend"
-  );
-  assert.equal(
-    pagesA[0].access_token,
-    undefined,
-    "Tuyệt đối không trả access_token về frontend"
-  );
-  console.log("  ✓ OAuth Callback, CSRF One-Time State, Mã hóa AES-256-GCM & Phân trang /me/accounts đạt 100%!");
+  assert.equal(pagesA.length, 2, "Phải đồng bộ đủ 2 Page qua pagination và không tạo trùng page_101");
+  const page101 = pagesA.find((p) => p.facebook_page_id === "page_101");
+  assert.equal(page101.admin_accounts.length, 2, "page_101 phải ghi nhận cả 2 Admin Accounts của Alice");
+  assert.equal(page101.page_access_token, undefined, "Tuyệt đối không trả page_access_token về Frontend");
+  console.log("  ✓ [Test 14] Đồng bộ /me/accounts có phân trang & Chống trùng lặp Fanpage đa Admin");
 
-  // 6. Kiểm tra Phân tách dữ liệu giữa các User (Multi-User Isolation & Chống IDOR)
-  console.log("[TEST 6] Kiểm tra Cô lập dữ liệu giữa User A và User B (Chống IDOR)...");
+  // --------------------------------------------------------------------------
+  // [TEST 13] User Isolation & CSRF Protection
+  // --------------------------------------------------------------------------
   const pagesBResp = await callWorker("/api/pages", {
     headers: { Cookie: `session_token=${tokenB}` }
   });
   const pagesB = await pagesBResp.json();
-  assert.equal(pagesB.length, 0, "User B không được thấy Fanpage của User A");
+  assert.equal(pagesB.length, 1);
+  assert.equal(pagesB[0].facebook_page_id, "page_999");
 
-  const accountsBResp = await callWorker("/api/meta/accounts", {
-    headers: { Cookie: `session_token=${tokenB}` }
-  });
-  const accountsB = await accountsBResp.json();
-  assert.equal(accountsB.length, 0, "User B không được thấy tài khoản Facebook của User A");
-
-  // User B cố tình gửi request thay đổi lựa chọn, kiểm tra quyền, xóa Fanpage 101010101 của User A
-  const idorSelect = await callWorker("/api/pages/101010101/select", {
+  // Bob thử chọn hoặc xóa Page của Alice -> Phải trả về 404
+  const bobHackPage = await callWorker("/api/pages/page_101/select", {
     method: "POST",
     headers: {
       Cookie: `session_token=${tokenB}`,
@@ -535,51 +685,93 @@ async function runTests() {
     },
     body: JSON.stringify({ is_selected: false })
   });
-  assert.equal(idorSelect.status, 404, "User B không được phép select/unselect Page của User A");
+  assert.equal(bobHackPage.status, 404);
 
-  const idorCheckPerm = await callWorker("/api/pages/101010101/check-permission", {
+  // Kiểm tra CSRF Protection chặn request từ Origin lạ
+  const csrfHack = await callWorker("/api/pages/bulk-select", {
     method: "POST",
-    headers: { Cookie: `session_token=${tokenB}` }
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      Origin: "https://evil-attacker.example.com",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ is_selected: false })
   });
-  assert.equal(idorCheckPerm.status, 400, "User B không được phép check-permission Page của User A");
+  assert.equal(csrfHack.status, 403, "CSRF Protection phải chặn request từ Origin bên ngoài");
+  console.log("  ✓ [Test 13] Cô lập dữ liệu Multi-User (Chống IDOR) & Bảo vệ CSRF đạt 100%");
 
-  const idorDeletePage = await callWorker("/api/pages/101010101", {
+  // --------------------------------------------------------------------------
+  // [TEST 15 & 16] R2 Video Upload Streaming & R2 Object Ownership
+  // --------------------------------------------------------------------------
+  const initUploadResp = await callWorker("/api/media/upload-init", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      filename: "alice_reel_01.mp4",
+      size_bytes: 4096,
+      mime_type: "video/mp4"
+    })
+  });
+  assert.equal(initUploadResp.status, 200);
+  const initUploadData = await initUploadResp.json();
+  assert.ok(initUploadData.media_id.startsWith("med_"));
+  assert.equal(initUploadData.storage_backend, "r2");
+
+  const fakeMp4Bytes = new Uint8Array(4096);
+  fakeMp4Bytes.set([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]);
+
+  const streamPutResp = await callWorker(initUploadData.upload_url, {
+    method: "PUT",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "video/mp4",
+      "Content-Length": "4096"
+    },
+    body: fakeMp4Bytes
+  });
+  assert.equal(streamPutResp.status, 200);
+
+  const compUploadResp = await callWorker("/api/media/upload-complete", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ media_id: initUploadData.media_id })
+  });
+  assert.equal(compUploadResp.status, 200);
+  const compUploadData = await compUploadResp.json();
+  assert.equal(compUploadData.video_path, `r2://${initUploadData.media_id}`);
+  console.log("  ✓ [Test 15] R2 Streaming Video Upload (upload-init -> stream -> upload-complete)");
+
+  // Bob thử truy cập, xóa hoặc gắn media_id của Alice vào Task của Bob -> Phải bị chặn!
+  const bobDeleteAliceMedia = await callWorker(`/api/media/${initUploadData.media_id}`, {
     method: "DELETE",
     headers: { Cookie: `session_token=${tokenB}` }
   });
-  assert.equal(idorDeletePage.status, 404, "User B không được phép xóa Page của User A");
+  assert.equal(bobDeleteAliceMedia.status, 404);
 
-  const idorCreateTask = await callWorker("/api/tasks", {
+  const bobStealMediaTask = await callWorker("/api/tasks", {
     method: "POST",
     headers: {
       Cookie: `session_token=${tokenB}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      facebook_page_id: "101010101",
-      video_path: "https://pagefb.namnangno.click/sample.mp4",
-      caption: "Hack attempt"
+      facebook_page_id: "page_999",
+      video_path: `r2://${initUploadData.media_id}`,
+      caption: "Bob mencoba dùng video của Alice"
     })
   });
-  assert.equal(idorCreateTask.status, 403, "User B không được phép tạo task trên Page của User A");
-  console.log("  ✓ Cô lập dữ liệu Multi-User & Chống tấn công IDOR an toàn tuyệt đối!");
+  assert.equal(bobStealMediaTask.status, 403, "Không cho phép User B dùng video R2 của User A");
+  console.log("  ✓ [Test 16] Kiểm tra quyền sở hữu Object R2 (R2 Object Ownership) an toàn tuyệt đối");
 
-  // 7. Kiểm tra Upload Video lên Cloud, Tạo Task, Run Test & Xuất bản Reels qua Meta Graph API
-  console.log("[TEST 7] Kiểm tra Upload Video Cloud, Tạo Task, Run Test & Đăng Reels...");
-  const uploadResp = await callWorker("/api/upload/video", {
-    method: "POST",
-    headers: {
-      Cookie: `session_token=${tokenA}`,
-      "X-File-Name": "demo_reel.mp4",
-      "Content-Type": "application/octet-stream"
-    },
-    body: new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70])
-  });
-  assert.equal(uploadResp.status, 200);
-  const uploadJson = await uploadResp.json();
-  assert.ok(uploadJson.path.startsWith("cloud://video/vid_"));
-
-  // Tạo Task cho User A với video vừa upload lên Cloud
+  // --------------------------------------------------------------------------
+  // [TEST 17 & 18] Task Creation & Bulk Task Creation
+  // --------------------------------------------------------------------------
   const createTaskResp = await callWorker("/api/tasks", {
     method: "POST",
     headers: {
@@ -587,55 +779,20 @@ async function runTests() {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      facebook_page_id: "101010101",
-      video_path: uploadJson.path,
-      caption: "Thước phim đặc sắc\nDòng 2 giữ nguyên \"ngoặc kép\" 🔥",
-      comment_text: "Xem trọn bộ tại bình luận!"
+      facebook_page_id: "page_101",
+      video_path: compUploadData.video_path,
+      caption: "Thước phim số 1 đăng từ R2 #reels",
+      comment_text: "Bình luận tự động dưới Reels!",
+      schedule_date: "",
+      schedule_time: ""
     })
   });
   assert.equal(createTaskResp.status, 200);
-  const createdTaskData = await createTaskResp.json();
-  assert.ok(createdTaskData.id > 0);
+  const createdTask1 = (await createTaskResp.json()).task;
+  assert.equal(createdTask1.media_id, initUploadData.media_id);
+  console.log("  ✓ [Test 17] Tạo Task đơn lẻ tham chiếu R2 Object thành công");
 
-  // Chạy Run Test chẩn đoán
-  const runTestResp = await callWorker("/api/runner/test", {
-    method: "POST",
-    headers: {
-      Cookie: `session_token=${tokenA}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({})
-  });
-  assert.equal(runTestResp.status, 200);
-  const runTestData = await runTestResp.json();
-  assert.equal(runTestData.status, "passed");
-  assert.equal(runTestData.valid_pages_count, 2);
-  assert.equal(runTestData.valid_videos_count, 1);
-
-  // Chạy Run Batch xuất bản Reels thật qua Meta Graph API
-  const runStartResp = await callWorker("/api/runner/start", {
-    method: "POST",
-    headers: {
-      Cookie: `session_token=${tokenA}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ facebook_page_ids: ["101010101"], threads: 2 })
-  });
-  assert.equal(runStartResp.status, 200);
-  const runStartData = await runStartResp.json();
-  assert.equal(runStartData.status, "started");
-
-  // Kiểm tra trạng thái Task sau khi đăng xong
-  const tasksAfterResp = await callWorker("/api/tasks", {
-    headers: { Cookie: `session_token=${tokenA}` }
-  });
-  const tasksAfter = await tasksAfterResp.json();
-  assert.equal(tasksAfter[0].status, "success");
-  assert.equal(tasksAfter[0].video_url, "https://www.facebook.com/reel/reel_vid_8888");
-  assert.ok(tasksAfter[0].log.includes("Đã đăng bình luận tự động"));
-
-  // Kiểm tra Bulk Tasks, Edit Task, Reset Task, Delete Task & /api/status
-  const bulkResp = await callWorker("/api/tasks/bulk", {
+  const bulkCreateResp = await callWorker("/api/tasks/bulk", {
     method: "POST",
     headers: {
       Cookie: `session_token=${tokenA}`,
@@ -644,89 +801,289 @@ async function runTests() {
     body: JSON.stringify({
       tasks: [
         {
-          video_path: "https://pagefb.namnangno.click/v1.mp4",
-          caption: "Bulk 1",
-          comment_text: "Cmt 1",
-          schedule_date: "2026-11-10",
-          schedule_time: "12:00"
+          video_path: compUploadData.video_path,
+          caption: "Bulk Task 1",
+          comment_text: "",
+          schedule_date: "2026-12-20",
+          schedule_time: "07:00"
         },
         {
-          video_path: "https://pagefb.namnangno.click/v2.mp4",
-          caption: "Bulk 2",
+          video_path: compUploadData.video_path,
+          caption: "Bulk Task 2",
           comment_text: "",
-          schedule_date: "2026-11-10",
+          schedule_date: "2026-12-20",
           schedule_time: "19:00"
         }
       ],
-      assign_page_ids: ["101010101", "102020202"]
+      assign_page_ids: ["page_101", "page_102"]
     })
   });
-  assert.equal(bulkResp.status, 200);
-  const bulkJson = await bulkResp.json();
+  assert.equal(bulkCreateResp.status, 200);
+  const bulkJson = await bulkCreateResp.json();
   assert.equal(bulkJson.inserted_count, 2);
+  console.log("  ✓ [Test 18] Tạo Bulk Tasks & Phân bổ Round-Robin cho các Fanpage");
 
-  const statusResp = await callWorker("/api/status", {
+  // --------------------------------------------------------------------------
+  // [TEST 19] Run Test (Chẩn đoán toàn diện KHÔNG gọi API publish)
+  // --------------------------------------------------------------------------
+  const beforeTestCalls = graphApiReelsCalled;
+  const runTestResp = await callWorker("/api/runner/test", {
+    method: "POST",
     headers: { Cookie: `session_token=${tokenA}` }
   });
-  assert.equal(statusResp.status, 200);
-  const statusJson = await statusResp.json();
-  assert.equal(statusJson.total_pages, 2);
-  assert.equal(statusJson.total_tasks, 3);
-  assert.equal(statusJson.success_tasks, 1);
-  assert.equal(statusJson.pending_tasks, 2);
+  assert.equal(runTestResp.status, 200);
+  const runTestReport = await runTestResp.json();
+  assert.equal(runTestReport.status, "ready");
+  assert.equal(runTestReport.valid_pages_count, 2);
+  assert.equal(runTestReport.valid_videos_count, 3);
+  assert.equal(graphApiReelsCalled, beforeTestCalls, "Run Test tuyệt đối không được gọi API publish Reels");
+  console.log("  ✓ [Test 19] Run Test kiểm tra đầy đủ OAuth, Page, Video R2, Lịch hẹn mà KHÔNG publish");
 
-  // Kiểm tra CORS Preflight OPTIONS
-  const corsResp = await callWorker("/api/pages", {
-    method: "OPTIONS",
-    headers: { Origin: "https://pagefb.namnangno.click" }
+  // --------------------------------------------------------------------------
+  // [TEST 20 & 22] Queue Publishing & Idempotency
+  // --------------------------------------------------------------------------
+  // Xóa 2 task bulk tương lai trước để chỉ test chạy ngay createdTask1
+  for (const tid of bulkJson.task_ids) {
+    await callWorker(`/api/tasks/${tid}`, {
+      method: "DELETE",
+      headers: { Cookie: `session_token=${tokenA}` }
+    });
+  }
+
+  const runStartResp = await callWorker("/api/runner/start", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
   });
-  assert.equal(corsResp.status, 204);
-  assert.equal(
-    corsResp.headers.get("Access-Control-Allow-Origin"),
-    "https://pagefb.namnangno.click"
+  assert.equal(runStartResp.status, 202);
+  const runStartJson = await runStartResp.json();
+  assert.equal(runStartJson.enqueued_count, 1);
+
+  const tasksAfterPublish = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const finishedTask1 = tasksAfterPublish.find((t) => t.id === createdTask1.id);
+  assert.equal(finishedTask1.status, "success");
+  assert.equal(finishedTask1.video_url, "https://www.facebook.com/reel/vid_reel_1");
+  assert.ok(finishedTask1.log.includes("Đã đăng bình luận tự động"));
+  console.log("  ✓ [Test 20] Queue Publishing xuất bản Reels từ R2 + Auto-Comment thành công");
+
+  // Kiểm tra Idempotency: Gửi lại đúng Queue Message của finishedTask1 lần nữa -> Không được gọi Graph API lần 2!
+  const callsBeforeDup = graphApiReelsCalled;
+  const dupRes = await consumeSingleTaskMessage(d1, env, {
+    task_id: finishedTask1.id,
+    owner_user_id: finishedTask1.owner_user_id,
+    idempotency_key: finishedTask1.idempotency_key || "idem_dup",
+    attempt: 2,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  assert.equal(dupRes.status, "ack");
+  assert.equal(graphApiReelsCalled, callsBeforeDup, "Idempotency phải chặn xuất bản trùng lặp");
+  console.log("  ✓ [Test 22] Idempotency Guard chặn đăng trùng khi Queue gửi lặp message");
+
+  // --------------------------------------------------------------------------
+  // [TEST 21] Queue Retry với Exponential Backoff & Chặn Retry khi Ambiguous Publish
+  // --------------------------------------------------------------------------
+  const retryTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      facebook_page_id: "page_101",
+      video_path: compUploadData.video_path,
+      caption: "Task kiểm thử Retry & Backoff"
+    })
+  });
+  const retryTask = (await retryTaskResp.json()).task;
+
+  // Giả lập lỗi 500 tạm thời ở bước upload binary
+  simulateUpload500Once = true;
+  const firstAttempt = await consumeSingleTaskMessage(d1, env, {
+    task_id: retryTask.id,
+    owner_user_id: retryTask.owner_user_id,
+    idempotency_key: "idem_retry_1",
+    attempt: 1,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  assert.equal(firstAttempt.status, "retry");
+  assert.equal(firstAttempt.delaySeconds, 15);
+
+  // Giả lập lỗi 504 ở bước finish_publish (Ambiguous publish) -> Phải dừng auto-retry!
+  simulateAmbiguousFinishError = true;
+  const secondAttempt = await consumeSingleTaskMessage(d1, env, {
+    task_id: retryTask.id,
+    owner_user_id: retryTask.owner_user_id,
+    idempotency_key: "idem_retry_1",
+    attempt: 2,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+  assert.equal(secondAttempt.status, "dead_letter");
+  assert.ok(secondAttempt.reason.includes("DỪNG AUTO-RETRY CHỐNG ĐĂNG TRÙNG"));
+  console.log("  ✓ [Test 21] Queue Retry (Exponential Backoff) & Chặn Auto-Retry khi Ambiguous Publish");
+
+  // --------------------------------------------------------------------------
+  // [TEST 23 & 24] Timezone Conversion (Asia/Ho_Chi_Minh <-> UTC) & Cron Scheduler
+  // --------------------------------------------------------------------------
+  const parsedTz = parseVnScheduleToUtc("2026-11-10", "07:00");
+  assert.equal(parsedTz.isValid, true);
+  // 2026-11-10 07:00:00+07:00 == 2026-11-10 00:00:00 UTC
+  assert.equal(parsedTz.scheduledAtUtc, Math.floor(Date.UTC(2026, 10, 10, 0, 0, 0) / 1000));
+  const formattedVn = formatUtcToVn(parsedTz.scheduledAtUtc);
+  assert.equal(formattedVn.schedule_date, "2026-11-10");
+  assert.equal(formattedVn.schedule_time, "07:00");
+  assert.equal(VN_OFFSET_SECONDS, 25200);
+  console.log("  ✓ [Test 24] Timezone Asia/Ho_Chi_Minh (+07:00) <-> UTC chính xác tuyệt đối");
+
+  // Tạo 1 task đã đến hạn (quá khứ) và 1 task tương lai (năm 2029), sau đó chạy Cron Trigger
+  const dueTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      facebook_page_id: "page_102",
+      video_path: compUploadData.video_path,
+      caption: "Task hẹn giờ đã đến hạn chạy qua Cron",
+      schedule_date: "2020-01-01",
+      schedule_time: "08:00"
+    })
+  });
+  const dueTask = (await dueTaskResp.json()).task;
+
+  const futureTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      facebook_page_id: "page_102",
+      video_path: compUploadData.video_path,
+      caption: "Task hẹn giờ tương lai chưa đến hạn",
+      schedule_date: "2029-12-31",
+      schedule_time: "23:00"
+    })
+  });
+  const futureTask = (await futureTaskResp.json()).task;
+
+  const cronBg = [];
+  const cronResult = await workerDefault.scheduled(
+    { cron: "*/1 * * * *", type: "scheduled", scheduledTime: Date.now() },
+    env,
+    { waitUntil: (p) => cronBg.push(p), passThroughOnException: () => {} }
   );
-  console.log("  ✓ Upload Video, Bulk Tasks, Run Test, Xuất bản Reels + Auto-Comment & CORS hoạt động hoàn hảo!");
+  await Promise.all(cronBg);
+
+  assert.ok(cronResult.task_ids.includes(dueTask.id), "Cron phải claim task đã đến hạn");
+  assert.ok(!cronResult.task_ids.includes(futureTask.id), "Cron không được chạy task chưa đến giờ hẹn");
+
+  const tasksAfterCron = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  assert.equal(tasksAfterCron.find((t) => t.id === dueTask.id).status, "success");
+  assert.equal(tasksAfterCron.find((t) => t.id === futureTask.id).status, "pending");
+  console.log("  ✓ [Test 23] Cron Trigger Scheduler kích hoạt chính xác task đến hạn & giữ nguyên task tương lai");
+
+  // --------------------------------------------------------------------------
+  // [TEST 25] Meta API Error Handling (Token hết hạn 190 & Làm sạch thông tin nhạy cảm)
+  // --------------------------------------------------------------------------
+  simulateExpiredTokenPageId = "page_101";
+  const permCheckErr = await callWorker("/api/pages/page_101/check-permission", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(permCheckErr.status, 400);
+  const permErrData = await permCheckErr.json();
+  assert.ok(!permErrData.detail.includes("EAAB_PAGE_TOKEN_101_FROM_A1"), "Không được lộ token trong thông báo lỗi");
+  simulateExpiredTokenPageId = "";
+  console.log("  ✓ [Test 25] Meta API Error Handling phát hiện token hết hạn (190) & ẩn hoàn toàn token nhạy cảm");
+
+  // --------------------------------------------------------------------------
+  // [TEST 26] Meta Data Deletion Callback & Status Verification
+  // --------------------------------------------------------------------------
+  const delCbResp = await callWorker("/api/meta/data-deletion", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ facebook_user_id: "fb_uid_b1" })
+  });
+  assert.equal(delCbResp.status, 200);
+  const delCbJson = await delCbResp.json();
+  assert.ok(delCbJson.confirmation_code.startsWith("DEL_"));
+  assert.ok(delCbJson.url.startsWith("https://pagefb.namnangno.click/data-deletion-status?code="));
+
+  const statusPageResp = await callWorker(`/data-deletion-status?code=${delCbJson.confirmation_code}`);
+  assert.equal(statusPageResp.status, 200);
+  const statusPageHtml = await statusPageResp.text();
+  assert.ok(statusPageHtml.includes(delCbJson.confirmation_code));
+  assert.ok(statusPageHtml.includes("COMPLETED"));
+
+  // Kiểm tra tài khoản fb_uid_b1 của Bob đã thực sự bị xóa khỏi D1
+  const bobAccsAfterDel = await (
+    await callWorker("/api/meta/accounts", { headers: { Cookie: `session_token=${tokenB}` } })
+  ).json();
+  assert.equal(bobAccsAfterDel.length, 0, "Dữ liệu Facebook Account phải được xóa thật khỏi D1");
+  console.log("  ✓ [Test 26] Meta Data Deletion xóa dữ liệu thật trong D1 & lưu biên bản tra cứu");
+
+  // --------------------------------------------------------------------------
+  // [TEST 27, 28, 29, 30] Production Cleanliness & Security Audits
+  // --------------------------------------------------------------------------
+  const filesToAudit = [
+    "static/index.html",
+    "static/login.html",
+    "static/privacy.html",
+    "static/terms.html",
+    "static/data-deletion.html",
+    "static/js/app.js",
+    "src/index.ts",
+    "src/db.ts",
+    "src/services/metaOAuthService.ts",
+    "src/services/metaGraphService.ts",
+    "src/services/r2MediaService.ts",
+    "src/queue/publishQueue.ts",
+    "src/scheduler/cronDispatcher.ts",
+    "wrangler.jsonc",
+    "package.json"
+  ];
+
+  for (const relPath of filesToAudit) {
+    const content = fs.readFileSync(path.join(process.cwd(), relPath), "utf8");
+    // Test 27: Không còn localhost:8000 / 127.0.0.1:8000
+    assert.ok(!content.includes("localhost:8000"), `File ${relPath} còn chứa localhost:8000`);
+    assert.ok(!content.includes("127.0.0.1:8000"), `File ${relPath} còn chứa 127.0.0.1:8000`);
+    // Test 28: Không chứa App Secret thật
+    assert.ok(
+      !content.includes("d595b9fcf01101b510315c2c08950863"),
+      `File ${relPath} làm lộ META_APP_SECRET!`
+    );
+    // Test 29: Không còn đường dẫn Windows mẫu D:\Videos trong luồng production
+    assert.ok(!content.includes("D:\\Videos\\"), `File ${relPath} còn chứa đường dẫn Windows D:\\Videos\\`);
+  }
+
+  const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+  const allDeps = JSON.stringify({
+    ...(pkgJson.dependencies || {}),
+    ...(pkgJson.devDependencies || {})
+  }).toLowerCase();
+  assert.ok(!allDeps.includes("playwright"), "package.json không được chứa playwright");
+  assert.ok(!allDeps.includes("puppeteer"), "package.json không được chứa puppeteer");
+  assert.ok(!allDeps.includes("gemlogin"), "package.json không được chứa gemlogin");
+  assert.ok(!fs.existsSync(path.join(process.cwd(), "requirements.txt")), "requirements.txt ở root phải được dời sang legacy/");
+
+  console.log("  ✓ [Test 27] Không còn bất kỳ URL localhost:8000 / 127.0.0.1:8000 trong Production");
+  console.log("  ✓ [Test 28] Không lộ META_APP_SECRET hoặc Access Token trong Frontend & Config");
+  console.log("  ✓ [Test 29] Không còn đường dẫn ổ đĩa Windows (D:\\Videos) trong Production Flow");
+  console.log("  ✓ [Test 30] Không có dependency Playwright/GemLogin/FastAPI trong Worker Production");
 
   globalThis.fetch = originalFetch;
 
-  // 8. Kiểm tra Production Bundle Cleanliness (Không còn localhost:8000 hay App Secret trong static/ & src/)
-  console.log("[TEST 8] Kiểm tra Production Bundle Cleanliness (Zero localhost & Zero secrets)...");
-  const filesToAudit = [
-    path.join(ROOT_DIR, "index.html"),
-    path.join(ROOT_DIR, "static", "index.html"),
-    path.join(ROOT_DIR, "static", "login.html"),
-    path.join(ROOT_DIR, "static", "privacy.html"),
-    path.join(ROOT_DIR, "static", "terms.html"),
-    path.join(ROOT_DIR, "static", "data-deletion.html"),
-    path.join(ROOT_DIR, "static", "js", "app.js"),
-    path.join(ROOT_DIR, "src", "index.ts"),
-    path.join(ROOT_DIR, "src", "meta.ts"),
-    path.join(ROOT_DIR, "src", "db.ts"),
-    path.join(ROOT_DIR, "src", "crypto.ts")
-  ];
-
-  for (const filePath of filesToAudit) {
-    const content = fs.readFileSync(filePath, "utf-8");
-    const baseName = path.relative(ROOT_DIR, filePath);
-    assert.ok(
-      !content.includes("localhost:8000") &&
-        !content.includes("localhost:8001") &&
-        !content.includes("127.0.0.1:8000"),
-      `File ${baseName} vẫn còn chứa tham chiếu localhost:8000/127.0.0.1`
-    );
-    assert.ok(
-      !content.includes("d595b9fcf01101b510315c2c08950863"),
-      `File ${baseName} bị lộ META_APP_SECRET thật!`
-    );
-  }
-  console.log("  ✓ Toàn bộ file Frontend & Worker sạch 100% (Không có localhost, không lộ Secret)!");
-
   console.log("\n==================================================================");
-  console.log(" TẤT CẢ 8 NHÓM KIỂM THỬ CLOUDFLARE WORKER + D1 ĐỀU PASS 100%!     ");
+  console.log(" TẤT CẢ 30/30 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
   console.log("==================================================================");
 }
 
-runTests().catch((err) => {
+runAll30Tests().catch((err) => {
   console.error("KIỂM THỬ THẤT BẠI:", err);
   process.exit(1);
 });

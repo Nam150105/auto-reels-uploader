@@ -609,23 +609,53 @@
 
     async function uploadVideoFileToCloud(file) {
       if (!file) return;
-      showToast(`Đang tải video "${file.name}" lên Cloudflare...`, "info");
+      showToast(`Đang tải video "${file.name}" trực tiếp lên Cloudflare R2...`, "info");
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-        const res = await fetch('/api/upload/video', {
+        // Bước 1: Khởi tạo phiên upload R2 (/api/media/upload-init)
+        const initRes = await fetch('/api/media/upload-init', {
           method: 'POST',
-          body: formData
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            size_bytes: file.size,
+            mime_type: file.type || 'video/mp4'
+          })
         });
-        const data = await res.json();
-        if (res.ok && data.path) {
-          singleTaskForm.value.video_path = data.path;
-          showToast(data.message || `Đã tải video "${file.name}" lên Cloud!`, "success");
+        const initData = await initRes.json();
+        if (!initRes.ok || !initData.media_id) {
+          showToast(initData.detail || "Không thể khởi tạo phiên upload R2.", "error");
+          return;
+        }
+
+        // Bước 2: Stream trực tiếp binary file lên R2 (/api/media/upload-stream/{media_id})
+        const streamRes = await fetch(initData.upload_url, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': file.type || 'video/mp4'
+          },
+          body: file
+        });
+        const streamData = await streamRes.json();
+        if (!streamRes.ok) {
+          showToast(streamData.detail || "Lỗi truyền dữ liệu video lên R2.", "error");
+          return;
+        }
+
+        // Bước 3: Xác nhận hoàn tất upload (/api/media/upload-complete)
+        const compRes = await fetch('/api/media/upload-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ media_id: initData.media_id })
+        });
+        const compData = await compRes.json();
+        if (compRes.ok && compData.video_path) {
+          singleTaskForm.value.video_path = compData.video_path;
+          showToast(`Đã tải video "${file.name}" (${compData.size_mb || 0} MB) lên Cloudflare R2!`, "success");
         } else {
-          showToast(data.detail || "Không thể tải video lên Cloud.", "error");
+          showToast(compData.detail || "Không thể xác nhận hoàn tất upload R2.", "error");
         }
       } catch (err) {
-        showToast("Lỗi tải video lên Cloud: " + err.message, "error");
+        showToast("Lỗi tải video lên Cloudflare R2: " + err.message, "error");
       }
     }
 
@@ -634,16 +664,6 @@
       if (fileInput) {
         fileInput.value = '';
         fileInput.click();
-        return;
-      }
-      try {
-        const res = await fetch('/api/system/browse-file', { method: 'POST' });
-        const data = await res.json();
-        if (data.path) {
-          singleTaskForm.value.video_path = data.path;
-        }
-      } catch (err) {
-        showToast("Lỗi mở hộp thoại chọn file: " + err.message, "error");
       }
     }
 
@@ -896,7 +916,7 @@
       }
     }
 
-    function openLogModal(t) {
+    async function openLogModal(t) {
       currentLogTask.value = {
         id: t.id,
         title: `Chi tiết Task #${t.id} - ${t.page_name || 'Fanpage'}`,
@@ -904,6 +924,22 @@
         video_url: t.video_url || ''
       };
       showLogModal.value = true;
+      try {
+        const res = await fetch(`/api/tasks/${t.id}/logs`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.logs) && data.logs.length > 0) {
+            const historyLines = data.logs.map(
+              l => `[${l.created_at}] [${l.level}] (${l.stage}) ${l.message}`
+            );
+            currentLogTask.value.log =
+              `${t.log || ''}\n\n--- LỊCH SỬ GIAI ĐOẠN (QUEUE & GRAPH API) ---\n` +
+              historyLines.join('\n');
+          }
+        }
+      } catch (e) {
+        // Giữ nguyên log tóm tắt nếu không lấy được chi tiết
+      }
     }
 
     // ==========================================
@@ -980,14 +1016,24 @@
 
       await loadAll();
 
-      // Polling định kỳ mỗi 3 giây để cập nhật trạng thái các task đang đăng
+      // Smart Polling tối ưu cho Cloudflare Workers Free Plan:
+      // - Chỉ poll nhanh (5 giây) khi có tác vụ đang chạy/queued
+      // - Giãn cách 30 giây khi hệ thống rảnh và tạm dừng khi ẩn tab trình duyệt
+      let lastIdlePollTime = Date.now();
       pollInterval = setInterval(async () => {
+        if (document.hidden) return;
+        const hasActiveWork = isRunning.value || systemStats.value.running_tasks > 0;
+        const now = Date.now();
+        if (!hasActiveWork && now - lastIdlePollTime < 30000) {
+          return;
+        }
+        lastIdlePollTime = now;
         await loadStats();
         if (isRunning.value || systemStats.value.running_tasks > 0) {
           await loadTasks();
           await loadPages();
         }
-      }, 3000);
+      }, 5000);
     });
 
     onUnmounted(() => {

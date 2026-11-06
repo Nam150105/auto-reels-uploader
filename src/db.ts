@@ -1,170 +1,497 @@
 /**
- * Cloudflare D1 Database Layer (Serverless SQLite)
- * Enforces strict multi-user isolation (owner_user_id) and encrypted token storage.
+ * Cloudflare D1 Data Access Layer (auto-reels-db)
+ * - Đảm bảo cô lập dữ liệu Multi-User tuyệt đối (WHERE owner_user_id = ?)
+ * - Tối ưu hóa cho Cloudflare Free Plan (Batch queries, Zero N+1 queries, Indexed lookups)
+ * - Quản lý Users, Revocable Sessions, OAuth States, Facebook Accounts, Pages, R2 Media, Tasks, Queue Leases & Data Deletion
  */
 
 import type {
   D1Database,
   UserRecord,
+  SessionRecord,
   FacebookAccountRecord,
   FacebookPageRecord,
   AdminAccountLink,
+  MediaFileRecord,
   TaskRecord
 } from "./types.ts";
-import { hashPassword, verifyPassword, randomHex } from "./crypto.ts";
+import {
+  hashPassword,
+  verifyPassword,
+  encryptToken,
+  decryptToken,
+  detectTokenVersion,
+  randomHex
+} from "./utils/crypto.ts";
+import { parseVnScheduleToUtc, nowUtcSeconds } from "./utils/timezone.ts";
+import { sanitizeSensitiveText } from "./utils/sanitize.ts";
 
 let schemaInitialized = false;
 
-export function nowIsoSql(): string {
-  return new Date().toISOString().replace("T", " ").slice(0, 19);
-}
-
-/**
- * Ensures all required tables and default admin user exist in Cloudflare D1.
- * Safe and idempotent to call on Worker startup.
- */
-export async function ensureDatabaseInitialized(db: D1Database): Promise<void> {
+export async function ensureDatabaseInitialized(
+  db: D1Database,
+  encryptionKey: string
+): Promise<void> {
   if (schemaInitialized) return;
 
   const statements = [
     `CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      salt TEXT NOT NULL,
-      full_name TEXT,
+      username TEXT NOT NULL UNIQUE,
       email TEXT,
-      role TEXT DEFAULT 'user',
-      status TEXT DEFAULT 'active',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      password_hash TEXT NOT NULL,
+      full_name TEXT,
+      role TEXT NOT NULL DEFAULT 'member',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      csrf_token TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      expires_at INTEGER NOT NULL,
+      revoked_at TEXT,
+      created_at TEXT NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS oauth_states (
       state TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      account_id TEXT,
-      action TEXT DEFAULT 'connect',
-      redirect_uri TEXT NOT NULL,
-      expires_at INTEGER NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      owner_user_id TEXT NOT NULL,
+      action_type TEXT NOT NULL DEFAULT 'connect',
+      reconnect_account_id TEXT,
+      redirect_after TEXT DEFAULT '/pages',
+      used INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS facebook_accounts (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      user_name TEXT,
-      encrypted_user_access_token TEXT NOT NULL,
-      token_expires_at TEXT,
-      scopes TEXT,
-      status TEXT DEFAULT 'connected',
       owner_user_id TEXT NOT NULL,
-      avatar_url TEXT,
-      connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(user_id, owner_user_id)
+      facebook_user_id TEXT NOT NULL,
+      facebook_user_name TEXT,
+      facebook_user_email TEXT,
+      access_token TEXT NOT NULL,
+      token_version TEXT NOT NULL DEFAULT 'v2',
+      token_type TEXT DEFAULT 'long_lived_user',
+      scopes TEXT DEFAULT '[]',
+      missing_scopes TEXT DEFAULT '[]',
+      status TEXT DEFAULT 'connected',
+      token_status TEXT DEFAULT 'valid',
+      connected_at TEXT,
+      token_expires_at TEXT,
+      last_synced_at TEXT,
+      last_error TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      UNIQUE(owner_user_id, facebook_user_id)
     )`,
     `CREATE TABLE IF NOT EXISTS facebook_pages (
       id TEXT PRIMARY KEY,
-      facebook_page_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      category TEXT,
-      avatar_url TEXT,
-      encrypted_page_access_token TEXT NOT NULL,
-      tasks TEXT,
-      can_post INTEGER DEFAULT 1,
-      connection_id TEXT,
-      is_selected INTEGER DEFAULT 1,
-      status TEXT DEFAULT 'connected',
-      token_status TEXT DEFAULT 'valid',
       owner_user_id TEXT NOT NULL,
-      last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(facebook_page_id, owner_user_id)
+      facebook_page_id TEXT NOT NULL,
+      page_name TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      avatar_url TEXT DEFAULT '',
+      page_access_token TEXT NOT NULL,
+      token_version TEXT NOT NULL DEFAULT 'v2',
+      tasks_json TEXT DEFAULT '[]',
+      can_post INTEGER DEFAULT 1,
+      is_published INTEGER DEFAULT 1,
+      is_selected INTEGER DEFAULT 1,
+      status TEXT DEFAULT 'active',
+      token_status TEXT DEFAULT 'valid',
+      connected_account_id TEXT,
+      last_synced_at TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      UNIQUE(owner_user_id, facebook_page_id)
     )`,
     `CREATE TABLE IF NOT EXISTS facebook_account_pages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      account_id TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      facebook_account_id TEXT NOT NULL,
       facebook_page_id TEXT NOT NULL,
-      owner_user_id TEXT NOT NULL,
-      encrypted_page_access_token TEXT NOT NULL,
-      tasks TEXT,
+      page_access_token TEXT,
+      token_version TEXT NOT NULL DEFAULT 'v2',
+      tasks_json TEXT DEFAULT '[]',
       can_post INTEGER DEFAULT 1,
+      is_published INTEGER DEFAULT 1,
       token_status TEXT DEFAULT 'valid',
-      synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(account_id, facebook_page_id)
+      last_synced_at TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      UNIQUE(facebook_account_id, facebook_page_id)
     )`,
-    `CREATE TABLE IF NOT EXISTS tasks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      profile_id TEXT,
-      facebook_page_id TEXT,
-      video_path TEXT NOT NULL,
-      caption TEXT,
-      link_ac TEXT,
-      comment_text TEXT,
-      schedule_date TEXT,
-      schedule_time TEXT,
-      status TEXT DEFAULT 'pending',
-      video_url TEXT,
-      meta_video_id TEXT,
-      meta_post_id TEXT,
-      publish_mode TEXT DEFAULT 'now',
-      error_message TEXT,
-      log TEXT,
-      done_time TEXT,
-      owner_user_id TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )`,
-    `CREATE TABLE IF NOT EXISTS uploaded_videos (
+    `CREATE TABLE IF NOT EXISTS media_files (
       id TEXT PRIMARY KEY,
       owner_user_id TEXT NOT NULL,
-      filename TEXT NOT NULL,
-      mime_type TEXT DEFAULT 'video/mp4',
-      file_size INTEGER NOT NULL,
-      r2_key TEXT,
-      data_base64 TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      object_key TEXT NOT NULL,
+      original_filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'video/mp4',
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      sha256_checksum TEXT,
+      upload_status TEXT NOT NULL DEFAULT 'pending',
+      r2_upload_id TEXT,
+      storage_backend TEXT NOT NULL DEFAULT 'r2',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(owner_user_id, object_key)
+    )`,
+    `CREATE TABLE IF NOT EXISTS media_blobs_fallback (
+      media_id TEXT PRIMARY KEY,
+      owner_user_id TEXT NOT NULL,
+      data_base64 TEXT NOT NULL,
+      created_at TEXT NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS profiles (
       id TEXT PRIMARY KEY,
+      owner_user_id TEXT,
       name TEXT NOT NULL,
-      user_agent TEXT,
-      screen_resolution TEXT,
+      facebook_page_name TEXT,
+      facebook_page_id TEXT,
       status TEXT DEFAULT 'idle',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      notes TEXT,
+      created_at TEXT
     )`,
-    `INSERT OR IGNORE INTO users (id, username, password_hash, salt, full_name, email, role, status, created_at)
-     VALUES (
-       'usr_admin',
-       'admin',
-       '4a3de7d8f973dcf4eacb1efb73a5492c1fa4593b187d455291ebd75204bef509',
-       '7675b4edbf9cb8b1b2a3f4afcdd2dde1',
-       'Quản Trị Viên',
-       'admin@pagefb.namnangno.click',
-       'admin',
-       'active',
-       CURRENT_TIMESTAMP
-     )`
+    `CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_user_id TEXT NOT NULL,
+      profile_id TEXT,
+      facebook_page_id TEXT,
+      media_id TEXT,
+      object_key TEXT,
+      video_path TEXT NOT NULL,
+      caption TEXT DEFAULT '',
+      comment_text TEXT DEFAULT '',
+      schedule_date TEXT DEFAULT '',
+      schedule_time TEXT DEFAULT '',
+      scheduled_at INTEGER,
+      timezone TEXT NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
+      status TEXT NOT NULL DEFAULT 'pending',
+      idempotency_key TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 3,
+      next_retry_at INTEGER,
+      locked_until INTEGER,
+      lease_owner TEXT,
+      error_code INTEGER,
+      error_subcode INTEGER,
+      retryable INTEGER NOT NULL DEFAULT 1,
+      log TEXT DEFAULT '',
+      video_id TEXT DEFAULT '',
+      post_id TEXT DEFAULT '',
+      video_url TEXT DEFAULT '',
+      created_at TEXT,
+      updated_at TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS task_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      attempt_number INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      error_code INTEGER,
+      error_subcode INTEGER,
+      error_message TEXT,
+      started_at TEXT NOT NULL,
+      finished_at TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS task_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      level TEXT NOT NULL DEFAULT 'INFO',
+      stage TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS data_deletion_requests (
+      confirmation_code TEXT PRIMARY KEY,
+      facebook_user_id TEXT,
+      owner_user_id TEXT,
+      status TEXT NOT NULL DEFAULT 'completed',
+      deleted_summary TEXT NOT NULL DEFAULT '{}',
+      requested_at TEXT NOT NULL,
+      completed_at TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS rate_limits (
+      key TEXT PRIMARY KEY,
+      window_start INTEGER NOT NULL,
+      count INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_fb_accounts_owner ON facebook_accounts(owner_user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_fb_pages_owner ON facebook_pages(owner_user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_fb_pages_page_id ON facebook_pages(facebook_page_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_fb_acc_pages_owner ON facebook_account_pages(owner_user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_media_files_owner ON media_files(owner_user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tasks_page_id ON tasks(facebook_page_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_at ON tasks(status, scheduled_at)`,
+    `CREATE VIEW IF NOT EXISTS user_page_permissions AS
+      SELECT
+        fap.id AS link_id,
+        COALESCE(fap.owner_user_id, fa.owner_user_id, fp.owner_user_id) AS owner_user_id,
+        fa.id AS account_id,
+        fa.facebook_user_id,
+        fa.facebook_user_name,
+        fa.status AS account_status,
+        fa.token_status AS account_token_status,
+        fa.token_expires_at,
+        fp.id AS internal_page_id,
+        fap.facebook_page_id,
+        fp.page_name,
+        fp.category,
+        fp.avatar_url,
+        fap.tasks_json,
+        fap.can_post,
+        fap.is_published,
+        fap.token_status AS page_token_status,
+        fap.last_synced_at
+      FROM facebook_account_pages fap
+      JOIN facebook_accounts fa ON fa.id = fap.facebook_account_id
+      LEFT JOIN facebook_pages fp
+        ON fp.facebook_page_id = fap.facebook_page_id
+        AND COALESCE(fp.owner_user_id, '') = COALESCE(fa.owner_user_id, '')`
   ];
 
-  try {
-    await db.batch(statements.map((sql) => db.prepare(sql)));
-    schemaInitialized = true;
-  } catch (err) {
-    console.error("[D1 Init Error]:", err);
+  await db.batch(statements.map((sql) => db.prepare(sql)));
+
+  // Khởi tạo tài khoản quản trị viên mặc định nếu hệ thống mới tinh
+  const existingAdmin = await db
+    .prepare("SELECT id FROM users WHERE username = ?")
+    .bind("admin")
+    .first<{ id: string }>();
+
+  if (!existingAdmin) {
+    const now = new Date().toISOString();
+    const defaultHash = await hashPassword("admin123", "d1defaultadminsalt2026");
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO users (id, username, email, password_hash, full_name, role, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
+      )
+      .bind(
+        "usr_admin",
+        "admin",
+        "admin@pagefb.namnangno.click",
+        defaultHash,
+        "System Administrator",
+        "admin",
+        now,
+        now
+      )
+      .run();
   }
+
+  schemaInitialized = true;
 }
 
 // ==========================================
-// 1. USERS & AUTHENTICATION
+// 1. USERS, SESSIONS & RATE LIMITING
 // ==========================================
 
-export async function getUserById(db: D1Database, userId: string): Promise<UserRecord | null> {
-  if (!userId) return null;
+export async function checkRateLimit(
+  db: D1Database,
+  key: string,
+  maxRequests: number,
+  windowSeconds: number
+): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds: number }> {
+  const now = nowUtcSeconds();
+  const row = await db
+    .prepare("SELECT window_start, count FROM rate_limits WHERE key = ?")
+    .bind(key)
+    .first<{ window_start: number; count: number }>();
+
+  if (!row || now - Number(row.window_start) >= windowSeconds) {
+    await db
+      .prepare(
+        `INSERT INTO rate_limits (key, window_start, count, updated_at)
+         VALUES (?, ?, 1, ?)
+         ON CONFLICT(key) DO UPDATE SET window_start = excluded.window_start, count = 1, updated_at = excluded.updated_at`
+      )
+      .bind(key, now, now)
+      .run();
+    return { allowed: true, remaining: Math.max(0, maxRequests - 1), retryAfterSeconds: 0 };
+  }
+
+  const currentCount = Number(row.count) || 0;
+  if (currentCount >= maxRequests) {
+    const retryAfter = Math.max(1, windowSeconds - (now - Number(row.window_start)));
+    return { allowed: false, remaining: 0, retryAfterSeconds: retryAfter };
+  }
+
+  await db
+    .prepare("UPDATE rate_limits SET count = count + 1, updated_at = ? WHERE key = ?")
+    .bind(now, key)
+    .run();
+
+  return {
+    allowed: true,
+    remaining: Math.max(0, maxRequests - (currentCount + 1)),
+    retryAfterSeconds: 0
+  };
+}
+
+export async function createSessionRecord(
+  db: D1Database,
+  params: {
+    sessionId: string;
+    userId: string;
+    tokenHash: string;
+    csrfToken: string;
+    ipAddress?: string | null;
+    userAgent?: string | null;
+    expiresAt: number;
+  }
+): Promise<SessionRecord> {
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `INSERT INTO sessions (id, user_id, token_hash, csrf_token, ip_address, user_agent, expires_at, revoked_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`
+    )
+    .bind(
+      params.sessionId,
+      params.userId,
+      params.tokenHash,
+      params.csrfToken,
+      params.ipAddress || null,
+      params.userAgent || null,
+      params.expiresAt,
+      now
+    )
+    .run();
+
+  return {
+    id: params.sessionId,
+    user_id: params.userId,
+    token_hash: params.tokenHash,
+    csrf_token: params.csrfToken,
+    ip_address: params.ipAddress || null,
+    user_agent: params.userAgent || null,
+    expires_at: params.expiresAt,
+    revoked_at: null,
+    created_at: now
+  };
+}
+
+export async function getValidSessionByTokenHash(
+  db: D1Database,
+  tokenHash: string
+): Promise<SessionRecord | null> {
+  const now = nowUtcSeconds();
   const row = await db
     .prepare(
-      "SELECT id, username, full_name, email, role, status, created_at FROM users WHERE id = ? LIMIT 1"
+      `SELECT id, user_id, token_hash, csrf_token, ip_address, user_agent, expires_at, revoked_at, created_at
+       FROM sessions
+       WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?`
     )
-    .bind(userId.trim())
-    .first<UserRecord>();
+    .bind(tokenHash, now)
+    .first<SessionRecord>();
   return row || null;
+}
+
+export async function revokeSessionByTokenHash(
+  db: D1Database,
+  tokenHash: string
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const res = await db
+    .prepare("UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL")
+    .bind(now, tokenHash)
+    .run();
+  return (res.meta?.changes || 0) > 0;
+}
+
+export async function revokeAllUserSessions(
+  db: D1Database,
+  userId: string
+): Promise<number> {
+  const now = new Date().toISOString();
+  const res = await db
+    .prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
+    .bind(now, userId)
+    .run();
+  return res.meta?.changes || 0;
+}
+
+export async function getUserByUsername(
+  db: D1Database,
+  username: string
+): Promise<UserRecord | null> {
+  const clean = (username || "").trim().toLowerCase();
+  if (!clean) return null;
+  return db
+    .prepare("SELECT * FROM users WHERE LOWER(username) = ?")
+    .bind(clean)
+    .first<UserRecord>();
+}
+
+export async function getUserById(
+  db: D1Database,
+  userId: string
+): Promise<UserRecord | null> {
+  if (!userId) return null;
+  const user = await db
+    .prepare(
+      "SELECT id, username, email, full_name, role, is_active, created_at, updated_at FROM users WHERE id = ?"
+    )
+    .bind(userId)
+    .first<UserRecord>();
+  if (!user || !user.is_active) return null;
+  return user;
+}
+
+export async function createUser(
+  db: D1Database,
+  username: string,
+  password: string,
+  fullName?: string | null,
+  email?: string | null,
+  role = "member"
+): Promise<{ success: boolean; message?: string; user?: UserRecord }> {
+  const cleanUser = (username || "").trim().toLowerCase();
+  if (!cleanUser || cleanUser.length < 3) {
+    return { success: false, message: "Tên đăng nhập phải có ít nhất 3 ký tự." };
+  }
+  if (!/^[a-z0-9_.\-@]+$/.test(cleanUser)) {
+    return {
+      success: false,
+      message: "Tên đăng nhập chỉ được chứa chữ cái, chữ số và các ký tự _, ., -, @."
+    };
+  }
+  if (!password || password.length < 6) {
+    return { success: false, message: "Mật khẩu phải có ít nhất 6 ký tự." };
+  }
+
+  const existing = await getUserByUsername(db, cleanUser);
+  if (existing) {
+    return { success: false, message: "Tên đăng nhập này đã được sử dụng." };
+  }
+
+  const userId = `usr_${randomHex(6)}`;
+  const now = new Date().toISOString();
+  const pwdHash = await hashPassword(password);
+  const displayName = (fullName || "").trim() || cleanUser;
+  const cleanEmail = (email || "").trim() || null;
+
+  await db
+    .prepare(
+      `INSERT INTO users (id, username, email, password_hash, full_name, role, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
+    )
+    .bind(userId, cleanUser, cleanEmail, pwdHash, displayName, role, now, now)
+    .run();
+
+  const user = await getUserById(db, userId);
+  return { success: true, user: user || undefined };
 }
 
 export async function verifyUserCredentials(
@@ -172,360 +499,377 @@ export async function verifyUserCredentials(
   username: string,
   password: string
 ): Promise<UserRecord | null> {
-  const cleanUser = (username || "").trim().toLowerCase();
-  if (!cleanUser || !password) return null;
-
-  const row = await db
-    .prepare(
-      "SELECT id, username, password_hash, salt, full_name, email, role, status, created_at FROM users WHERE username = ? LIMIT 1"
-    )
-    .bind(cleanUser)
-    .first<{
-      id: string;
-      username: string;
-      password_hash: string;
-      salt: string;
-      full_name: string;
-      email: string;
-      role: string;
-      status: string;
-      created_at: string;
-    }>();
-
-  if (!row || row.status !== "active") return null;
-
-  const valid = await verifyPassword(password, row.salt, row.password_hash);
-  if (!valid) return null;
-
-  return {
-    id: row.id,
-    username: row.username,
-    full_name: row.full_name,
-    email: row.email,
-    role: row.role,
-    status: row.status,
-    created_at: row.created_at
-  };
+  const row = await getUserByUsername(db, username);
+  if (!row || !row.is_active || !row.password_hash) {
+    return null;
+  }
+  const ok = await verifyPassword(password, row.password_hash);
+  if (!ok) return null;
+  delete row.password_hash;
+  return row;
 }
 
-export async function createUser(
+// ==========================================
+// 2. OAUTH CSRF STATE (D1 PERSISTENCE)
+// ==========================================
+
+export async function createOAuthState(
   db: D1Database,
-  params: {
-    username: string;
-    password: string;
-    fullName?: string;
-    email?: string;
-    role?: string;
-  }
-): Promise<UserRecord> {
-  const cleanUser = (params.username || "").trim().toLowerCase();
-  if (!cleanUser || cleanUser.length < 3) {
-    throw new Error("Tên đăng nhập phải có ít nhất 3 ký tự.");
-  }
-  if (!params.password || params.password.length < 4) {
-    throw new Error("Mật khẩu phải có ít nhất 4 ký tự.");
-  }
-
-  const existing = await db
-    .prepare("SELECT id FROM users WHERE username = ? LIMIT 1")
-    .bind(cleanUser)
-    .first();
-  if (existing) {
-    throw new Error(`Tên đăng nhập '${cleanUser}' đã tồn tại.`);
-  }
-
-  const { hash, salt } = await hashPassword(params.password);
-  const userId = `usr_${randomHex(4)}`;
-  const fullName = (params.fullName || cleanUser).trim();
-  const email = (params.email || "").trim();
-  const role = params.role || "user";
-  const now = nowIsoSql();
+  state: string,
+  ownerUserId: string,
+  reconnectAccountId: string | null = null,
+  actionType = "connect",
+  redirectAfter = "/pages",
+  ttlSeconds = 600
+): Promise<void> {
+  const now = nowUtcSeconds();
+  const expiresAt = now + ttlSeconds;
 
   await db
-    .prepare(
-      `INSERT INTO users (id, username, password_hash, salt, full_name, email, role, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`
-    )
-    .bind(userId, cleanUser, hash, salt, fullName, email, role, now)
+    .prepare("DELETE FROM oauth_states WHERE expires_at < ? OR used = 1")
+    .bind(now)
     .run();
 
-  const created = await getUserById(db, userId);
-  if (!created) {
-    throw new Error("Không thể khởi tạo tài khoản người dùng.");
-  }
-  return created;
-}
-
-// ==========================================
-// 2. OAUTH CSRF STATE MANAGEMENT (D1)
-// ==========================================
-
-export async function saveOAuthState(
-  db: D1Database,
-  params: {
-    state: string;
-    userId: string;
-    accountId?: string | null;
-    action?: string;
-    redirectUri: string;
-    expiresInSeconds?: number;
-  }
-): Promise<void> {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const expiresAt = nowSec + (params.expiresInSeconds || 900);
-
-  // Clean up expired states opportunistically
-  await db.prepare("DELETE FROM oauth_states WHERE expires_at < ?").bind(nowSec).run();
-
   await db
     .prepare(
-      `INSERT INTO oauth_states (state, user_id, account_id, action, redirect_uri, expires_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO oauth_states (state, owner_user_id, action_type, reconnect_account_id, redirect_after, used, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?)`
     )
     .bind(
-      params.state,
-      params.userId,
-      params.accountId || null,
-      params.action || "connect",
-      params.redirectUri,
-      expiresAt,
-      nowIsoSql()
+      state,
+      ownerUserId,
+      actionType,
+      reconnectAccountId,
+      redirectAfter,
+      now,
+      expiresAt
     )
     .run();
-}
-
-export interface OAuthStateRecord {
-  state: string;
-  user_id: string;
-  account_id: string | null;
-  action: string;
-  redirect_uri: string;
-  expires_at: number;
 }
 
 export async function consumeOAuthState(
   db: D1Database,
   state: string
-): Promise<OAuthStateRecord | null> {
-  if (!state) return null;
+): Promise<{
+  valid: boolean;
+  owner_user_id?: string;
+  action_type?: string;
+  reconnect_account_id?: string | null;
+  redirect_after?: string;
+  message?: string;
+}> {
+  if (!state) {
+    return {
+      valid: false,
+      message: "Thiếu tham số CSRF state trong phản hồi từ Facebook."
+    };
+  }
+
   const row = await db
     .prepare(
-      "SELECT state, user_id, account_id, action, redirect_uri, expires_at FROM oauth_states WHERE state = ? LIMIT 1"
+      "SELECT state, owner_user_id, action_type, reconnect_account_id, redirect_after, used, expires_at FROM oauth_states WHERE state = ?"
     )
-    .bind(state.trim())
-    .first<OAuthStateRecord>();
+    .bind(state)
+    .first<{
+      state: string;
+      owner_user_id: string;
+      action_type: string;
+      reconnect_account_id: string | null;
+      redirect_after: string;
+      used: number;
+      expires_at: number;
+    }>();
 
-  if (!row) return null;
-
-  // One-time consumption: delete immediately to prevent replay attacks
-  await db.prepare("DELETE FROM oauth_states WHERE state = ?").bind(state.trim()).run();
-
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (nowSec > Number(row.expires_at)) {
-    return null;
+  if (!row) {
+    return {
+      valid: false,
+      message: "Mã xác thực bảo mật (CSRF State) không tồn tại hoặc đã bị thu hồi."
+    };
   }
-  return row;
+
+  const now = nowUtcSeconds();
+  if (row.used === 1) {
+    return {
+      valid: false,
+      message: "Phiên xác thực OAuth này đã được sử dụng trước đó. Vui lòng thử lại."
+    };
+  }
+
+  // Atomic one-time state consumption
+  const updateRes = await db
+    .prepare("UPDATE oauth_states SET used = 1 WHERE state = ? AND used = 0")
+    .bind(state)
+    .run();
+
+  if ((updateRes.meta?.changes || 0) === 0) {
+    return {
+      valid: false,
+      message: "Phiên xác thực OAuth đã được xử lý ở một yêu cầu khác."
+    };
+  }
+
+  if (now > row.expires_at) {
+    return {
+      valid: false,
+      message: "Phiên kết nối OAuth đã hết hạn (quá 10 phút). Vui lòng thực hiện lại."
+    };
+  }
+
+  return {
+    valid: true,
+    owner_user_id: row.owner_user_id,
+    action_type: row.action_type || "connect",
+    reconnect_account_id: row.reconnect_account_id,
+    redirect_after: row.redirect_after || "/pages"
+  };
 }
 
 // ==========================================
-// 3. FACEBOOK ADMIN ACCOUNTS (MULTI-ACCOUNT)
+// 3. FACEBOOK ADMIN ACCOUNTS (MULTI-ADMIN)
 // ==========================================
+
+function safeJsonParseArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
 
 export async function saveFacebookAccount(
   db: D1Database,
+  encryptionKey: string,
   params: {
-    userId: string;
-    userName: string;
-    encryptedToken: string;
-    tokenExpiresAt: string;
-    scopes: string;
+    facebookUserId: string;
+    facebookUserName: string;
+    accessToken: string;
+    tokenType?: string;
+    scopes?: string[];
+    missingScopes?: string[];
+    tokenExpiresAt?: string | null;
+    status?: string;
+    tokenStatus?: string;
+    lastError?: string | null;
     accountId?: string | null;
     ownerUserId: string;
-    avatarUrl?: string | null;
+    facebookUserEmail?: string | null;
   }
-): Promise<FacebookAccountRecord> {
-  const cleanFbUid = String(params.userId).trim();
-  const cleanOwnerUid = String(params.ownerUserId).trim();
-  const now = nowIsoSql();
+): Promise<string> {
+  const now = new Date().toISOString();
+  const encryptedToken = await encryptToken(params.accessToken, encryptionKey, "v2");
+  const tokenVersion = detectTokenVersion(encryptedToken);
+  const scopesJson = JSON.stringify(params.scopes || []);
+  const missingJson = JSON.stringify(params.missingScopes || []);
+  const status = params.status || "connected";
+  const tokenStatus = params.tokenStatus || (status === "connected" ? "valid" : status);
 
   const existing = await db
     .prepare(
-      "SELECT id FROM facebook_accounts WHERE user_id = ? AND owner_user_id = ? LIMIT 1"
+      "SELECT id FROM facebook_accounts WHERE facebook_user_id = ? AND owner_user_id = ?"
     )
-    .bind(cleanFbUid, cleanOwnerUid)
+    .bind(params.facebookUserId, params.ownerUserId)
     .first<{ id: string }>();
 
-  let accId: string;
+  let targetId = params.accountId || existing?.id || `fb_acc_${params.facebookUserId}_${randomHex(3)}`;
+  if (existing?.id) {
+    targetId = existing.id;
+  }
+
   if (existing) {
-    accId = existing.id;
     await db
       .prepare(
-        `UPDATE facebook_accounts SET
-          user_name = COALESCE(?, user_name),
-          encrypted_user_access_token = ?,
-          token_expires_at = ?,
-          scopes = COALESCE(?, scopes),
-          avatar_url = COALESCE(?, avatar_url),
-          status = 'connected',
-          connected_at = ?,
-          last_synced_at = ?
-        WHERE id = ? AND owner_user_id = ?`
+        `UPDATE facebook_accounts
+         SET facebook_user_name = ?,
+             facebook_user_email = COALESCE(?, facebook_user_email),
+             access_token = ?,
+             token_version = ?,
+             token_type = ?,
+             scopes = ?,
+             missing_scopes = ?,
+             status = ?,
+             token_status = ?,
+             connected_at = ?,
+             token_expires_at = ?,
+             last_error = ?,
+             updated_at = ?
+         WHERE id = ? AND owner_user_id = ?`
       )
       .bind(
-        params.userName,
-        params.encryptedToken,
-        params.tokenExpiresAt,
-        params.scopes,
-        params.avatarUrl || null,
+        params.facebookUserName,
+        params.facebookUserEmail || null,
+        encryptedToken,
+        tokenVersion,
+        params.tokenType || "long_lived_user",
+        scopesJson,
+        missingJson,
+        status,
+        tokenStatus,
         now,
+        params.tokenExpiresAt || null,
+        params.lastError ? sanitizeSensitiveText(params.lastError) : null,
         now,
-        accId,
-        cleanOwnerUid
+        targetId,
+        params.ownerUserId
       )
       .run();
   } else {
-    accId = params.accountId || `acc_${randomHex(4)}`;
     await db
       .prepare(
         `INSERT INTO facebook_accounts (
-          id, user_id, user_name, encrypted_user_access_token, token_expires_at,
-          scopes, status, owner_user_id, avatar_url, connected_at, last_synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'connected', ?, ?, ?, ?)`
+           id, owner_user_id, facebook_user_id, facebook_user_name, facebook_user_email,
+           access_token, token_version, token_type, scopes, missing_scopes, status, token_status,
+           connected_at, token_expires_at, last_error, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
-        accId,
-        cleanFbUid,
-        params.userName,
-        params.encryptedToken,
-        params.tokenExpiresAt,
-        params.scopes,
-        cleanOwnerUid,
-        params.avatarUrl || null,
+        targetId,
+        params.ownerUserId,
+        params.facebookUserId,
+        params.facebookUserName,
+        params.facebookUserEmail || null,
+        encryptedToken,
+        tokenVersion,
+        params.tokenType || "long_lived_user",
+        scopesJson,
+        missingJson,
+        status,
+        tokenStatus,
+        now,
+        params.tokenExpiresAt || null,
+        params.lastError ? sanitizeSensitiveText(params.lastError) : null,
         now,
         now
       )
       .run();
   }
 
-  const saved = await getFacebookAccountById(db, accId, cleanOwnerUid, false);
-  if (!saved) {
-    throw new Error("Không thể lưu tài khoản Facebook Admin vào D1.");
-  }
-  return saved;
+  return targetId;
 }
 
 export async function getFacebookAccounts(
   db: D1Database,
-  options: {
-    status?: string | null;
-    ownerUserId: string;
-    includeEncryptedToken?: boolean;
-  }
+  encryptionKey: string,
+  includeToken = false,
+  ownerUserId: string
 ): Promise<FacebookAccountRecord[]> {
-  let query = `
-    SELECT
-      fa.id,
-      fa.user_id,
-      fa.user_name,
-      ${options.includeEncryptedToken ? "fa.encrypted_user_access_token," : ""}
-      fa.token_expires_at,
-      fa.scopes,
-      fa.status,
-      fa.owner_user_id,
-      fa.avatar_url,
-      fa.connected_at,
-      fa.last_synced_at,
-      COUNT(fap.id) AS managed_pages_count,
-      COUNT(CASE WHEN fap.can_post = 1 AND fap.token_status = 'valid' THEN 1 END) AS postable_pages_count
-    FROM facebook_accounts fa
-    LEFT JOIN facebook_account_pages fap ON fa.id = fap.account_id
-    WHERE fa.owner_user_id = ?
-  `;
-  const binds: unknown[] = [options.ownerUserId];
-
-  if (options.status) {
-    query += " AND fa.status = ?";
-    binds.push(options.status);
-  }
-
-  query += " GROUP BY fa.id ORDER BY fa.connected_at DESC";
-
-  const res = await db
-    .prepare(query)
-    .bind(...binds)
+  const { results: rows } = await db
+    .prepare(
+      `SELECT fa.*,
+              (SELECT COUNT(*) FROM facebook_account_pages fap WHERE fap.facebook_account_id = fa.id) AS page_count
+       FROM facebook_accounts fa
+       WHERE fa.owner_user_id = ?
+       ORDER BY fa.connected_at DESC, fa.created_at DESC`
+    )
+    .bind(ownerUserId)
     .all<Record<string, unknown>>();
 
-  const nowMs = Date.now();
-  return (res.results || []).map((r) => {
-    const rawScopes = typeof r.scopes === "string" ? r.scopes : "";
-    const scopes = rawScopes
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+  const out: FacebookAccountRecord[] = [];
+
+  for (const r of rows) {
+    const scopes = safeJsonParseArray(r.scopes as string);
+    const missingScopes = safeJsonParseArray(r.missing_scopes as string);
 
     let daysRemaining: number | null = null;
-    let status = String(r.status || "connected");
-    const expStr = r.token_expires_at ? String(r.token_expires_at) : null;
+    let isExpired = false;
+    const expStr = r.token_expires_at as string | null;
     if (expStr) {
-      const parsedMs = Date.parse(expStr.replace(" ", "T") + "Z");
-      if (!isNaN(parsedMs)) {
-        daysRemaining = Math.floor((parsedMs - nowMs) / 86400000);
-        if (daysRemaining < 0 && status === "connected") {
-          status = "expired";
-        }
+      const expDate = new Date(expStr);
+      if (!isNaN(expDate.getTime())) {
+        const diffMs = expDate.getTime() - Date.now();
+        daysRemaining = Math.max(0, Math.floor(diffMs / 86400000));
+        if (diffMs < 0) isExpired = true;
       }
     }
 
-    const record: FacebookAccountRecord = {
+    let status = (r.status as string) || "connected";
+    let tokenStatus = (r.token_status as string) || "valid";
+    if (isExpired && status === "connected") {
+      status = "expired";
+      tokenStatus = "expired";
+    }
+
+    const item: FacebookAccountRecord = {
       id: String(r.id),
-      user_id: String(r.user_id),
-      user_name: String(r.user_name || "Facebook Admin"),
-      token_expires_at: expStr,
+      owner_user_id: (r.owner_user_id as string) || null,
+      facebook_user_id: String(r.facebook_user_id),
+      facebook_user_name: (r.facebook_user_name as string) || null,
+      facebook_user_email: (r.facebook_user_email as string) || null,
+      token_version: (r.token_version as string) || "v2",
+      token_type: (r.token_type as string) || "long_lived_user",
       scopes,
+      missing_scopes: missingScopes,
       status,
-      owner_user_id: String(r.owner_user_id),
-      avatar_url: r.avatar_url ? String(r.avatar_url) : null,
-      connected_at: String(r.connected_at || ""),
-      last_synced_at: String(r.last_synced_at || ""),
-      managed_pages_count: Number(r.managed_pages_count || 0),
-      postable_pages_count: Number(r.postable_pages_count || 0),
-      days_remaining: daysRemaining
+      token_status: tokenStatus,
+      connected_at: (r.connected_at as string) || null,
+      token_expires_at: expStr,
+      last_synced_at: (r.last_synced_at as string) || null,
+      last_error: (r.last_error as string) || null,
+      created_at: (r.created_at as string) || null,
+      updated_at: (r.updated_at as string) || null,
+      page_count: Number(r.page_count || 0),
+      days_remaining: daysRemaining,
+      is_expired: isExpired
     };
 
-    if (options.includeEncryptedToken && r.encrypted_user_access_token) {
-      record.encrypted_user_access_token = String(r.encrypted_user_access_token);
+    if (includeToken) {
+      item.access_token = await decryptToken(String(r.access_token || ""), encryptionKey);
     }
-    return record;
-  });
+
+    out.push(item);
+  }
+
+  return out;
 }
 
 export async function getFacebookAccountById(
   db: D1Database,
+  encryptionKey: string,
   accountId: string,
-  ownerUserId: string,
-  includeEncryptedToken = false
+  includeToken = false,
+  ownerUserId: string
 ): Promise<FacebookAccountRecord | null> {
-  const cleanId = (accountId || "").trim();
-  if (!cleanId) return null;
-
-  const all = await getFacebookAccounts(db, {
-    ownerUserId,
-    includeEncryptedToken
-  });
-  return all.find((a) => a.id === cleanId || a.user_id === cleanId) || null;
+  const accounts = await getFacebookAccounts(db, encryptionKey, includeToken, ownerUserId);
+  return accounts.find((a) => a.id === accountId) || null;
 }
 
-export async function updateAccountStatus(
+export async function updateFacebookAccountStatus(
   db: D1Database,
   accountId: string,
-  ownerUserId: string,
-  status: string
-): Promise<boolean> {
-  const res = await db
-    .prepare("UPDATE facebook_accounts SET status = ? WHERE id = ? AND owner_user_id = ?")
-    .bind(status, accountId.trim(), ownerUserId)
+  status: string,
+  lastError: string | null = null,
+  lastSyncedAt: string | null = null,
+  tokenStatus: string | null = null
+): Promise<void> {
+  const now = new Date().toISOString();
+  const resolvedTokenStatus =
+    tokenStatus ||
+    (status === "connected"
+      ? "valid"
+      : status === "expired" || status === "invalid"
+      ? "expired"
+      : status);
+
+  await db
+    .prepare(
+      `UPDATE facebook_accounts
+       SET status = ?,
+           token_status = ?,
+           last_error = ?,
+           last_synced_at = COALESCE(?, last_synced_at),
+           updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(
+      status,
+      resolvedTokenStatus,
+      lastError ? sanitizeSensitiveText(lastError) : null,
+      lastSyncedAt,
+      now,
+      accountId
+    )
     .run();
-  return (res.meta?.changes || 0) > 0;
 }
 
 export async function disconnectFacebookAccount(
@@ -533,453 +877,440 @@ export async function disconnectFacebookAccount(
   accountId: string,
   ownerUserId: string
 ): Promise<boolean> {
-  const cleanAid = accountId.trim();
-  const acc = await getFacebookAccountById(db, cleanAid, ownerUserId, false);
+  const acc = await db
+    .prepare("SELECT id, owner_user_id FROM facebook_accounts WHERE id = ? AND owner_user_id = ?")
+    .bind(accountId, ownerUserId)
+    .first<{ id: string; owner_user_id: string }>();
+
   if (!acc) return false;
 
-  const pageRows = await db
-    .prepare(
-      "SELECT facebook_page_id FROM facebook_account_pages WHERE account_id = ? AND owner_user_id = ?"
-    )
-    .bind(acc.id, ownerUserId)
-    .all<{ facebook_page_id: string }>();
-
-  const affectedPageIds = (pageRows.results || []).map((r) => r.facebook_page_id);
-
-  await db
-    .prepare("UPDATE facebook_accounts SET status = 'disconnected' WHERE id = ? AND owner_user_id = ?")
-    .bind(acc.id, ownerUserId)
-    .run();
-
-  await db
-    .prepare(
-      "UPDATE facebook_account_pages SET token_status = 'invalid' WHERE account_id = ? AND owner_user_id = ?"
-    )
-    .bind(acc.id, ownerUserId)
-    .run();
-
-  for (const pid of affectedPageIds) {
-    const otherActive = await db
+  const now = new Date().toISOString();
+  await db.batch([
+    db
       .prepare(
-        `SELECT fap.encrypted_page_access_token, fap.tasks, fap.can_post
-         FROM facebook_account_pages fap
-         JOIN facebook_accounts fa ON fap.account_id = fa.id
-         WHERE fap.facebook_page_id = ?
-           AND fap.owner_user_id = ?
-           AND fa.status = 'connected'
-           AND fap.token_status = 'valid'
-         ORDER BY fap.can_post DESC, fap.synced_at DESC
-         LIMIT 1`
+        `UPDATE facebook_accounts
+         SET status = 'disconnected', token_status = 'revoked', access_token = '', updated_at = ?
+         WHERE id = ? AND owner_user_id = ?`
       )
-      .bind(pid, ownerUserId)
-      .first<{ encrypted_page_access_token: string; tasks: string; can_post: number }>();
+      .bind(now, accountId, ownerUserId),
+    db
+      .prepare("DELETE FROM facebook_account_pages WHERE facebook_account_id = ? AND owner_user_id = ?")
+      .bind(accountId, ownerUserId)
+  ]);
 
-    if (otherActive) {
-      await db
-        .prepare(
-          `UPDATE facebook_pages SET
-            encrypted_page_access_token = ?,
-            tasks = ?,
-            can_post = ?,
-            status = 'connected'
-          WHERE facebook_page_id = ? AND owner_user_id = ?`
-        )
-        .bind(
-          otherActive.encrypted_page_access_token,
-          otherActive.tasks,
-          otherActive.can_post,
-          pid,
-          ownerUserId
-        )
-        .run();
-    } else {
-      await db
-        .prepare(
-          "UPDATE facebook_pages SET can_post = 0, status = 'disconnected' WHERE facebook_page_id = ? AND owner_user_id = ?"
-        )
-        .bind(pid, ownerUserId)
-        .run();
-    }
-  }
-
+  await reconcileOrphanPages(db, encryptionKeyFallback, ownerUserId);
   return true;
 }
+
+const encryptionKeyFallback = "";
 
 export async function deleteFacebookAccountLocal(
   db: D1Database,
   accountId: string,
   ownerUserId: string
 ): Promise<boolean> {
-  const acc = await getFacebookAccountById(db, accountId, ownerUserId, false);
+  const acc = await db
+    .prepare("SELECT id FROM facebook_accounts WHERE id = ? AND owner_user_id = ?")
+    .bind(accountId, ownerUserId)
+    .first<{ id: string }>();
+
   if (!acc) return false;
 
-  await disconnectFacebookAccount(db, acc.id, ownerUserId);
-  await db
-    .prepare("DELETE FROM facebook_account_pages WHERE account_id = ? AND owner_user_id = ?")
-    .bind(acc.id, ownerUserId)
-    .run();
-  await db
-    .prepare("DELETE FROM facebook_accounts WHERE id = ? AND owner_user_id = ?")
-    .bind(acc.id, ownerUserId)
-    .run();
+  await db.batch([
+    db
+      .prepare("DELETE FROM facebook_account_pages WHERE facebook_account_id = ? AND owner_user_id = ?")
+      .bind(accountId, ownerUserId),
+    db
+      .prepare("DELETE FROM facebook_accounts WHERE id = ? AND owner_user_id = ?")
+      .bind(accountId, ownerUserId)
+  ]);
+
+  await reconcileOrphanPages(db, encryptionKeyFallback, ownerUserId);
   return true;
 }
 
 export async function disconnectAllUserAccounts(
   db: D1Database,
   ownerUserId: string
-): Promise<number> {
-  const accounts = await getFacebookAccounts(db, { ownerUserId });
-  let count = 0;
-  for (const acc of accounts) {
-    if (await disconnectFacebookAccount(db, acc.id, ownerUserId)) {
-      count++;
-    }
-  }
-  return count;
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE facebook_accounts
+         SET status = 'disconnected', token_status = 'revoked', access_token = '', updated_at = ?
+         WHERE owner_user_id = ?`
+      )
+      .bind(now, ownerUserId),
+    db
+      .prepare("DELETE FROM facebook_account_pages WHERE owner_user_id = ?")
+      .bind(ownerUserId),
+    db
+      .prepare(
+        `UPDATE facebook_pages
+         SET status = 'disconnected', token_status = 'revoked', page_access_token = '', updated_at = ?
+         WHERE owner_user_id = ?`
+      )
+      .bind(now, ownerUserId)
+  ]);
 }
 
-// ==========================================
-// 4. FACEBOOK PAGES & USER PERMISSIONS
-// ==========================================
-
-export async function upsertFacebookPageAndRelation(
+async function reconcileOrphanPages(
   db: D1Database,
-  params: {
-    accountId: string;
-    ownerUserId: string;
-    facebookPageId: string;
-    name: string;
-    encryptedPageAccessToken: string;
-    tasksJson: string;
-    canPost: number;
-    category?: string | null;
-    avatarUrl?: string | null;
-  }
+  _encryptionKey: string,
+  ownerUserId: string
 ): Promise<void> {
-  const cleanFbId = params.facebookPageId.trim();
-  const cleanAid = params.accountId.trim();
-  const cleanOwner = params.ownerUserId.trim();
-  const now = nowIsoSql();
-
-  const existingPage = await db
+  const now = new Date().toISOString();
+  const { results: pages } = await db
     .prepare(
-      "SELECT id, is_selected, can_post FROM facebook_pages WHERE facebook_page_id = ? AND owner_user_id = ? LIMIT 1"
+      "SELECT id, facebook_page_id, owner_user_id FROM facebook_pages WHERE owner_user_id = ?"
     )
-    .bind(cleanFbId, cleanOwner)
-    .first<{ id: string; is_selected: number; can_post: number }>();
+    .bind(ownerUserId)
+    .all<{ id: string; facebook_page_id: string; owner_user_id: string }>();
 
-  if (existingPage) {
-    const shouldUpdateToken = params.canPost === 1 || Number(existingPage.can_post) === 0;
-    if (shouldUpdateToken) {
+  for (const p of pages) {
+    const activeLink = await db
+      .prepare(
+        `SELECT fap.*
+         FROM facebook_account_pages fap
+         JOIN facebook_accounts fa ON fa.id = fap.facebook_account_id
+         WHERE fap.facebook_page_id = ?
+           AND fa.owner_user_id = ?
+           AND fa.status = 'connected'
+           AND fap.page_access_token != ''
+         ORDER BY fap.can_post DESC, fap.last_synced_at DESC
+         LIMIT 1`
+      )
+      .bind(p.facebook_page_id, ownerUserId)
+      .first<Record<string, unknown>>();
+
+    if (activeLink) {
       await db
         .prepare(
-          `UPDATE facebook_pages SET
-            name = ?,
-            category = COALESCE(?, category),
-            avatar_url = COALESCE(?, avatar_url),
-            encrypted_page_access_token = ?,
-            tasks = ?,
-            can_post = ?,
-            status = 'connected',
-            token_status = 'valid',
-            last_synced_at = ?
-          WHERE facebook_page_id = ? AND owner_user_id = ?`
+          `UPDATE facebook_pages
+           SET page_access_token = ?,
+               tasks_json = ?,
+               can_post = ?,
+               is_published = ?,
+               status = 'active',
+               token_status = 'valid',
+               connected_account_id = ?,
+               updated_at = ?
+           WHERE id = ?`
         )
         .bind(
-          params.name.trim(),
-          params.category || null,
-          params.avatarUrl || null,
-          params.encryptedPageAccessToken,
-          params.tasksJson,
-          params.canPost,
+          String(activeLink.page_access_token || ""),
+          String(activeLink.tasks_json || "[]"),
+          Number(activeLink.can_post ?? 1),
+          Number(activeLink.is_published ?? 1),
+          String(activeLink.facebook_account_id),
           now,
-          cleanFbId,
-          cleanOwner
+          p.id
         )
         .run();
     } else {
       await db
         .prepare(
-          `UPDATE facebook_pages SET
-            name = ?,
-            category = COALESCE(?, category),
-            avatar_url = COALESCE(?, avatar_url),
-            status = 'connected',
-            last_synced_at = ?
-          WHERE facebook_page_id = ? AND owner_user_id = ?`
+          `UPDATE facebook_pages
+           SET status = 'disconnected',
+               token_status = 'revoked',
+               page_access_token = '',
+               updated_at = ?
+           WHERE id = ?`
         )
-        .bind(
-          params.name.trim(),
-          params.category || null,
-          params.avatarUrl || null,
-          now,
-          cleanFbId,
-          cleanOwner
-        )
+        .bind(now, p.id)
         .run();
     }
+  }
+}
+
+// ==========================================
+// 4. FACEBOOK PAGES & DEDUPLICATION (ZERO N+1)
+// ==========================================
+
+export async function upsertFacebookPage(
+  db: D1Database,
+  encryptionKey: string,
+  params: {
+    facebookPageId: string;
+    pageName: string;
+    category?: string;
+    avatarUrl?: string;
+    pageAccessToken: string;
+    tasks?: string[];
+    canPost?: boolean;
+    isPublished?: boolean;
+    connectedAccountId: string;
+    tokenStatus?: string;
+    ownerUserId: string;
+  }
+): Promise<string> {
+  const now = new Date().toISOString();
+  const tasksJson = JSON.stringify(params.tasks || []);
+  const encryptedToken = await encryptToken(params.pageAccessToken, encryptionKey, "v2");
+  const tokenVersion = detectTokenVersion(encryptedToken);
+  const canPostInt = params.canPost !== false ? 1 : 0;
+  const isPublishedInt = params.isPublished !== false ? 1 : 0;
+  const tokenStatus = params.tokenStatus || (encryptedToken ? "valid" : "missing");
+
+  await db
+    .prepare(
+      `INSERT INTO facebook_account_pages (
+         owner_user_id, facebook_account_id, facebook_page_id, page_access_token, token_version,
+         tasks_json, can_post, is_published, token_status, last_synced_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(facebook_account_id, facebook_page_id) DO UPDATE SET
+         owner_user_id = excluded.owner_user_id,
+         page_access_token = excluded.page_access_token,
+         token_version = excluded.token_version,
+         tasks_json = excluded.tasks_json,
+         can_post = excluded.can_post,
+         is_published = excluded.is_published,
+         token_status = excluded.token_status,
+         last_synced_at = excluded.last_synced_at,
+         updated_at = excluded.updated_at`
+    )
+    .bind(
+      params.ownerUserId,
+      params.connectedAccountId,
+      params.facebookPageId,
+      encryptedToken,
+      tokenVersion,
+      tasksJson,
+      canPostInt,
+      isPublishedInt,
+      tokenStatus,
+      now,
+      now,
+      now
+    )
+    .run();
+
+  const existing = await db
+    .prepare(
+      "SELECT id, can_post FROM facebook_pages WHERE facebook_page_id = ? AND owner_user_id = ?"
+    )
+    .bind(params.facebookPageId, params.ownerUserId)
+    .first<{ id: string; can_post: number }>();
+
+  const internalId = existing?.id || `page_${params.facebookPageId}_${randomHex(3)}`;
+
+  if (existing) {
+    await db
+      .prepare(
+        `UPDATE facebook_pages
+         SET page_name = ?,
+             category = ?,
+             avatar_url = COALESCE(NULLIF(?, ''), avatar_url),
+             page_access_token = CASE WHEN ? = 1 OR can_post = 0 THEN ? ELSE page_access_token END,
+             token_version = ?,
+             tasks_json = CASE WHEN ? = 1 OR can_post = 0 THEN ? ELSE tasks_json END,
+             can_post = CASE WHEN ? = 1 THEN 1 ELSE can_post END,
+             is_published = ?,
+             status = 'active',
+             token_status = ?,
+             connected_account_id = CASE WHEN ? = 1 OR connected_account_id IS NULL THEN ? ELSE connected_account_id END,
+             last_synced_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(
+        params.pageName,
+        params.category || "",
+        params.avatarUrl || "",
+        canPostInt,
+        encryptedToken,
+        tokenVersion,
+        canPostInt,
+        tasksJson,
+        canPostInt,
+        isPublishedInt,
+        tokenStatus,
+        canPostInt,
+        params.connectedAccountId,
+        now,
+        now,
+        internalId
+      )
+      .run();
   } else {
-    const pageInternalId = `page_${randomHex(4)}`;
     await db
       .prepare(
         `INSERT INTO facebook_pages (
-          id, facebook_page_id, name, category, avatar_url,
-          encrypted_page_access_token, tasks, can_post, connection_id,
-          is_selected, status, token_status, owner_user_id, last_synced_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'connected', 'valid', ?, ?, ?)`
+           id, owner_user_id, facebook_page_id, page_name, category, avatar_url,
+           page_access_token, token_version, tasks_json, can_post, is_published, is_selected,
+           status, token_status, connected_account_id, last_synced_at, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?, ?, ?)`
       )
       .bind(
-        pageInternalId,
-        cleanFbId,
-        params.name.trim(),
-        params.category || null,
-        params.avatarUrl || null,
-        params.encryptedPageAccessToken,
-        params.tasksJson,
-        params.canPost,
-        cleanAid,
-        cleanOwner,
+        internalId,
+        params.ownerUserId,
+        params.facebookPageId,
+        params.pageName,
+        params.category || "",
+        params.avatarUrl || "",
+        encryptedToken,
+        tokenVersion,
+        tasksJson,
+        canPostInt,
+        isPublishedInt,
+        tokenStatus,
+        params.connectedAccountId,
+        now,
         now,
         now
       )
       .run();
   }
 
-  // Upsert Many-to-Many relationship in facebook_account_pages
-  const existingRel = await db
-    .prepare(
-      "SELECT id FROM facebook_account_pages WHERE account_id = ? AND facebook_page_id = ? LIMIT 1"
-    )
-    .bind(cleanAid, cleanFbId)
-    .first<{ id: number }>();
-
-  if (existingRel) {
-    await db
-      .prepare(
-        `UPDATE facebook_account_pages SET
-          encrypted_page_access_token = ?,
-          tasks = ?,
-          can_post = ?,
-          token_status = 'valid',
-          synced_at = ?
-        WHERE id = ?`
-      )
-      .bind(params.encryptedPageAccessToken, params.tasksJson, params.canPost, now, existingRel.id)
-      .run();
-  } else {
-    await db
-      .prepare(
-        `INSERT INTO facebook_account_pages (
-          account_id, facebook_page_id, owner_user_id,
-          encrypted_page_access_token, tasks, can_post, token_status, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'valid', ?)`
-      )
-      .bind(
-        cleanAid,
-        cleanFbId,
-        cleanOwner,
-        params.encryptedPageAccessToken,
-        params.tasksJson,
-        params.canPost,
-        now
-      )
-      .run();
-  }
-
-  await db
-    .prepare("UPDATE facebook_accounts SET last_synced_at = ? WHERE id = ? AND owner_user_id = ?")
-    .bind(now, cleanAid, cleanOwner)
-    .run();
+  return internalId;
 }
 
+/**
+ * Truy vấn danh sách Fanpage của User bằng 1 lần db.batch() duy nhất (Tránh hoàn toàn N+1 query!)
+ */
 export async function getFacebookPages(
   db: D1Database,
+  encryptionKey: string,
   options: {
-    accountIds?: string[] | null;
-    search?: string | null;
-    status?: string | null;
-    onlySelected?: boolean;
+    selectedOnly?: boolean;
+    includeToken?: boolean;
+    accountIds?: string[];
     ownerUserId: string;
   }
 ): Promise<FacebookPageRecord[]> {
-  let query = `
-    SELECT
-      p.id,
-      p.facebook_page_id,
-      p.name,
-      p.category,
-      p.avatar_url,
-      p.tasks,
-      p.can_post,
-      p.is_selected,
-      p.status,
-      p.token_status,
-      p.owner_user_id,
-      p.last_synced_at,
-      p.created_at,
-      COUNT(CASE WHEN t.status = 'pending' THEN 1 END) AS pending_count,
-      COUNT(t.id) AS total_tasks
-    FROM facebook_pages p
-    LEFT JOIN tasks t ON p.facebook_page_id = t.facebook_page_id AND t.owner_user_id = p.owner_user_id
-    WHERE p.owner_user_id = ?
+  const { selectedOnly = false, includeToken = false, accountIds = [], ownerUserId } = options;
+
+  let pageSql = `
+    SELECT fp.*,
+           (SELECT COUNT(*) FROM tasks t
+            WHERE t.facebook_page_id = fp.facebook_page_id
+              AND t.owner_user_id = fp.owner_user_id
+              AND t.status IN ('pending', 'queued', 'processing', 'running')) AS pending_count
+    FROM facebook_pages fp
+    WHERE fp.owner_user_id = ?
   `;
-  const binds: unknown[] = [options.ownerUserId];
+  const pageParams: unknown[] = [ownerUserId];
 
-  if (options.accountIds && options.accountIds.length > 0) {
-    const cleanAids = options.accountIds.map((a) => a.trim()).filter(Boolean);
-    if (cleanAids.length > 0) {
-      const placeholders = cleanAids.map(() => "?").join(",");
-      query += ` AND p.facebook_page_id IN (
-        SELECT facebook_page_id FROM facebook_account_pages
-        WHERE owner_user_id = ? AND account_id IN (${placeholders})
-      )`;
-      binds.push(options.ownerUserId, ...cleanAids);
-    }
+  if (selectedOnly) {
+    pageSql += " AND fp.is_selected = 1";
   }
 
-  if (options.search && options.search.trim()) {
-    const s = `%${options.search.trim()}%`;
-    query += " AND (p.name LIKE ? OR p.facebook_page_id LIKE ?)";
-    binds.push(s, s);
+  if (accountIds && accountIds.length > 0) {
+    const placeholders = accountIds.map(() => "?").join(",");
+    pageSql += ` AND fp.facebook_page_id IN (
+      SELECT facebook_page_id FROM facebook_account_pages WHERE facebook_account_id IN (${placeholders}) AND owner_user_id = ?
+    )`;
+    pageParams.push(...accountIds, ownerUserId);
   }
 
-  if (options.status && options.status.trim()) {
-    if (options.status.trim() === "can_post") {
-      query += " AND p.can_post = 1";
-    } else {
-      query += " AND p.status = ?";
-      binds.push(options.status.trim());
-    }
+  pageSql += " ORDER BY fp.page_name COLLATE NOCASE ASC";
+
+  const linksSql = `
+    SELECT fap.*, fa.facebook_user_id, fa.facebook_user_name, fa.status AS account_status
+    FROM facebook_account_pages fap
+    JOIN facebook_accounts fa ON fa.id = fap.facebook_account_id
+    WHERE fa.owner_user_id = ?
+    ORDER BY fap.can_post DESC, fap.last_synced_at DESC
+  `;
+
+  const [pagesResult, linksResult] = await db.batch([
+    db.prepare(pageSql).bind(...pageParams),
+    db.prepare(linksSql).bind(ownerUserId)
+  ]);
+
+  const rows = (pagesResult.results || []) as Record<string, unknown>[];
+  const allLinks = (linksResult.results || []) as Record<string, unknown>[];
+
+  const linksByPageId = new Map<string, Record<string, unknown>[]>();
+  for (const lnk of allLinks) {
+    const pid = String(lnk.facebook_page_id);
+    const list = linksByPageId.get(pid) || [];
+    list.push(lnk);
+    linksByPageId.set(pid, list);
   }
 
-  if (options.onlySelected) {
-    query += " AND p.is_selected = 1";
-  }
+  const out: FacebookPageRecord[] = [];
 
-  query += " GROUP BY p.facebook_page_id ORDER BY p.name COLLATE NOCASE ASC";
+  for (const r of rows) {
+    const fbPageId = String(r.facebook_page_id);
+    const linkRows = linksByPageId.get(fbPageId) || [];
 
-  const res = await db
-    .prepare(query)
-    .bind(...binds)
-    .all<Record<string, unknown>>();
+    const adminAccounts: AdminAccountLink[] = [];
+    const mergedTasksSet = new Set<string>(safeJsonParseArray(r.tasks_json as string));
+    let anyCanPost = Boolean(r.can_post);
+    let bestEncryptedToken = String(r.page_access_token || "");
 
-  const pages: FacebookPageRecord[] = [];
-  for (const r of res.results || []) {
-    const fbid = String(r.facebook_page_id);
-    const adminRes = await db
-      .prepare(
-        `SELECT
-          fa.id AS account_id,
-          fa.user_id,
-          fa.user_name,
-          fa.owner_user_id,
-          fa.avatar_url,
-          fa.status AS account_status,
-          fap.can_post,
-          fap.token_status,
-          fap.synced_at
-        FROM facebook_account_pages fap
-        JOIN facebook_accounts fa ON fap.account_id = fa.id
-        WHERE fap.facebook_page_id = ? AND fap.owner_user_id = ?
-        ORDER BY fa.user_name ASC`
-      )
-      .bind(fbid, options.ownerUserId)
-      .all<AdminAccountLink>();
-
-    const admins = adminRes.results || [];
-    const adminNames =
-      admins
-        .map((a) => a.user_name)
-        .filter(Boolean)
-        .join(", ") || "Chưa rõ";
-
-    let canPost = Number(r.can_post || 0);
-    if (admins.length > 0) {
-      const anyActiveCanPost = admins.some(
-        (a) =>
-          a.account_status === "connected" &&
-          Number(a.can_post) === 1 &&
-          a.token_status === "valid"
-      );
-      canPost = anyActiveCanPost ? 1 : 0;
+    for (const lnk of linkRows) {
+      const lTasks = safeJsonParseArray(lnk.tasks_json as string);
+      for (const t of lTasks) mergedTasksSet.add(t);
+      const lCanPost = Boolean(lnk.can_post);
+      if (lCanPost && lnk.account_status === "connected") {
+        anyCanPost = true;
+        if (lnk.page_access_token) {
+          bestEncryptedToken = String(lnk.page_access_token);
+        }
+      }
+      adminAccounts.push({
+        account_id: String(lnk.facebook_account_id),
+        facebook_user_id: String(lnk.facebook_user_id),
+        facebook_user_name: (lnk.facebook_user_name as string) || null,
+        account_status: String(lnk.account_status || "connected"),
+        token_status: String(lnk.token_status || "valid"),
+        tasks: lTasks,
+        can_post: lCanPost,
+        is_published: Boolean(lnk.is_published),
+        last_synced_at: (lnk.last_synced_at as string) || null
+      });
     }
 
-    pages.push({
+    const pageRecord: FacebookPageRecord & { page_access_token?: string } = {
       id: String(r.id),
-      facebook_page_id: fbid,
-      name: String(r.name),
-      category: r.category ? String(r.category) : null,
-      avatar_url: r.avatar_url ? String(r.avatar_url) : null,
-      tasks: String(r.tasks || "[]"),
-      can_post: canPost,
-      is_selected: Number(r.is_selected ?? 1),
-      status: String(r.status || "connected"),
+      owner_user_id: (r.owner_user_id as string) || null,
+      facebook_page_id: fbPageId,
+      page_name: String(r.page_name),
+      name: String(r.page_name),
+      category: String(r.category || ""),
+      avatar_url: String(r.avatar_url || ""),
+      tasks: Array.from(mergedTasksSet),
+      can_post: anyCanPost,
+      is_published: Boolean(r.is_published),
+      is_selected: Boolean(r.is_selected),
+      status: String(r.status || "active"),
       token_status: String(r.token_status || "valid"),
-      owner_user_id: String(r.owner_user_id),
-      last_synced_at: String(r.last_synced_at || ""),
-      created_at: String(r.created_at || ""),
+      connected_account_id: (r.connected_account_id as string) || null,
+      last_synced_at: (r.last_synced_at as string) || null,
+      created_at: (r.created_at as string) || null,
+      updated_at: (r.updated_at as string) || null,
       pending_count: Number(r.pending_count || 0),
-      total_tasks: Number(r.total_tasks || 0),
-      admin_accounts: admins,
-      admin_names: adminNames
-    });
+      admin_accounts: adminAccounts,
+      admin_names: adminAccounts
+        .map((a) => a.facebook_user_name)
+        .filter((n): n is string => Boolean(n))
+    };
+
+    if (includeToken) {
+      pageRecord.page_access_token = await decryptToken(bestEncryptedToken, encryptionKey);
+    }
+
+    out.push(pageRecord);
   }
 
-  return pages;
+  return out;
 }
 
 export async function getFacebookPageByFbId(
   db: D1Database,
+  encryptionKey: string,
   facebookPageId: string,
+  includeToken = false,
   ownerUserId: string
-): Promise<FacebookPageRecord | null> {
-  const cleanFbId = (facebookPageId || "").trim();
-  if (!cleanFbId) return null;
-
-  const pages = await getFacebookPages(db, {
-    search: cleanFbId,
+): Promise<(FacebookPageRecord & { page_access_token?: string }) | null> {
+  const pages = await getFacebookPages(db, encryptionKey, {
+    includeToken,
     ownerUserId
   });
-  return pages.find((p) => p.facebook_page_id === cleanFbId || p.id === cleanFbId) || null;
-}
-
-export async function getPageActiveEncryptedToken(
-  db: D1Database,
-  facebookPageId: string,
-  ownerUserId: string
-): Promise<string | null> {
-  const cleanFbId = (facebookPageId || "").trim();
-  if (!cleanFbId) return null;
-
-  const activeRel = await db
-    .prepare(
-      `SELECT fap.encrypted_page_access_token
-       FROM facebook_account_pages fap
-       JOIN facebook_accounts fa ON fap.account_id = fa.id
-       WHERE fap.facebook_page_id = ?
-         AND fap.owner_user_id = ?
-         AND fa.status = 'connected'
-         AND fap.can_post = 1
-         AND fap.token_status = 'valid'
-       ORDER BY fap.synced_at DESC
-       LIMIT 1`
-    )
-    .bind(cleanFbId, ownerUserId)
-    .first<{ encrypted_page_access_token: string }>();
-
-  if (activeRel && activeRel.encrypted_page_access_token) {
-    return activeRel.encrypted_page_access_token;
-  }
-
-  const pageRow = await db
-    .prepare(
-      "SELECT encrypted_page_access_token FROM facebook_pages WHERE facebook_page_id = ? AND owner_user_id = ? LIMIT 1"
-    )
-    .bind(cleanFbId, ownerUserId)
-    .first<{ encrypted_page_access_token: string }>();
-
-  return pageRow?.encrypted_page_access_token || null;
+  return pages.find((p) => p.facebook_page_id === facebookPageId || p.id === facebookPageId) || null;
 }
 
 export async function updatePageSelection(
@@ -988,62 +1319,59 @@ export async function updatePageSelection(
   isSelected: boolean,
   ownerUserId: string
 ): Promise<boolean> {
-  const cleanId = facebookPageId.trim();
+  const now = new Date().toISOString();
   const res = await db
     .prepare(
-      "UPDATE facebook_pages SET is_selected = ? WHERE (facebook_page_id = ? OR id = ?) AND owner_user_id = ?"
+      `UPDATE facebook_pages
+       SET is_selected = ?, updated_at = ?
+       WHERE (facebook_page_id = ? OR id = ?) AND owner_user_id = ?`
     )
-    .bind(isSelected ? 1 : 0, cleanId, cleanId, ownerUserId)
+    .bind(isSelected ? 1 : 0, now, facebookPageId, facebookPageId, ownerUserId)
     .run();
   return (res.meta?.changes || 0) > 0;
 }
 
 export async function bulkUpdatePageSelection(
   db: D1Database,
-  params: {
-    isSelected: boolean;
-    facebookPageIds?: string[] | null;
-    accountIds?: string[] | null;
-    ownerUserId: string;
-  }
+  isSelected: boolean,
+  facebookPageIds: string[] | null,
+  accountIds: string[] | null,
+  ownerUserId: string
 ): Promise<number> {
-  const val = params.isSelected ? 1 : 0;
+  const now = new Date().toISOString();
+  const val = isSelected ? 1 : 0;
 
-  if (params.facebookPageIds && params.facebookPageIds.length > 0) {
-    const cleanIds = params.facebookPageIds.map((id) => id.trim()).filter(Boolean);
-    if (cleanIds.length === 0) return 0;
-    const placeholders = cleanIds.map(() => "?").join(",");
+  if (facebookPageIds && facebookPageIds.length > 0) {
+    const placeholders = facebookPageIds.map(() => "?").join(",");
     const res = await db
       .prepare(
-        `UPDATE facebook_pages SET is_selected = ?
-         WHERE owner_user_id = ? AND (facebook_page_id IN (${placeholders}) OR id IN (${placeholders}))`
+        `UPDATE facebook_pages
+         SET is_selected = ?, updated_at = ?
+         WHERE facebook_page_id IN (${placeholders}) AND owner_user_id = ?`
       )
-      .bind(val, params.ownerUserId, ...cleanIds, ...cleanIds)
+      .bind(val, now, ...facebookPageIds, ownerUserId)
       .run();
     return res.meta?.changes || 0;
   }
 
-  if (params.accountIds && params.accountIds.length > 0) {
-    const cleanAids = params.accountIds.map((id) => id.trim()).filter(Boolean);
-    if (cleanAids.length > 0) {
-      const placeholders = cleanAids.map(() => "?").join(",");
-      const res = await db
-        .prepare(
-          `UPDATE facebook_pages SET is_selected = ?
-           WHERE owner_user_id = ? AND facebook_page_id IN (
-             SELECT facebook_page_id FROM facebook_account_pages
-             WHERE owner_user_id = ? AND account_id IN (${placeholders})
-           )`
-        )
-        .bind(val, params.ownerUserId, params.ownerUserId, ...cleanAids)
-        .run();
-      return res.meta?.changes || 0;
-    }
+  if (accountIds && accountIds.length > 0) {
+    const placeholders = accountIds.map(() => "?").join(",");
+    const res = await db
+      .prepare(
+        `UPDATE facebook_pages
+         SET is_selected = ?, updated_at = ?
+         WHERE facebook_page_id IN (
+           SELECT facebook_page_id FROM facebook_account_pages WHERE facebook_account_id IN (${placeholders}) AND owner_user_id = ?
+         ) AND owner_user_id = ?`
+      )
+      .bind(val, now, ...accountIds, ownerUserId, ownerUserId)
+      .run();
+    return res.meta?.changes || 0;
   }
 
   const res = await db
-    .prepare("UPDATE facebook_pages SET is_selected = ? WHERE owner_user_id = ?")
-    .bind(val, params.ownerUserId)
+    .prepare("UPDATE facebook_pages SET is_selected = ?, updated_at = ? WHERE owner_user_id = ?")
+    .bind(val, now, ownerUserId)
     .run();
   return res.meta?.changes || 0;
 }
@@ -1053,102 +1381,412 @@ export async function deleteFacebookPageLocal(
   facebookPageId: string,
   ownerUserId: string
 ): Promise<boolean> {
-  const cleanFbId = facebookPageId.trim();
-  const page = await getFacebookPageByFbId(db, cleanFbId, ownerUserId);
+  const page = await db
+    .prepare(
+      "SELECT id, facebook_page_id FROM facebook_pages WHERE (facebook_page_id = ? OR id = ?) AND owner_user_id = ?"
+    )
+    .bind(facebookPageId, facebookPageId, ownerUserId)
+    .first<{ id: string; facebook_page_id: string }>();
+
   if (!page) return false;
 
-  await db
-    .prepare(
-      "DELETE FROM facebook_account_pages WHERE facebook_page_id = ? AND owner_user_id = ?"
-    )
-    .bind(page.facebook_page_id, ownerUserId)
-    .run();
+  await db.batch([
+    db
+      .prepare("DELETE FROM facebook_account_pages WHERE facebook_page_id = ? AND owner_user_id = ?")
+      .bind(page.facebook_page_id, ownerUserId),
+    db
+      .prepare("DELETE FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?")
+      .bind(page.facebook_page_id, ownerUserId),
+    db
+      .prepare("DELETE FROM facebook_pages WHERE id = ? AND owner_user_id = ?")
+      .bind(page.id, ownerUserId)
+  ]);
 
-  await db
-    .prepare(
-      "DELETE FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?"
-    )
-    .bind(page.facebook_page_id, ownerUserId)
-    .run();
-
-  const res = await db
-    .prepare(
-      "DELETE FROM facebook_pages WHERE facebook_page_id = ? AND owner_user_id = ?"
-    )
-    .bind(page.facebook_page_id, ownerUserId)
-    .run();
-
-  return (res.meta?.changes || 0) > 0;
+  return true;
 }
 
 // ==========================================
-// 5. TASKS (REELS PUBLISHING & SCHEDULING)
+// 5. MEDIA FILES (CLOUDFLARE R2 METADATA)
 // ==========================================
+
+export async function createMediaFileInit(
+  db: D1Database,
+  params: {
+    id: string;
+    ownerUserId: string;
+    objectKey: string;
+    originalFilename: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256Checksum?: string | null;
+    r2UploadId?: string | null;
+    storageBackend?: string;
+    uploadStatus?: string;
+  }
+): Promise<MediaFileRecord> {
+  const now = new Date().toISOString();
+  const status = params.uploadStatus || "pending";
+  const backend = params.storageBackend || "r2";
+
+  await db
+    .prepare(
+      `INSERT INTO media_files (
+         id, owner_user_id, object_key, original_filename, mime_type,
+         size_bytes, sha256_checksum, upload_status, r2_upload_id, storage_backend,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      params.id,
+      params.ownerUserId,
+      params.objectKey,
+      params.originalFilename,
+      params.mimeType,
+      params.sizeBytes,
+      params.sha256Checksum || null,
+      status,
+      params.r2UploadId || null,
+      backend,
+      now,
+      now
+    )
+    .run();
+
+  return {
+    id: params.id,
+    owner_user_id: params.ownerUserId,
+    object_key: params.objectKey,
+    original_filename: params.originalFilename,
+    mime_type: params.mimeType,
+    size_bytes: params.sizeBytes,
+    sha256_checksum: params.sha256Checksum || null,
+    upload_status: status,
+    r2_upload_id: params.r2UploadId || null,
+    storage_backend: backend,
+    created_at: now,
+    updated_at: now
+  };
+}
+
+export async function getMediaFileById(
+  db: D1Database,
+  mediaIdOrKey: string,
+  ownerUserId: string
+): Promise<MediaFileRecord | null> {
+  if (!mediaIdOrKey) return null;
+  const cleanKey = mediaIdOrKey.replace(/^r2:\/\//, "");
+  return db
+    .prepare(
+      `SELECT * FROM media_files
+       WHERE (id = ? OR object_key = ?) AND owner_user_id = ?
+       LIMIT 1`
+    )
+    .bind(cleanKey, cleanKey, ownerUserId)
+    .first<MediaFileRecord>();
+}
+
+export async function completeMediaFileUpload(
+  db: D1Database,
+  mediaId: string,
+  ownerUserId: string,
+  sizeBytes?: number,
+  sha256Checksum?: string | null,
+  storageBackend?: string
+): Promise<MediaFileRecord | null> {
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `UPDATE media_files
+       SET upload_status = 'ready',
+           size_bytes = COALESCE(?, size_bytes),
+           sha256_checksum = COALESCE(?, sha256_checksum),
+           storage_backend = COALESCE(?, storage_backend),
+           updated_at = ?
+       WHERE id = ? AND owner_user_id = ?`
+    )
+    .bind(
+      sizeBytes !== undefined ? sizeBytes : null,
+      sha256Checksum || null,
+      storageBackend || null,
+      now,
+      mediaId,
+      ownerUserId
+    )
+    .run();
+
+  return getMediaFileById(db, mediaId, ownerUserId);
+}
+
+export async function getUserMediaFiles(
+  db: D1Database,
+  ownerUserId: string
+): Promise<MediaFileRecord[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT * FROM media_files WHERE owner_user_id = ? ORDER BY created_at DESC LIMIT 200"
+    )
+    .bind(ownerUserId)
+    .all<MediaFileRecord>();
+  return results || [];
+}
+
+export async function deleteMediaFileRecord(
+  db: D1Database,
+  mediaId: string,
+  ownerUserId: string
+): Promise<MediaFileRecord | null> {
+  const existing = await getMediaFileById(db, mediaId, ownerUserId);
+  if (!existing) return null;
+
+  await db.batch([
+    db
+      .prepare("DELETE FROM media_files WHERE id = ? AND owner_user_id = ?")
+      .bind(existing.id, ownerUserId),
+    db
+      .prepare("DELETE FROM media_blobs_fallback WHERE media_id = ? AND owner_user_id = ?")
+      .bind(existing.id, ownerUserId)
+  ]);
+
+  return existing;
+}
+
+// ==========================================
+// 6. TASKS, QUEUE LEASES & AUDIT LOGS
+// ==========================================
+
+function mapStatusForFrontend(status: string): string {
+  // Frontend expects 'pending' | 'running' | 'success' | 'failed'
+  if (status === "queued" || status === "processing") {
+    return "running";
+  }
+  return status;
+}
+
+export async function addTask(
+  db: D1Database,
+  params: {
+    videoPath: string;
+    caption?: string;
+    commentText?: string;
+    scheduleDate?: string;
+    scheduleTime?: string;
+    facebookPageId?: string | null;
+    profileId?: string | null;
+    mediaId?: string | null;
+    objectKey?: string | null;
+    status?: string;
+    ownerUserId: string;
+  }
+): Promise<number> {
+  const now = new Date().toISOString();
+  const pageId = params.facebookPageId || params.profileId || null;
+  const parsedSchedule = parseVnScheduleToUtc(params.scheduleDate, params.scheduleTime);
+  const scheduledAt = parsedSchedule.scheduledAtUtc;
+  const status = params.status || "pending";
+  const idempotencyKey = `task_${params.ownerUserId}_${pageId || "unassigned"}_${randomHex(8)}`;
+
+  const res = await db
+    .prepare(
+      `INSERT INTO tasks (
+         owner_user_id, profile_id, facebook_page_id, media_id, object_key,
+         video_path, caption, comment_text, schedule_date, schedule_time,
+         scheduled_at, timezone, status, idempotency_key, attempt_count, max_attempts,
+         log, video_id, post_id, video_url, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Chờ xử lý', '', '', '', ?, ?)`
+    )
+    .bind(
+      params.ownerUserId,
+      params.profileId || pageId,
+      pageId,
+      params.mediaId || null,
+      params.objectKey || null,
+      params.videoPath.trim(),
+      params.caption || "",
+      params.commentText || "",
+      params.scheduleDate || "",
+      params.scheduleTime || "",
+      scheduledAt,
+      status,
+      idempotencyKey,
+      now,
+      now
+    )
+    .run();
+
+  const taskId = Number(res.meta?.last_row_id || 0);
+  if (taskId > 0) {
+    await appendTaskStageLog(
+      db,
+      taskId,
+      params.ownerUserId,
+      "INFO",
+      "created",
+      scheduledAt
+        ? `Tạo tác vụ hẹn lịch đăng lúc ${params.scheduleDate} ${params.scheduleTime} (Asia/Ho_Chi_Minh -> UTC ${scheduledAt}).`
+        : "Tạo tác vụ đăng Reels mới."
+    );
+  }
+  return taskId;
+}
+
+export async function addTasksBulk(
+  db: D1Database,
+  tasksList: Array<{
+    video_path: string;
+    caption?: string;
+    comment_text?: string;
+    schedule_date?: string;
+    schedule_time?: string;
+    facebook_page_id?: string;
+    media_id?: string;
+    object_key?: string;
+  }>,
+  assignPageIds: string[] | null,
+  ownerUserId: string
+): Promise<number[]> {
+  if (!tasksList || tasksList.length === 0) return [];
+
+  let validAssignIds: string[] = [];
+  if (assignPageIds && assignPageIds.length > 0) {
+    const placeholders = assignPageIds.map(() => "?").join(",");
+    const { results } = await db
+      .prepare(
+        `SELECT facebook_page_id FROM facebook_pages
+         WHERE facebook_page_id IN (${placeholders}) AND owner_user_id = ?`
+      )
+      .bind(...assignPageIds, ownerUserId)
+      .all<{ facebook_page_id: string }>();
+    validAssignIds = results.map((r) => r.facebook_page_id);
+  }
+
+  const insertedIds: number[] = [];
+  let idx = 0;
+
+  for (const item of tasksList) {
+    const vPath = (item.video_path || "").trim();
+    if (!vPath) continue;
+
+    let targetPageId: string | null = item.facebook_page_id || null;
+    if (!targetPageId && validAssignIds.length > 0) {
+      targetPageId = validAssignIds[idx % validAssignIds.length];
+      idx++;
+    }
+
+    const tid = await addTask(db, {
+      videoPath: vPath,
+      caption: item.caption || "",
+      commentText: item.comment_text || "",
+      scheduleDate: item.schedule_date || "",
+      scheduleTime: item.schedule_time || "",
+      facebookPageId: targetPageId,
+      mediaId: item.media_id || null,
+      objectKey: item.object_key || null,
+      ownerUserId
+    });
+    insertedIds.push(tid);
+  }
+
+  return insertedIds;
+}
 
 export async function getTasks(
   db: D1Database,
   options: {
     facebookPageId?: string | null;
-    profileId?: string | null;
     status?: string | null;
     search?: string | null;
+    accountIds?: string[];
     ownerUserId: string;
   }
 ): Promise<TaskRecord[]> {
-  let query = `
-    SELECT
-      t.id,
-      t.profile_id,
-      t.facebook_page_id,
-      p.name AS page_name,
-      t.video_path,
-      t.caption,
-      t.link_ac,
-      t.comment_text,
-      t.schedule_date,
-      t.schedule_time,
-      t.status,
-      t.video_url,
-      t.meta_video_id,
-      t.meta_post_id,
-      t.publish_mode,
-      t.error_message,
-      t.log,
-      t.done_time,
-      t.owner_user_id,
-      t.created_at
+  const { facebookPageId, status, search, accountIds = [], ownerUserId } = options;
+
+  let sql = `
+    SELECT t.*,
+           fp.page_name AS page_name,
+           fp.avatar_url AS page_avatar,
+           fp.category AS page_category
     FROM tasks t
-    LEFT JOIN facebook_pages p
-      ON t.facebook_page_id = p.facebook_page_id AND p.owner_user_id = t.owner_user_id
+    LEFT JOIN facebook_pages fp
+      ON fp.facebook_page_id = t.facebook_page_id
+      AND fp.owner_user_id = t.owner_user_id
     WHERE t.owner_user_id = ?
   `;
-  const binds: unknown[] = [options.ownerUserId];
+  const params: unknown[] = [ownerUserId];
 
-  if (options.facebookPageId && options.facebookPageId.trim()) {
-    query += " AND t.facebook_page_id = ?";
-    binds.push(options.facebookPageId.trim());
-  }
-  if (options.profileId && options.profileId.trim()) {
-    query += " AND t.profile_id = ?";
-    binds.push(options.profileId.trim());
-  }
-  if (options.status && options.status.trim()) {
-    query += " AND t.status = ?";
-    binds.push(options.status.trim());
-  }
-  if (options.search && options.search.trim()) {
-    const s = `%${options.search.trim()}%`;
-    query +=
-      " AND (t.caption LIKE ? OR t.video_path LIKE ? OR t.comment_text LIKE ? OR CAST(t.id AS TEXT) LIKE ?)";
-    binds.push(s, s, s, s);
+  if (facebookPageId) {
+    sql += " AND (t.facebook_page_id = ? OR t.profile_id = ?)";
+    params.push(facebookPageId, facebookPageId);
   }
 
-  query += " ORDER BY t.id DESC";
-  const res = await db
-    .prepare(query)
-    .bind(...binds)
-    .all<TaskRecord>();
-  return res.results || [];
+  if (accountIds && accountIds.length > 0) {
+    const placeholders = accountIds.map(() => "?").join(",");
+    sql += ` AND t.facebook_page_id IN (
+      SELECT facebook_page_id FROM facebook_account_pages
+      WHERE facebook_account_id IN (${placeholders}) AND owner_user_id = ?
+    )`;
+    params.push(...accountIds, ownerUserId);
+  }
+
+  if (status) {
+    if (status === "running") {
+      sql += " AND t.status IN ('running', 'queued', 'processing')";
+    } else {
+      sql += " AND t.status = ?";
+      params.push(status);
+    }
+  }
+
+  if (search && search.trim()) {
+    const kw = `%${search.trim()}%`;
+    sql +=
+      " AND (t.caption LIKE ? OR t.video_path LIKE ? OR fp.page_name LIKE ? OR t.facebook_page_id LIKE ?)";
+    params.push(kw, kw, kw, kw);
+  }
+
+  sql += " ORDER BY t.id DESC";
+
+  const { results } = await db.prepare(sql).bind(...params).all<Record<string, unknown>>();
+
+  return results.map((r) => {
+    const rawStatus = String(r.status || "pending");
+    return {
+      id: Number(r.id),
+      owner_user_id: (r.owner_user_id as string) || null,
+      profile_id: (r.profile_id as string) || (r.facebook_page_id as string) || null,
+      facebook_page_id: (r.facebook_page_id as string) || (r.profile_id as string) || null,
+      media_id: (r.media_id as string) || null,
+      object_key: (r.object_key as string) || null,
+      video_path: String(r.video_path || ""),
+      caption: String(r.caption || ""),
+      comment_text: String(r.comment_text || ""),
+      schedule_date: String(r.schedule_date || ""),
+      schedule_time: String(r.schedule_time || ""),
+      scheduled_at: r.scheduled_at !== null && r.scheduled_at !== undefined ? Number(r.scheduled_at) : null,
+      timezone: String(r.timezone || "Asia/Ho_Chi_Minh"),
+      status: mapStatusForFrontend(rawStatus),
+      raw_status: rawStatus,
+      idempotency_key: (r.idempotency_key as string) || null,
+      attempt_count: Number(r.attempt_count || 0),
+      max_attempts: Number(r.max_attempts || 3),
+      next_retry_at: r.next_retry_at ? Number(r.next_retry_at) : null,
+      locked_until: r.locked_until ? Number(r.locked_until) : null,
+      lease_owner: (r.lease_owner as string) || null,
+      error_code: r.error_code ? Number(r.error_code) : null,
+      error_subcode: r.error_subcode ? Number(r.error_subcode) : null,
+      retryable: Number(r.retryable ?? 1),
+      log: String(r.log || ""),
+      video_id: String(r.video_id || ""),
+      post_id: String(r.post_id || ""),
+      video_url: String(r.video_url || ""),
+      created_at: (r.created_at as string) || null,
+      updated_at: (r.updated_at as string) || null,
+      page_name: (r.page_name as string) || null,
+      page_avatar: (r.page_avatar as string) || null,
+      page_category: (r.page_category as string) || null,
+      profile_name: (r.page_name as string) || (r.facebook_page_id as string) || null
+    };
+  });
 }
 
 export async function getTask(
@@ -1156,245 +1794,230 @@ export async function getTask(
   taskId: number,
   ownerUserId: string
 ): Promise<TaskRecord | null> {
-  const row = await db
-    .prepare(
-      `SELECT
-        t.id,
-        t.profile_id,
-        t.facebook_page_id,
-        p.name AS page_name,
-        t.video_path,
-        t.caption,
-        t.link_ac,
-        t.comment_text,
-        t.schedule_date,
-        t.schedule_time,
-        t.status,
-        t.video_url,
-        t.meta_video_id,
-        t.meta_post_id,
-        t.publish_mode,
-        t.error_message,
-        t.log,
-        t.done_time,
-        t.owner_user_id,
-        t.created_at
-      FROM tasks t
-      LEFT JOIN facebook_pages p
-        ON t.facebook_page_id = p.facebook_page_id AND p.owner_user_id = t.owner_user_id
-      WHERE t.id = ? AND t.owner_user_id = ?
-      LIMIT 1`
-    )
-    .bind(taskId, ownerUserId)
-    .first<TaskRecord>();
-  return row || null;
-}
-
-export async function addTask(
-  db: D1Database,
-  params: {
-    facebookPageId?: string | null;
-    profileId?: string | null;
-    videoPath: string;
-    caption?: string;
-    commentText?: string;
-    scheduleDate?: string;
-    scheduleTime?: string;
-    publishMode?: string;
-    ownerUserId: string;
-  }
-): Promise<TaskRecord | null> {
-  // Verify page ownership if facebookPageId is provided
-  if (params.facebookPageId && params.facebookPageId.trim()) {
-    const page = await getFacebookPageByFbId(db, params.facebookPageId.trim(), params.ownerUserId);
-    if (!page) {
-      throw new Error("Bạn không có quyền truy cập Fanpage được chọn.");
-    }
-  }
-
-  const res = await db
-    .prepare(
-      `INSERT INTO tasks (
-        profile_id, facebook_page_id, video_path, caption, link_ac, comment_text,
-        schedule_date, schedule_time, status, publish_mode, owner_user_id, created_at
-      ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 'pending', ?, ?, ?)`
-    )
-    .bind(
-      params.profileId ? params.profileId.trim() : null,
-      params.facebookPageId ? params.facebookPageId.trim() : null,
-      params.videoPath.trim(),
-      (params.caption || "").trim(),
-      (params.commentText || "").trim(),
-      (params.scheduleDate || "").trim(),
-      (params.scheduleTime || "").trim(),
-      params.publishMode || "now",
-      params.ownerUserId,
-      nowIsoSql()
-    )
-    .run();
-
-  const lastId = Number(res.meta?.last_row_id || 0);
-  if (lastId > 0) {
-    return getTask(db, lastId, params.ownerUserId);
-  }
-  const latest = await getTasks(db, { ownerUserId: params.ownerUserId });
-  return latest[0] || null;
+  const tasks = await getTasks(db, { ownerUserId });
+  return tasks.find((t) => t.id === taskId) || null;
 }
 
 export async function updateTask(
   db: D1Database,
   taskId: number,
-  updates: {
+  params: {
     facebookPageId?: string | null;
-    profileId?: string | null;
-    videoPath?: string | null;
-    caption?: string | null;
-    commentText?: string | null;
-    scheduleDate?: string | null;
-    scheduleTime?: string | null;
-    publishMode?: string | null;
-  },
-  ownerUserId: string
-): Promise<TaskRecord | null> {
-  const current = await getTask(db, taskId, ownerUserId);
-  if (!current) return null;
-
-  const targetPageId =
-    updates.facebookPageId !== undefined
-      ? updates.facebookPageId
-        ? updates.facebookPageId.trim()
-        : null
-      : current.facebook_page_id;
-
-  if (targetPageId) {
-    const page = await getFacebookPageByFbId(db, targetPageId, ownerUserId);
-    if (!page) {
-      throw new Error("Bạn không có quyền gán Fanpage này.");
-    }
+    videoPath?: string;
+    caption?: string;
+    commentText?: string;
+    scheduleDate?: string;
+    scheduleTime?: string;
+    mediaId?: string | null;
+    objectKey?: string | null;
+    ownerUserId: string;
   }
+): Promise<boolean> {
+  const existing = await getTask(db, taskId, params.ownerUserId);
+  if (!existing) return false;
+
+  const newPageId =
+    params.facebookPageId !== undefined ? params.facebookPageId : existing.facebook_page_id;
+  const newVideo = params.videoPath !== undefined ? params.videoPath.trim() : existing.video_path;
+  const newCaption = params.caption !== undefined ? params.caption : existing.caption;
+  const newComment = params.commentText !== undefined ? params.commentText : existing.comment_text;
+  const newDate = params.scheduleDate !== undefined ? params.scheduleDate : existing.schedule_date;
+  const newTime = params.scheduleTime !== undefined ? params.scheduleTime : existing.schedule_time;
+  const newMediaId = params.mediaId !== undefined ? params.mediaId : existing.media_id;
+  const newObjectKey = params.objectKey !== undefined ? params.objectKey : existing.object_key;
+  const parsedSchedule = parseVnScheduleToUtc(newDate, newTime);
+  const now = new Date().toISOString();
 
   await db
     .prepare(
-      `UPDATE tasks SET
-        facebook_page_id = ?,
-        profile_id = ?,
-        video_path = ?,
-        caption = ?,
-        comment_text = ?,
-        schedule_date = ?,
-        schedule_time = ?,
-        publish_mode = ?
-      WHERE id = ? AND owner_user_id = ?`
+      `UPDATE tasks
+       SET facebook_page_id = ?,
+           profile_id = ?,
+           media_id = ?,
+           object_key = ?,
+           video_path = ?,
+           caption = ?,
+           comment_text = ?,
+           schedule_date = ?,
+           schedule_time = ?,
+           scheduled_at = ?,
+           updated_at = ?
+       WHERE id = ? AND owner_user_id = ?`
     )
     .bind(
-      targetPageId,
-      updates.profileId !== undefined ? updates.profileId : current.profile_id,
-      updates.videoPath ? updates.videoPath.trim() : current.video_path,
-      updates.caption !== undefined && updates.caption !== null ? updates.caption : current.caption,
-      updates.commentText !== undefined && updates.commentText !== null
-        ? updates.commentText
-        : current.comment_text,
-      updates.scheduleDate !== undefined && updates.scheduleDate !== null
-        ? updates.scheduleDate
-        : current.schedule_date,
-      updates.scheduleTime !== undefined && updates.scheduleTime !== null
-        ? updates.scheduleTime
-        : current.schedule_time,
-      updates.publishMode || current.publish_mode,
+      newPageId,
+      newPageId,
+      newMediaId || null,
+      newObjectKey || null,
+      newVideo,
+      newCaption,
+      newComment,
+      newDate,
+      newTime,
+      parsedSchedule.scheduledAtUtc,
+      now,
       taskId,
-      ownerUserId
+      params.ownerUserId
     )
     .run();
 
-  return getTask(db, taskId, ownerUserId);
+  return true;
 }
 
-export async function addTasksBulk(
+export async function updateTaskExecutionState(
   db: D1Database,
-  params: {
-    tasksList: Array<{
-      video_path: string;
-      caption?: string;
-      comment_text?: string;
-      schedule_date?: string;
-      schedule_time?: string;
-      facebook_page_id?: string | null;
-      profile_id?: string | null;
-      publish_mode?: string;
-    }>;
-    assignPageIds?: string[] | null;
-    ownerUserId: string;
+  taskId: number,
+  status: string,
+  logMsg: string,
+  extra?: {
+    videoId?: string;
+    postId?: string;
+    videoUrl?: string;
+    errorCode?: number | null;
+    errorSubcode?: number | null;
+    retryable?: boolean;
+    nextRetryAt?: number | null;
+    attemptCount?: number;
+    clearLease?: boolean;
   }
-): Promise<number> {
-  if (!params.tasksList || params.tasksList.length === 0) return 0;
+): Promise<void> {
+  const now = new Date().toISOString();
+  const cleanLog = sanitizeSensitiveText(logMsg);
 
-  // Filter assignPageIds to only pages owned by ownerUserId
-  const userPages = await getFacebookPages(db, { ownerUserId: params.ownerUserId });
-  const ownedPageIdSet = new Set(userPages.map((p) => p.facebook_page_id));
-
-  const targetPages = (params.assignPageIds || [])
-    .map((p) => String(p).trim())
-    .filter((p) => ownedPageIdSet.has(p));
-
-  const now = nowIsoSql();
-  const stmts = [];
-
-  for (let i = 0; i < params.tasksList.length; i++) {
-    const item = params.tasksList[i];
-    const videoPath = String(item.video_path || "").trim();
-    if (!videoPath) continue;
-
-    let pageId: string | null = null;
-    if (targetPages.length > 0) {
-      pageId = targetPages[i % targetPages.length];
-    } else if (item.facebook_page_id && ownedPageIdSet.has(String(item.facebook_page_id).trim())) {
-      pageId = String(item.facebook_page_id).trim();
-    }
-
-    const scheduleDate = String(item.schedule_date || "").trim();
-    const scheduleTime = String(item.schedule_time || "").trim();
-    const publishMode =
-      item.publish_mode || (scheduleDate || scheduleTime ? "scheduled" : "now");
-
-    stmts.push(
-      db
-        .prepare(
-          `INSERT INTO tasks (
-            profile_id, facebook_page_id, video_path, caption, link_ac, comment_text,
-            schedule_date, schedule_time, status, publish_mode, owner_user_id, created_at
-          ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 'pending', ?, ?, ?)`
-        )
-        .bind(
-          item.profile_id ? String(item.profile_id).trim() : null,
-          pageId,
-          videoPath,
-          String(item.caption || "").trim(),
-          String(item.comment_text || "").trim(),
-          scheduleDate,
-          scheduleTime,
-          publishMode,
-          params.ownerUserId,
-          now
-        )
-    );
-  }
-
-  if (stmts.length > 0) {
-    await db.batch(stmts);
-  }
-  return stmts.length;
+  await db
+    .prepare(
+      `UPDATE tasks
+       SET status = ?,
+           log = ?,
+           video_id = COALESCE(?, video_id),
+           post_id = COALESCE(?, post_id),
+           video_url = COALESCE(?, video_url),
+           error_code = COALESCE(?, error_code),
+           error_subcode = COALESCE(?, error_subcode),
+           retryable = COALESCE(?, retryable),
+           next_retry_at = ?,
+           attempt_count = COALESCE(?, attempt_count),
+           locked_until = CASE WHEN ? = 1 THEN NULL ELSE locked_until END,
+           lease_owner = CASE WHEN ? = 1 THEN NULL ELSE lease_owner END,
+           updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(
+      status,
+      cleanLog,
+      extra?.videoId ?? null,
+      extra?.postId ?? null,
+      extra?.videoUrl ?? null,
+      extra?.errorCode ?? null,
+      extra?.errorSubcode ?? null,
+      extra?.retryable !== undefined ? (extra.retryable ? 1 : 0) : null,
+      extra?.nextRetryAt !== undefined ? extra.nextRetryAt : null,
+      extra?.attemptCount !== undefined ? extra.attemptCount : null,
+      extra?.clearLease ? 1 : 0,
+      extra?.clearLease ? 1 : 0,
+      now,
+      taskId
+    )
+    .run();
 }
 
-export async function deleteTask(
+export async function appendTaskStageLog(
+  db: D1Database,
+  taskId: number,
+  ownerUserId: string,
+  level: "INFO" | "WARN" | "ERROR",
+  stage: string,
+  message: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  const clean = sanitizeSensitiveText(message);
+  await db
+    .prepare(
+      `INSERT INTO task_logs (task_id, owner_user_id, level, stage, message, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(taskId, ownerUserId, level, stage, clean, now)
+    .run();
+}
+
+export async function recordTaskAttemptStart(
+  db: D1Database,
+  taskId: number,
+  ownerUserId: string,
+  attemptNumber: number,
+  stage = "initializing"
+): Promise<number> {
+  const now = new Date().toISOString();
+  const res = await db
+    .prepare(
+      `INSERT INTO task_attempts (task_id, owner_user_id, attempt_number, status, stage, started_at)
+       VALUES (?, ?, ?, 'processing', ?, ?)`
+    )
+    .bind(taskId, ownerUserId, attemptNumber, stage, now)
+    .run();
+  return Number(res.meta?.last_row_id || 0);
+}
+
+export async function recordTaskAttemptFinish(
+  db: D1Database,
+  attemptId: number,
+  status: "success" | "failed",
+  stage: string,
+  errorCode?: number | null,
+  errorSubcode?: number | null,
+  errorMessage?: string | null
+): Promise<void> {
+  if (!attemptId) return;
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `UPDATE task_attempts
+       SET status = ?,
+           stage = ?,
+           error_code = ?,
+           error_subcode = ?,
+           error_message = ?,
+           finished_at = ?
+       WHERE id = ?`
+    )
+    .bind(
+      status,
+      stage,
+      errorCode ?? null,
+      errorSubcode ?? null,
+      errorMessage ? sanitizeSensitiveText(errorMessage) : null,
+      now,
+      attemptId
+    )
+    .run();
+}
+
+export async function getTaskLogs(
   db: D1Database,
   taskId: number,
   ownerUserId: string
-): Promise<boolean> {
-  const res = await db
-    .prepare("DELETE FROM tasks WHERE id = ? AND owner_user_id = ?")
+): Promise<Array<Record<string, unknown>>> {
+  const { results } = await db
+    .prepare(
+      "SELECT * FROM task_logs WHERE task_id = ? AND owner_user_id = ? ORDER BY id ASC"
+    )
     .bind(taskId, ownerUserId)
-    .run();
-  return (res.meta?.changes || 0) > 0;
+    .all<Record<string, unknown>>();
+  return results || [];
+}
+
+export async function getTaskAttempts(
+  db: D1Database,
+  taskId: number,
+  ownerUserId: string
+): Promise<Array<Record<string, unknown>>> {
+  const { results } = await db
+    .prepare(
+      "SELECT * FROM task_attempts WHERE task_id = ? AND owner_user_id = ? ORDER BY attempt_number ASC"
+    )
+    .bind(taskId, ownerUserId)
+    .all<Record<string, unknown>>();
+  return results || [];
 }
 
 export async function resetTask(
@@ -1402,194 +2025,250 @@ export async function resetTask(
   taskId: number,
   ownerUserId: string
 ): Promise<boolean> {
-  const res = await db
+  const existing = await getTask(db, taskId, ownerUserId);
+  if (!existing) return false;
+
+  const now = new Date().toISOString();
+  await db
     .prepare(
-      `UPDATE tasks SET
-        status = 'pending',
-        log = NULL,
-        video_url = NULL,
-        meta_video_id = NULL,
-        meta_post_id = NULL,
-        error_message = NULL,
-        done_time = NULL
-      WHERE id = ? AND owner_user_id = ?`
+      `UPDATE tasks
+       SET status = 'pending',
+           attempt_count = 0,
+           next_retry_at = NULL,
+           locked_until = NULL,
+           lease_owner = NULL,
+           error_code = NULL,
+           error_subcode = NULL,
+           retryable = 1,
+           log = 'Đã đặt lại - Chờ xử lý',
+           video_id = '',
+           post_id = '',
+           video_url = '',
+           updated_at = ?
+       WHERE id = ? AND owner_user_id = ?`
     )
+    .bind(now, taskId, ownerUserId)
+    .run();
+  return true;
+}
+
+export async function deleteTask(
+  db: D1Database,
+  taskId: number,
+  ownerUserId: string
+): Promise<{ deleted: boolean; orphanMediaId?: string | null }> {
+  const existing = await getTask(db, taskId, ownerUserId);
+  if (!existing) return { deleted: false };
+
+  await db
+    .prepare("DELETE FROM tasks WHERE id = ? AND owner_user_id = ?")
     .bind(taskId, ownerUserId)
     .run();
-  return (res.meta?.changes || 0) > 0;
+
+  let orphanMediaId: string | null = null;
+  if (existing.media_id) {
+    const otherRef = await db
+      .prepare("SELECT COUNT(*) AS cnt FROM tasks WHERE media_id = ? AND owner_user_id = ?")
+      .bind(existing.media_id, ownerUserId)
+      .first<{ cnt: number }>();
+    if (!otherRef || Number(otherRef.cnt) === 0) {
+      orphanMediaId = existing.media_id;
+    }
+  }
+
+  return { deleted: true, orphanMediaId };
 }
 
 export async function resetRunningTasks(
   db: D1Database,
   ownerUserId: string
 ): Promise<number> {
+  const now = new Date().toISOString();
   const res = await db
     .prepare(
-      "UPDATE tasks SET status = 'pending', log = 'Đã dừng khẩn cấp' WHERE status = 'running' AND owner_user_id = ?"
+      `UPDATE tasks
+       SET status = 'pending',
+           locked_until = NULL,
+           lease_owner = NULL,
+           next_retry_at = NULL,
+           log = 'Đã dừng theo yêu cầu người dùng -> Chờ chạy lại',
+           updated_at = ?
+       WHERE status IN ('running', 'queued', 'processing') AND owner_user_id = ?`
     )
-    .bind(ownerUserId)
+    .bind(now, ownerUserId)
     .run();
   return res.meta?.changes || 0;
 }
 
-export async function updateTaskStatus(
-  db: D1Database,
-  taskId: number,
-  ownerUserId: string,
-  update: {
-    status: string;
-    log?: string | null;
-    videoUrl?: string | null;
-    metaVideoId?: string | null;
-    metaPostId?: string | null;
-    errorMessage?: string | null;
-    doneTime?: string | null;
-  }
-): Promise<void> {
-  await db
-    .prepare(
-      `UPDATE tasks SET
-        status = ?,
-        log = COALESCE(?, log),
-        video_url = COALESCE(?, video_url),
-        meta_video_id = COALESCE(?, meta_video_id),
-        meta_post_id = COALESCE(?, meta_post_id),
-        error_message = COALESCE(?, error_message),
-        done_time = COALESCE(?, done_time)
-      WHERE id = ? AND owner_user_id = ?`
-    )
-    .bind(
-      update.status,
-      update.log ?? null,
-      update.videoUrl ?? null,
-      update.metaVideoId ?? null,
-      update.metaPostId ?? null,
-      update.errorMessage ?? null,
-      update.doneTime ?? null,
-      taskId,
-      ownerUserId
-    )
-    .run();
-}
-
 export async function getPendingTasks(
   db: D1Database,
-  options: {
-    facebookPageIds?: string[] | null;
-    taskIds?: number[] | null;
-    ownerUserId: string;
-  }
+  selectedPagesOnly = true,
+  ownerUserId: string
 ): Promise<TaskRecord[]> {
-  let query = `
-    SELECT
-      t.id,
-      t.profile_id,
-      t.facebook_page_id,
-      p.name AS page_name,
-      t.video_path,
-      t.caption,
-      t.link_ac,
-      t.comment_text,
-      t.schedule_date,
-      t.schedule_time,
-      t.status,
-      t.video_url,
-      t.meta_video_id,
-      t.meta_post_id,
-      t.publish_mode,
-      t.error_message,
-      t.log,
-      t.done_time,
-      t.owner_user_id,
-      t.created_at
-    FROM tasks t
-    LEFT JOIN facebook_pages p
-      ON t.facebook_page_id = p.facebook_page_id AND p.owner_user_id = t.owner_user_id
-    WHERE t.status = 'pending' AND t.owner_user_id = ?
-  `;
-  const binds: unknown[] = [options.ownerUserId];
+  const allPending = await getTasks(db, {
+    status: "pending",
+    ownerUserId
+  });
 
-  if (options.taskIds && options.taskIds.length > 0) {
-    const placeholders = options.taskIds.map(() => "?").join(",");
-    query += ` AND t.id IN (${placeholders})`;
-    binds.push(...options.taskIds);
-  } else if (options.facebookPageIds && options.facebookPageIds.length > 0) {
-    const cleanPids = options.facebookPageIds.map((id) => id.trim()).filter(Boolean);
-    if (cleanPids.length > 0) {
-      const placeholders = cleanPids.map(() => "?").join(",");
-      query += ` AND t.facebook_page_id IN (${placeholders})`;
-      binds.push(...cleanPids);
+  if (!selectedPagesOnly) return allPending;
+
+  const selectedPages = await getFacebookPages(db, "", {
+    selectedOnly: true,
+    includeToken: false,
+    ownerUserId
+  });
+  const selectedIds = new Set(selectedPages.map((p) => p.facebook_page_id));
+  return allPending.filter((t) => t.facebook_page_id && selectedIds.has(t.facebook_page_id));
+}
+
+/**
+ * Atomic Lease Acquisition cho Queue Consumer (Tránh 2 consumer xử lý trùng 1 task)
+ */
+export async function claimTaskLease(
+  db: D1Database,
+  taskId: number,
+  leaseOwner: string,
+  leaseSeconds = 120
+): Promise<TaskRecord | null> {
+  const now = nowUtcSeconds();
+  const lockedUntil = now + leaseSeconds;
+  const isoNow = new Date().toISOString();
+
+  const res = await db
+    .prepare(
+      `UPDATE tasks
+       SET status = 'processing',
+           locked_until = ?,
+           lease_owner = ?,
+           attempt_count = attempt_count + 1,
+           updated_at = ?
+       WHERE id = ?
+         AND status IN ('pending', 'queued', 'processing')
+         AND status != 'success'
+         AND status != 'cancelled'
+         AND (locked_until IS NULL OR locked_until < ?)`
+    )
+    .bind(lockedUntil, leaseOwner, isoNow, taskId, now)
+    .run();
+
+  if ((res.meta?.changes || 0) === 0) {
+    return null;
+  }
+
+  const row = await db
+    .prepare("SELECT * FROM tasks WHERE id = ?")
+    .bind(taskId)
+    .first<Record<string, unknown>>();
+  if (!row) return null;
+
+  return getTask(db, taskId, String(row.owner_user_id));
+}
+
+// ==========================================
+// 7. DATA DELETION COMPLIANCE (META CALLBACK)
+// ==========================================
+
+export async function executeUserDataDeletion(
+  db: D1Database,
+  params: {
+    confirmationCode: string;
+    facebookUserId?: string | null;
+    ownerUserId?: string | null;
+  }
+): Promise<{
+  confirmation_code: string;
+  status: string;
+  deleted_summary: Record<string, number>;
+  requested_at: string;
+  completed_at: string;
+}> {
+  const now = new Date().toISOString();
+  let targetUserId = params.ownerUserId || null;
+
+  if (!targetUserId && params.facebookUserId) {
+    const acc = await db
+      .prepare("SELECT owner_user_id FROM facebook_accounts WHERE facebook_user_id = ? LIMIT 1")
+      .bind(params.facebookUserId)
+      .first<{ owner_user_id: string }>();
+    if (acc?.owner_user_id) {
+      targetUserId = acc.owner_user_id;
     }
   }
 
-  query += " ORDER BY t.id ASC";
-  const res = await db
-    .prepare(query)
-    .bind(...binds)
-    .all<TaskRecord>();
-  return res.results || [];
-}
+  const summary: Record<string, number> = {
+    facebook_accounts: 0,
+    facebook_pages: 0,
+    facebook_account_pages: 0,
+    tasks: 0,
+    media_files: 0
+  };
 
-// ==========================================
-// 6. UPLOADED VIDEOS STORAGE (R2 / D1)
-// ==========================================
+  if (params.facebookUserId) {
+    const accs = await db
+      .prepare("SELECT id, owner_user_id FROM facebook_accounts WHERE facebook_user_id = ?")
+      .bind(params.facebookUserId)
+      .all<{ id: string; owner_user_id: string }>();
 
-export interface UploadedVideoRecord {
-  id: string;
-  owner_user_id: string;
-  filename: string;
-  mime_type: string;
-  file_size: number;
-  r2_key: string | null;
-  data_base64: string | null;
-  created_at: string;
-}
+    for (const a of accs.results || []) {
+      const r1 = await db
+        .prepare("DELETE FROM facebook_account_pages WHERE facebook_account_id = ?")
+        .bind(a.id)
+        .run();
+      summary.facebook_account_pages += r1.meta?.changes || 0;
 
-export async function saveUploadedVideo(
-  db: D1Database,
-  params: {
-    id: string;
-    ownerUserId: string;
-    filename: string;
-    mimeType: string;
-    fileSize: number;
-    r2Key?: string | null;
-    dataBase64?: string | null;
+      const r2 = await db
+        .prepare("DELETE FROM facebook_accounts WHERE id = ?")
+        .bind(a.id)
+        .run();
+      summary.facebook_accounts += r2.meta?.changes || 0;
+    }
+  } else if (targetUserId) {
+    const [r1, r2, r3, r4, r5] = await db.batch([
+      db.prepare("DELETE FROM facebook_account_pages WHERE owner_user_id = ?").bind(targetUserId),
+      db.prepare("DELETE FROM facebook_pages WHERE owner_user_id = ?").bind(targetUserId),
+      db.prepare("DELETE FROM facebook_accounts WHERE owner_user_id = ?").bind(targetUserId),
+      db.prepare("DELETE FROM tasks WHERE owner_user_id = ?").bind(targetUserId),
+      db.prepare("DELETE FROM media_files WHERE owner_user_id = ?").bind(targetUserId)
+    ]);
+    summary.facebook_account_pages = r1.meta?.changes || 0;
+    summary.facebook_pages = r2.meta?.changes || 0;
+    summary.facebook_accounts = r3.meta?.changes || 0;
+    summary.tasks = r4.meta?.changes || 0;
+    summary.media_files = r5.meta?.changes || 0;
   }
-): Promise<void> {
+
   await db
     .prepare(
-      `INSERT INTO uploaded_videos (id, owner_user_id, filename, mime_type, file_size, r2_key, data_base64, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO data_deletion_requests (
+         confirmation_code, facebook_user_id, owner_user_id, status, deleted_summary, requested_at, completed_at
+       ) VALUES (?, ?, ?, 'completed', ?, ?, ?)`
     )
     .bind(
-      params.id,
-      params.ownerUserId,
-      params.filename,
-      params.mimeType || "video/mp4",
-      params.fileSize,
-      params.r2Key || null,
-      params.dataBase64 || null,
-      nowIsoSql()
+      params.confirmationCode,
+      params.facebookUserId || null,
+      targetUserId,
+      JSON.stringify(summary),
+      now,
+      now
     )
     .run();
+
+  return {
+    confirmation_code: params.confirmationCode,
+    status: "completed",
+    deleted_summary: summary,
+    requested_at: now,
+    completed_at: now
+  };
 }
 
-export async function getUploadedVideo(
+export async function getDataDeletionRequest(
   db: D1Database,
-  videoId: string,
-  ownerUserId?: string
-): Promise<UploadedVideoRecord | null> {
-  if (ownerUserId) {
-    return db
-      .prepare(
-        "SELECT * FROM uploaded_videos WHERE id = ? AND owner_user_id = ? LIMIT 1"
-      )
-      .bind(videoId.trim(), ownerUserId)
-      .first<UploadedVideoRecord>();
-  }
+  confirmationCode: string
+): Promise<Record<string, unknown> | null> {
+  if (!confirmationCode) return null;
   return db
-    .prepare("SELECT * FROM uploaded_videos WHERE id = ? LIMIT 1")
-    .bind(videoId.trim())
-    .first<UploadedVideoRecord>();
+    .prepare("SELECT * FROM data_deletion_requests WHERE confirmation_code = ?")
+    .bind(confirmationCode)
+    .first<Record<string, unknown>>();
 }
