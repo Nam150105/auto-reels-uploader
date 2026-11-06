@@ -44,6 +44,7 @@ import {
   PRODUCTION_DOMAIN,
   generateOAuthUrl,
   exchangeCodeForToken,
+  connectWithAccessToken,
   getConnectionStatus
 } from "./services/metaOAuthService.ts";
 import {
@@ -368,12 +369,15 @@ export async function handleWorkerRequest(
     }
 
     if (pathname === "/api/meta/oauth-url" && method === "GET") {
-      const reconnectId = url.searchParams.get("reconnect_account_id");
+      const reconnectId = url.searchParams.get("reconnect_account_id") || url.searchParams.get("account_id");
+      const customRedirectUri = url.searchParams.get("redirect_uri");
       const res = await generateOAuthUrl(
         db,
         env,
         ownerUserId,
-        reconnectId || null
+        reconnectId || null,
+        reconnectId ? "reconnect" : "connect",
+        customRedirectUri || null
       );
       if (!res.success) {
         return jsonResponse({ detail: res.message }, 400);
@@ -382,17 +386,71 @@ export async function handleWorkerRequest(
     }
 
     if (pathname === "/api/meta/login" && method === "GET") {
-      const reconnectId = url.searchParams.get("reconnect_account_id");
+      const reconnectId = url.searchParams.get("reconnect_account_id") || url.searchParams.get("account_id");
+      const customRedirectUri = url.searchParams.get("redirect_uri");
       const res = await generateOAuthUrl(
         db,
         env,
         ownerUserId,
-        reconnectId || null
+        reconnectId || null,
+        reconnectId ? "reconnect" : "connect",
+        customRedirectUri || null
       );
       if (!res.success || !res.oauth_url) {
         return jsonResponse({ detail: res.message || "Lỗi khởi tạo OAuth" }, 400);
       }
       return Response.redirect(res.oauth_url, 302);
+    }
+
+    if (pathname === "/api/meta/connect-token" && method === "POST") {
+      try {
+        const body = (await request.json()) as {
+          access_token?: string;
+          account_id?: string | null;
+        };
+        const connRes = await connectWithAccessToken(
+          db,
+          env,
+          body.access_token || "",
+          ownerUserId,
+          body.account_id || null
+        );
+        if (!connRes.success || !connRes.account_id) {
+          return jsonResponse(
+            { detail: connRes.message || "Không thể kết nối bằng Access Token." },
+            400
+          );
+        }
+
+        const syncRes = await syncPagesForAccount(
+          db,
+          env,
+          connRes.account_id,
+          ownerUserId
+        );
+        const pages = await getFacebookPages(db, encryptionKey, {
+          includeToken: false,
+          ownerUserId
+        });
+
+        return jsonResponse({
+          success: true,
+          account_id: connRes.account_id,
+          user_id: connRes.user_id,
+          user_name: connRes.user_name,
+          token_expires_at: connRes.token_expires_at,
+          is_long_lived: connRes.is_long_lived,
+          synced_count: syncRes.synced_count || 0,
+          sync_message: syncRes.message,
+          pages,
+          message: `${connRes.message}. Đã đồng bộ ${syncRes.synced_count || 0} Fanpage.`
+        });
+      } catch (err) {
+        return jsonResponse(
+          { detail: `Dữ liệu gửi lên không hợp lệ: ${(err as Error).message}` },
+          400
+        );
+      }
     }
 
     if (pathname === "/api/meta/sync-pages" && method === "POST") {
@@ -425,8 +483,8 @@ export async function handleWorkerRequest(
       return jsonResponse({ ...res, pages });
     }
 
-    const reconnectAccMatch = /^\/api\/meta\/accounts\/([^/]+)\/reconnect$/.exec(pathname);
-    if (reconnectAccMatch && method === "POST") {
+    const reconnectAccMatch = /^\/api\/meta\/accounts\/([^/]+)\/reconnect(?:-url)?$/.exec(pathname);
+    if (reconnectAccMatch && (method === "POST" || method === "GET")) {
       const accountId = decodeURIComponent(reconnectAccMatch[1]);
       const acc = await getFacebookAccountById(
         db,
