@@ -655,6 +655,21 @@ async function runAll30Tests() {
   });
   assert.equal(cbA2.status, 200);
 
+  // Kiểm tra kết nối trực tiếp bằng Access Token (/api/meta/connect-token) không cần Redirect URI
+  const directConnResp = await callWorker("/api/meta/connect-token", {
+    method: "POST",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ access_token: "EAAB_TOKEN_A2_SHORT" })
+  });
+  assert.equal(directConnResp.status, 200);
+  const directConnData = await directConnResp.json();
+  assert.equal(directConnData.success, true);
+  assert.equal(directConnData.is_long_lived, true);
+  assert.equal(directConnData.synced_count, 1);
+
   // Kiểm tra danh sách Fanpage của User A (Phân trang /me/accounts + Chống trùng lặp Page)
   const pagesAResp = await callWorker("/api/pages", {
     headers: { Cookie: `session_token=${tokenA}` }

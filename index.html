@@ -122,7 +122,7 @@
         </button>
 
         <!-- Nút + Thêm Admin -->
-        <button @click="startMetaOAuthFlow()" class="flex items-center gap-1 text-xs px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition shadow-sm active:scale-95" title="Kết nối thêm tài khoản Facebook Admin mới qua Meta OAuth">
+        <button @click="openConnectModal()" class="flex items-center gap-1 text-xs px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition shadow-sm active:scale-95" title="Kết nối thêm tài khoản Facebook Admin mới (Access Token hoặc Meta OAuth)">
           <span>+ Thêm Admin</span>
         </button>
 
@@ -767,7 +767,7 @@
                 <span>Đồng Bộ Toàn Bộ Pages</span>
               </button>
 
-              <button @click="startMetaOAuthFlow()" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-md active:scale-95">
+              <button @click="openConnectModal()" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-md active:scale-95">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
                 <span>+ Thêm Tài Khoản Facebook</span>
               </button>
@@ -781,7 +781,7 @@
             <p class="text-xs text-slate-400 max-w-md mx-auto">
               Hãy kết nối tài khoản Facebook đầu tiên để tự động tải danh sách Fanpage và bắt đầu lên lịch đăng Reels.
             </p>
-            <button @click="startMetaOAuthFlow()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg transition">
+            <button @click="openConnectModal()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg transition">
               🔗 Kết Nối Tài Khoản Facebook Ngay
             </button>
           </div>
@@ -880,62 +880,102 @@
       </div>
     </div>
 
-    <!-- ================= MODAL: KẾT NỐI FACEBOOK ADMIN (OAUTH GUIDE) ================= -->
+    <!-- ================= MODAL: KẾT NỐI FACEBOOK ADMIN (TOKEN TRỰC TIẾP & OAUTH) ================= -->
     <div v-if="showConnectModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         
-        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
           <div class="flex items-center gap-2">
             <span class="text-xl">🔗</span>
-            <h3 class="font-bold text-white text-base">Kết Nối Facebook Admin (Meta OAuth)</h3>
+            <h3 class="font-bold text-white text-base">Kết Nối Tài Khoản Facebook Admin</h3>
           </div>
           <button @click="showConnectModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
         </div>
 
-        <div class="p-5 space-y-4">
+        <div class="p-5 overflow-y-auto space-y-4">
           
-          <!-- Trạng thái hiện tại -->
-          <div class="p-3.5 rounded-xl border flex items-center justify-between"
-               :class="metaStatus.is_connected ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300' : 'bg-slate-950/60 border-slate-800 text-slate-300'">
-            <div>
-              <div class="text-xs font-bold">Trạng Thái Kết Nối:</div>
-              <div class="text-sm font-extrabold mt-0.5">
-                {{ metaStatus.is_connected ? '🟢 Đã Kết Nối: ' + metaStatus.user_name : '🔴 Chưa kết nối tài khoản Facebook' }}
-              </div>
-              <div v-if="metaStatus.is_connected" class="text-[11px] text-slate-400 mt-1 font-mono">
-                User ID: {{ metaStatus.user_id }} • Hạn: {{ metaStatus.token_expires_at }}
-              </div>
-            </div>
-            <button v-if="metaStatus.is_connected" @click="handleDisconnectMeta" class="px-3 py-1.5 bg-rose-600/30 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition">
-              Ngắt Kết Nối
+          <!-- Chuyển đổi 2 phương thức kết nối -->
+          <div class="grid grid-cols-2 gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+            <button @click="connectMethodTab = 'token'"
+                    class="py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
+                    :class="connectMethodTab === 'token' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'">
+              <span>⚡ Cách 1: Dán Access Token (Khuyên dùng)</span>
+            </button>
+            <button @click="connectMethodTab = 'oauth'"
+                    class="py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
+                    :class="connectMethodTab === 'oauth' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'">
+              <span>🔗 Cách 2: Đăng Nhập Facebook OAuth</span>
             </button>
           </div>
 
-          <!-- Hướng dẫn các bước kết nối -->
-          <div class="space-y-2.5 text-xs text-slate-300">
-            <div class="font-bold text-white">Quy trình cấp quyền chuẩn Meta:</div>
-            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-[11px] leading-relaxed">
-              <div class="flex items-start gap-2">
-                <span class="font-bold text-blue-400">1.</span>
-                <span>Hệ thống chuyển hướng bạn đến cổng xác thực chính thức của <b>Facebook Login OAuth 2.0</b> kèm mã bảo mật chống CSRF.</span>
+          <!-- ================= TAB 1: KẾT NỐI NHANH BẰNG ACCESS TOKEN (KHÔNG BAO GIỜ LỖI DOMAIN) ================= -->
+          <div v-if="connectMethodTab === 'token'" class="space-y-3.5">
+            <div class="p-3 bg-emerald-950/30 border border-emerald-800/40 rounded-xl text-xs text-emerald-300 leading-relaxed">
+              <b>✅ Ưu điểm tuyệt đối:</b> Không bao giờ gặp lỗi <i>"Không thể tải URL: Miền của URL này không được đưa vào miền của ứng dụng"</i>. Hệ thống tự động đổi sang <b>Long-Lived Token (60 ngày)</b>, mã hóa AES-256-GCM và đồng bộ toàn bộ Fanpage ngay lập tức!
+            </div>
+
+            <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs text-slate-300">
+              <div class="font-bold text-white flex items-center justify-between">
+                <span>Hướng dẫn lấy Token trong 15 giây:</span>
+                <a :href="metaStatus.graph_explorer_url || 'https://developers.facebook.com/tools/explorer/1469615908436980/?method=GET&path=me%2Faccounts&version=v19.0'"
+                   target="_blank" rel="noopener"
+                   class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-[11px] transition shadow">
+                  ↗ 1. Mở Graph API Explorer (App 1469615908436980)
+                </a>
               </div>
-              <div class="flex items-start gap-2">
-                <span class="font-bold text-blue-400">2.</span>
-                <span>Bạn đồng ý cấp các quyền bắt buộc: <code class="text-cyan-400">pages_show_list</code>, <code class="text-cyan-400">pages_read_engagement</code>, <code class="text-cyan-400">pages_manage_posts</code>, <code class="text-cyan-400">publish_video</code>.</span>
+              <div class="space-y-1.5 text-[11px] leading-relaxed text-slate-300">
+                <div><b class="text-emerald-400">Bước 1:</b> Bấm nút <b>Mở Graph API Explorer</b> ở trên. Ở cột bên phải, mục <b>Meta App</b> chọn <code class="text-cyan-300">Quản lý page</code>, mục <b>User or Page</b> chọn <code class="text-cyan-300">Get User Access Token</code>.</div>
+                <div><b class="text-emerald-400">Bước 2:</b> Tại mục <b>Permissions</b>, thêm các quyền: <code class="text-cyan-300">pages_show_list</code>, <code class="text-cyan-300">pages_read_engagement</code>, <code class="text-cyan-300">pages_manage_posts</code>, <code class="text-cyan-300">pages_manage_engagement</code> rồi bấm nút xanh <b>Generate Access Token</b>.</div>
+                <div><b class="text-emerald-400">Bước 3:</b> Copy chuỗi mã ở ô <b>Access Token</b> phía trên cùng và dán vào ô bên dưới:</div>
               </div>
-              <div class="flex items-start gap-2">
-                <span class="font-bold text-blue-400">3.</span>
-                <span>Cloudflare Worker tự động nâng cấp sang <b>Long-lived Token (60 ngày)</b>, mã hóa đối xứng an toàn bằng AES-256-GCM trong Cloudflare D1 và đồng bộ toàn bộ Fanpage mà bạn có quyền quản lý.</span>
-              </div>
+            </div>
+
+            <div class="space-y-1.5">
+              <label class="block text-xs font-bold text-slate-200">Dán User Access Token (hoặc Page Access Token) vào đây:</label>
+              <textarea v-model="directAccessToken" rows="3"
+                        placeholder="Dán chuỗi Access Token bắt đầu bằng EAA... từ Graph API Explorer vào đây"
+                        class="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl p-3 text-xs text-white font-mono focus:outline-none"></textarea>
             </div>
           </div>
 
-          <!-- Lưu ý cấu hình Meta App Production -->
-          <div class="p-3 bg-amber-950/20 border border-amber-800/40 rounded-xl text-[11px] text-amber-300/90 space-y-1">
-            <div class="font-bold">⚠️ Lưu ý quan trọng về Meta App:</div>
-            <div>Trong Meta Developer Portal &gt; App &gt; Facebook Login Settings, hãy chắc chắn đã điền <b>Valid OAuth Redirect URIs</b> là:</div>
-            <div class="font-mono bg-black/40 px-2 py-1 rounded text-cyan-300 select-all">
-              https://pagefb.namnangno.click/api/meta/callback
+          <!-- ================= TAB 2: ĐĂNG NHẬP QUA FACEBOOK OAUTH REDIRECT ================= -->
+          <div v-else class="space-y-3.5">
+            <div class="p-3.5 bg-amber-950/25 border border-amber-700/50 rounded-xl text-xs text-amber-200 space-y-2.5">
+              <div class="font-bold text-amber-300 flex items-center gap-1.5">
+                <span>🛠️ Cách sửa dứt điểm lỗi "Không thể tải URL: Miền của URL này không được đưa vào miền của ứng dụng":</span>
+              </div>
+              <div class="text-[11px] text-slate-300 space-y-2 leading-relaxed">
+                <div class="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <b class="text-white">Bước 1: Khai báo Miền ứng dụng &amp; Nền tảng Website</b>
+                    <a href="https://developers.facebook.com/apps/1469615908436980/settings/basic/" target="_blank" rel="noopener" class="text-blue-400 hover:underline font-bold">↗ Mở Cài đặt Cơ bản App</a>
+                  </div>
+                  <div>• Tại ô <b>Miền ứng dụng (App Domains)</b>: gõ tên miền bên dưới rồi <b>nhấn phím Enter</b> để tạo thẻ tag:</div>
+                  <div class="flex items-center justify-between bg-black/50 px-2.5 py-1.5 rounded font-mono text-cyan-300">
+                    <span>pagefb.namnangno.click</span>
+                    <button @click="copyToClipboard('pagefb.namnangno.click')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px] font-sans">Sao chép</button>
+                  </div>
+                  <div>• Kéo xuống cuối trang &rarr; Bấm <b>+ Thêm nền tảng (Add Platform)</b> &rarr; Chọn <b>Trang web (Website)</b> &rarr; Điền <b>URL trang web (Site URL)</b> là <code class="text-cyan-300">https://pagefb.namnangno.click/</code> &rarr; Bấm <b>Lưu thay đổi</b>.</div>
+                </div>
+
+                <div class="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <b class="text-white">Bước 2: Thêm URI chuyển hướng OAuth hợp lệ</b>
+                    <a href="https://developers.facebook.com/apps/1469615908436980/fb-login/settings/" target="_blank" rel="noopener" class="text-blue-400 hover:underline font-bold">↗ Mở Facebook Login Settings</a>
+                  </div>
+                  <div>• Tại ô <b>URI chuyển hướng OAuth hợp lệ (Valid OAuth Redirect URIs)</b>, dán URL bên dưới rồi <b>nhấn phím Enter</b> &rarr; Bấm <b>Lưu thay đổi</b>:</div>
+                  <div class="flex items-center justify-between bg-black/50 px-2.5 py-1.5 rounded font-mono text-cyan-300">
+                    <span>https://pagefb.namnangno.click/api/meta/callback</span>
+                    <button @click="copyToClipboard('https://pagefb.namnangno.click/api/meta/callback')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px] font-sans">Sao chép</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-1">
+              <label class="block text-[11px] font-bold text-slate-300">Redirect URI sử dụng khi gọi OAuth:</label>
+              <input type="text" v-model="customRedirectUri"
+                     class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-cyan-300 font-mono focus:outline-none focus:border-blue-500">
             </div>
           </div>
 
@@ -943,9 +983,17 @@
 
         <div class="px-5 py-3.5 border-t border-slate-800 flex justify-end gap-2.5 bg-slate-900">
           <button @click="showConnectModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
-          <button @click="startMetaOAuthFlow" class="flex items-center gap-2 px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-900/40 transition active:scale-95">
+          <button v-if="connectMethodTab === 'token'"
+                  @click="handleConnectWithToken"
+                  :disabled="isConnectingToken"
+                  class="flex items-center gap-2 px-6 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-emerald-900/40 transition active:scale-95">
+            <span>{{ isConnectingToken ? '⏳ Đang xác thực & đồng bộ Fanpage...' : '⚡ Kết Nối & Đồng Bộ Fanpage Ngay' }}</span>
+          </button>
+          <button v-else
+                  @click="startMetaOAuthFlow()"
+                  class="flex items-center gap-2 px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-900/40 transition active:scale-95">
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
-            <span>Đăng Nhập Với Facebook Ngay</span>
+            <span>Tiếp Tục Tới Facebook OAuth</span>
           </button>
         </div>
 

@@ -116,6 +116,11 @@
     });
 
     const showConnectModal = ref(false);
+    const connectMethodTab = ref('token'); // 'token' (Khuyên dùng - không lỗi domain) | 'oauth'
+    const directAccessToken = ref('');
+    const isConnectingToken = ref(false);
+    const reconnectTargetAccountId = ref(null);
+    const customRedirectUri = ref(window.location.origin + '/api/meta/callback');
     const showSingleTaskModal = ref(false);
     const showBulkTaskModal = ref(false);
     const showEditTaskModal = ref(false);
@@ -312,7 +317,8 @@
     // ==========================================
     // 6. META OAUTH & PAGE MANAGEMENT ACTIONS
     // ==========================================
-    function openConnectModal() {
+    function openConnectModal(accountId = null) {
+      reconnectTargetAccountId.value = accountId && typeof accountId === 'string' ? accountId : null;
       showConnectModal.value = true;
     }
 
@@ -321,12 +327,49 @@
       loadAccounts();
     }
 
-    function startMetaOAuthFlow(accountId = null) {
-      let url = '/api/meta/login?auth_type=rerequest';
-      if (accountId) {
-        url += `&account_id=${encodeURIComponent(accountId)}`;
+    async function handleConnectWithToken() {
+      const token = (directAccessToken.value || '').trim();
+      if (!token) {
+        showToast("Vui lòng dán chuỗi Access Token (EAAB...) từ Graph API Explorer.", "error");
+        return;
       }
-      window.location.href = url;
+      isConnectingToken.value = true;
+      try {
+        const res = await fetch('/api/meta/connect-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_token: token,
+            account_id: reconnectTargetAccountId.value
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          directAccessToken.value = '';
+          reconnectTargetAccountId.value = null;
+          showConnectModal.value = false;
+          showToast(data.message || "Kết nối Facebook Admin và đồng bộ Fanpage thành công!", "success");
+          await loadAll();
+        } else {
+          showToast(data.detail || data.message || "Kết nối bằng Access Token thất bại.", "error");
+        }
+      } catch (err) {
+        showToast("Lỗi gọi API kết nối Token: " + err.message, "error");
+      } finally {
+        isConnectingToken.value = false;
+      }
+    }
+
+    function startMetaOAuthFlow(accountId = null) {
+      const targetId = (accountId && typeof accountId === 'string') ? accountId : reconnectTargetAccountId.value;
+      const params = new URLSearchParams({ auth_type: 'rerequest' });
+      if (targetId) {
+        params.set('account_id', targetId);
+      }
+      if (customRedirectUri.value && customRedirectUri.value.trim()) {
+        params.set('redirect_uri', customRedirectUri.value.trim());
+      }
+      window.location.href = `/api/meta/login?${params.toString()}`;
     }
 
     async function handleDisconnectMeta() {
@@ -378,17 +421,7 @@
     }
 
     async function handleReconnectAccount(accountId) {
-      try {
-        const res = await fetch(`/api/meta/accounts/${accountId}/reconnect-url`);
-        const data = await res.json();
-        if (res.ok && data.oauth_url) {
-          window.location.href = data.oauth_url;
-        } else {
-          showToast(data.detail || "Không thể tạo liên kết kết nối lại.", "error");
-        }
-      } catch (err) {
-        showToast("Lỗi kết nối: " + err.message, "error");
-      }
+      openConnectModal(accountId);
     }
 
     async function handleDisconnectAccount(accountId) {
@@ -1069,6 +1102,11 @@
       showRunTestModal,
       testResult,
       showConnectModal,
+      connectMethodTab,
+      directAccessToken,
+      isConnectingToken,
+      reconnectTargetAccountId,
+      customRedirectUri,
       showAccountsModal,
       showSingleTaskModal,
       showBulkTaskModal,
@@ -1089,6 +1127,7 @@
       loadTasks,
       openConnectModal,
       openAccountsModal,
+      handleConnectWithToken,
       startMetaOAuthFlow,
       handleDisconnectMeta,
       handleSyncPages,

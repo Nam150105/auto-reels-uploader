@@ -90,7 +90,40 @@ export async function syncPagesForAccount(
       if (!resp.ok || data.error) {
         const err = (data.error || {}) as Record<string, unknown>;
         const code = Number(err.code || 0);
-        const msg = sanitizeSensitiveText(String(err.message || "Lỗi gọi /me/accounts"));
+        const rawErrMsg = String(err.message || "Lỗi gọi /me/accounts");
+        const msg = sanitizeSensitiveText(rawErrMsg);
+
+        // Trường hợp người dùng dán trực tiếp Page Access Token (node type Page không có /accounts)
+        if (code === 100 && /node type \(Page\)/i.test(rawErrMsg)) {
+          const pageMeResp = await fetch(
+            `${cfg.graphBase}/me?fields=id,name,category,picture{url},tasks,is_published&access_token=${encodeURIComponent(userToken)}`
+          );
+          if (pageMeResp.ok) {
+            const pageMe = (await pageMeResp.json()) as Record<string, unknown>;
+            if (pageMe.id) {
+              const picObj = (pageMe.picture as { data?: { url?: string } }) || {};
+              const tasksList = Array.isArray(pageMe.tasks)
+                ? pageMe.tasks.map((t) => String(t).toUpperCase())
+                : ["CREATE_CONTENT", "MANAGE"];
+              await upsertFacebookPage(db, cfg.encryptionKey, {
+                facebookPageId: String(pageMe.id),
+                pageName: String(pageMe.name || account.facebook_user_name || "Fanpage"),
+                category: String(pageMe.category || "Page"),
+                avatarUrl: String(picObj.data?.url || ""),
+                pageAccessToken: userToken,
+                tasks: tasksList,
+                canPost: true,
+                isPublished: pageMe.is_published !== false,
+                connectedAccountId: accountId,
+                tokenStatus: "valid",
+                ownerUserId
+              });
+              syncedCount++;
+              break;
+            }
+          }
+        }
+
         const isAuthErr = code === 190 || code === 102 || code === 10 || code === 200;
 
         await updateFacebookAccountStatus(

@@ -56,7 +56,8 @@ export async function generateOAuthUrl(
   env: Env,
   ownerUserId: string,
   reconnectAccountId: string | null = null,
-  actionType = "connect"
+  actionType = "connect",
+  customRedirectUri: string | null = null
 ): Promise<{
   success: boolean;
   oauth_url?: string;
@@ -71,8 +72,13 @@ export async function generateOAuthUrl(
     return {
       success: false,
       message:
-        "Thiếu cấu hình META_APP_ID hoặc META_APP_SECRET trên Cloudflare Worker Secrets. Vui lòng chạy `npx wrangler secret put META_APP_SECRET`."
+        "Thiếu cấu hình META_APP_ID hoặc META_APP_SECRET trên Cloudflare Worker Secrets. Vui lòng chạy `npx wrangler secret put META_APP_SECRET` hoặc dùng Cách 1: Dán trực tiếp Access Token."
     };
+  }
+
+  let effectiveRedirectUri = cfg.redirectUri;
+  if (customRedirectUri && /^https?:\/\/[^/\s]+\/api\/meta\/callback$/i.test(customRedirectUri.trim())) {
+    effectiveRedirectUri = customRedirectUri.trim();
   }
 
   const state = randomHex(24);
@@ -82,13 +88,13 @@ export async function generateOAuthUrl(
     ownerUserId,
     reconnectAccountId,
     reconnectAccountId ? "reconnect" : actionType,
-    "/pages",
+    effectiveRedirectUri,
     600
   );
 
   const params = new URLSearchParams({
     client_id: cfg.appId,
-    redirect_uri: cfg.redirectUri,
+    redirect_uri: effectiveRedirectUri,
     state,
     response_type: "code",
     scope: REQUIRED_SCOPES.join(","),
@@ -99,7 +105,7 @@ export async function generateOAuthUrl(
     success: true,
     oauth_url: `${cfg.oauthDialogUrl}?${params.toString()}`,
     state,
-    redirect_uri: cfg.redirectUri,
+    redirect_uri: effectiveRedirectUri,
     app_id: cfg.appId,
     scopes: REQUIRED_SCOPES
   };
@@ -143,11 +149,16 @@ export async function exchangeCodeForToken(
     };
   }
 
+  const effectiveRedirectUri =
+    stateCheck.redirect_after && /^https?:\/\//i.test(stateCheck.redirect_after)
+      ? stateCheck.redirect_after
+      : cfg.redirectUri;
+
   try {
     // Bước 1: Đổi code lấy Short-Lived User Access Token
     const tokenParams = new URLSearchParams({
       client_id: cfg.appId,
-      redirect_uri: cfg.redirectUri,
+      redirect_uri: effectiveRedirectUri,
       client_secret: cfg.appSecret,
       code
     });
@@ -272,6 +283,146 @@ export async function exchangeCodeForToken(
   }
 }
 
+export async function connectWithAccessToken(
+  db: D1Database,
+  env: Env,
+  rawAccessToken: string,
+  ownerUserId: string,
+  reconnectAccountId: string | null = null
+): Promise<{
+  success: boolean;
+  account_id?: string;
+  owner_user_id?: string;
+  user_id?: string;
+  user_name?: string;
+  token_expires_at?: string | null;
+  scopes?: string[];
+  missing_scopes?: string[];
+  is_long_lived?: boolean;
+  message?: string;
+}> {
+  const cleanedToken = (rawAccessToken || "").trim().replace(/^["']|["']$/g, "");
+  if (!cleanedToken || cleanedToken.length < 15) {
+    return {
+      success: false,
+      message: "Vui lòng nhập chuỗi Access Token hợp lệ từ Meta Graph API Explorer."
+    };
+  }
+
+  const cfg = getMetaConfig(env);
+
+  try {
+    // Bước 1: Nếu có META_APP_ID và META_APP_SECRET, tự động nâng cấp sang Long-Lived User Token (~60 ngày)
+    let finalToken = cleanedToken;
+    let expiresIn = 60 * 86400;
+    let isLongLived = false;
+
+    if (cfg.appId && cfg.appSecret) {
+      try {
+        const llParams = new URLSearchParams({
+          grant_type: "fb_exchange_token",
+          client_id: cfg.appId,
+          client_secret: cfg.appSecret,
+          fb_exchange_token: cleanedToken
+        });
+        const llResp = await fetch(
+          `${cfg.graphBase}/oauth/access_token?${llParams.toString()}`
+        );
+        if (llResp.ok) {
+          const llData = (await llResp.json()) as Record<string, unknown>;
+          if (llData.access_token) {
+            finalToken = String(llData.access_token);
+            expiresIn = Number(llData.expires_in || 60 * 86400);
+            isLongLived = true;
+          }
+        }
+      } catch {
+        // Nếu token đã là System User / Long-Lived hoặc không cần exchange, tiếp tục dùng cleanedToken
+      }
+    }
+
+    // Bước 2: Xác thực Token với Meta Graph API (/me)
+    const meResp = await fetch(
+      `${cfg.graphBase}/me?fields=id,name,email&access_token=${encodeURIComponent(finalToken)}`
+    );
+    const meData = (await meResp.json()) as Record<string, unknown>;
+    if (!meResp.ok || !meData.id) {
+      const errObj = (meData.error || {}) as Record<string, unknown>;
+      return {
+        success: false,
+        message: sanitizeSensitiveText(
+          `Access Token không hợp lệ hoặc đã hết hạn: ${errObj.message || "Lỗi xác thực /me trên Graph API"}`
+        )
+      };
+    }
+
+    const fbUserId = String(meData.id);
+    const fbUserName = String(meData.name || "Facebook Admin");
+    const fbUserEmail = meData.email ? String(meData.email) : null;
+
+    // Bước 3: Kiểm tra danh sách quyền đã cấp (/me/permissions)
+    const grantedScopes: string[] = [];
+    try {
+      const permResp = await fetch(
+        `${cfg.graphBase}/me/permissions?access_token=${encodeURIComponent(finalToken)}`
+      );
+      if (permResp.ok) {
+        const permData = (await permResp.json()) as {
+          data?: Array<{ permission: string; status: string }>;
+        };
+        for (const item of permData.data || []) {
+          if (item.status === "granted") {
+            grantedScopes.push(item.permission);
+          }
+        }
+      }
+    } catch {
+      // Nếu là Page Access Token không có node /permissions thì bỏ qua
+    }
+
+    const missingScopes =
+      grantedScopes.length > 0
+        ? REQUIRED_SCOPES.filter((s) => !grantedScopes.includes(s))
+        : [];
+    const expiresAtIso = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+    const accountId = await saveFacebookAccount(db, cfg.encryptionKey, {
+      facebookUserId: fbUserId,
+      facebookUserName: fbUserName,
+      facebookUserEmail: fbUserEmail,
+      accessToken: finalToken,
+      tokenType: isLongLived ? "long_lived_user" : "direct_token",
+      scopes: grantedScopes.length > 0 ? grantedScopes : REQUIRED_SCOPES,
+      missingScopes,
+      tokenExpiresAt: expiresAtIso,
+      status: "connected",
+      tokenStatus: "valid",
+      accountId: reconnectAccountId,
+      ownerUserId
+    });
+
+    return {
+      success: true,
+      account_id: accountId,
+      owner_user_id: ownerUserId,
+      user_id: fbUserId,
+      user_name: fbUserName,
+      token_expires_at: expiresAtIso,
+      scopes: grantedScopes,
+      missing_scopes: missingScopes,
+      is_long_lived: isLongLived,
+      message: `Kết nối thành công tài khoản Facebook Admin: ${fbUserName} (ID: ${fbUserId})`
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: sanitizeSensitiveText(
+        `Lỗi kết nối đến máy chủ Meta Graph API: ${(err as Error).message}`
+      )
+    };
+  }
+}
+
 export async function getConnectionStatus(
   db: D1Database,
   env: Env,
@@ -280,6 +431,13 @@ export async function getConnectionStatus(
   const cfg = getMetaConfig(env);
   const accounts = await getFacebookAccounts(db, cfg.encryptionKey, false, ownerUserId);
   const connectedAccounts = accounts.filter((a) => a.status === "connected");
+  let appDomain = "pagefb.namnangno.click";
+  try {
+    appDomain = new URL(cfg.redirectUri).hostname;
+  } catch {
+    // giữ nguyên default
+  }
+  const graphExplorerUrl = `https://developers.facebook.com/tools/explorer/${cfg.appId}/?method=GET&path=me%2Faccounts&version=${cfg.graphVersion}`;
 
   if (accounts.length === 0) {
     return {
@@ -293,6 +451,10 @@ export async function getConnectionStatus(
       days_remaining: null,
       scopes: [],
       missing_scopes: REQUIRED_SCOPES,
+      app_id: cfg.appId,
+      redirect_uri: cfg.redirectUri,
+      app_domain: appDomain,
+      graph_explorer_url: graphExplorerUrl,
       accounts: []
     };
   }
@@ -311,6 +473,10 @@ export async function getConnectionStatus(
     missing_scopes: primary.missing_scopes,
     last_synced_at: primary.last_synced_at,
     last_error: primary.last_error,
+    app_id: cfg.appId,
+    redirect_uri: cfg.redirectUri,
+    app_domain: appDomain,
+    graph_explorer_url: graphExplorerUrl,
     accounts
   };
 }
