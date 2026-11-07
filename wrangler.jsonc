@@ -36,7 +36,7 @@
 		{
 			"binding": "DB",
 			"database_name": "auto-reels-db",
-			"database_id": "00000000-0000-0000-0000-000000000000",
+			"database_id": "f031d51c-6ae7-4e11-989f-006f4de2fa11",
 			"migrations_dir": "migrations"
 		}
 	],
