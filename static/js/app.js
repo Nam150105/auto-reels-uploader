@@ -1976,6 +1976,29 @@ function setDatePreset(offsetDays) {
       return '—';
     });
 
+    function recalculateBulkExcelSchedules() {
+      const sDate = bulkScheduleForm.value ? bulkScheduleForm.value.schedule_date : '';
+      const sTime = bulkScheduleForm.value ? bulkScheduleForm.value.schedule_time : '';
+      const selected = pages.value.filter(p => p.is_selected);
+      let idx = 0;
+      if (bulkParsedList.value && Array.isArray(bulkParsedList.value)) {
+        for (const item of bulkParsedList.value) {
+          item.schedule_date = sDate;
+          item.schedule_time = sTime;
+          item.schedule_display = `${sDate} ${sTime}`;
+          if (selected.length > 0) {
+            const assignedPage = selected[idx % selected.length];
+            item.assigned_page_id = assignedPage.facebook_page_id;
+            item.assigned_page_name = assignedPage.name;
+          } else {
+            item.assigned_page_id = null;
+            item.assigned_page_name = 'Chưa chọn Fanpage';
+          }
+          idx++;
+        }
+      }
+    }
+
     function setBulkScheduleDatePreset(offsetDays) {
       const slot = getVnNowParts(15 + offsetDays * 1440);
       bulkScheduleForm.value.schedule_date = slot.date;
@@ -4690,9 +4713,6 @@ async function handleDeleteTask(taskId) {
       errorBulkRowCount,
       bulkFirstScheduleDisplay,
       bulkLastScheduleDisplay,
-      bulkSharedScheduleDisplay,
-      maxBulkTasksAllowed,
-      isBulkOverLimit,
       setBulkScheduleDatePreset,
       setBulkScheduleTimePreset,
       setBulkScheduleInterval,
