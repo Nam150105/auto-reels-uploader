@@ -253,12 +253,21 @@
       schedule_time: ''
     });
 
-    // Bulk Task Form
+    // Bulk Task Form (Excel Import & Staggered Scheduling)
     const bulkDataRaw = ref('');
     const bulkAssignMethod = ref('round_robin'); // 'round_robin' | 'specific'
     const bulkSpecificPageId = ref('');
     const bulkParsedList = ref([]);
     const bulkFilesStatus = ref({});
+    const bulkScheduleForm = ref({
+      schedule_date: '',
+      schedule_time: '',
+      interval_minutes: 15,
+      custom_interval: 15
+    });
+    const isUploadingBulkExcelVideos = ref(false);
+    const bulkExcelUploadProgress = ref({ current: 0, total: 0, filename: '' });
+    const isSubmittingBulkTasks = ref(false);
 
     // Log Task Modal Form
     const currentLogTask = ref({ id: null, title: '', log: '', video_url: '' });
@@ -1719,111 +1728,377 @@
     }
 
     // ==========================================
-    // 8. BULK TASK EXCEL IMPORT & LIVE PREVIEW
+    // 8. BULK TASK EXCEL IMPORT & STAGGERED SCHEDULING
     // ==========================================
+    const bulkSchedulePastWarning = computed(() => {
+      const d = (bulkScheduleForm.value.schedule_date || '').trim();
+      const t = (bulkScheduleForm.value.schedule_time || '').trim();
+      if (!d || !t) return '';
+      const check = validateVnScheduleClient(d, t, true);
+      if (!check.valid && check.isPast) {
+        return check.error || 'Thời gian bắt đầu đặt lịch đã qua hoặc trùng hiện tại!';
+      }
+      return '';
+    });
+
+    const validBulkRowCount = computed(() => {
+      return bulkParsedList.value.filter(
+        item => item.is_valid && (item.video_status === 'ready' || item.video_status === 'remote_url')
+      ).length;
+    });
+
+    const errorBulkRowCount = computed(() => {
+      return bulkParsedList.value.length - validBulkRowCount.value;
+    });
+
+    const bulkFirstScheduleDisplay = computed(() => {
+      const firstValid = bulkParsedList.value.find(item => item.is_valid);
+      return firstValid?.schedule_display || '—';
+    });
+
+    const bulkLastScheduleDisplay = computed(() => {
+      for (let i = bulkParsedList.value.length - 1; i >= 0; i--) {
+        if (bulkParsedList.value[i].is_valid) {
+          return bulkParsedList.value[i].schedule_display || '—';
+        }
+      }
+      return '—';
+    });
+
+    function setBulkScheduleDatePreset(offsetDays) {
+      const slot = getVnNowParts(15 + offsetDays * 1440);
+      bulkScheduleForm.value.schedule_date = slot.date;
+      recalculateBulkExcelSchedules();
+    }
+
+    function setBulkScheduleTimePreset(hhmm) {
+      bulkScheduleForm.value.schedule_time = hhmm;
+      recalculateBulkExcelSchedules();
+    }
+
+    function setBulkScheduleInterval(minutes) {
+      bulkScheduleForm.value.interval_minutes = Math.max(0, Number(minutes) || 0);
+      recalculateBulkExcelSchedules();
+    }
+
+    function setBulkSchedulePastQuickFix() {
+      const slot = getVnNowParts(5);
+      bulkScheduleForm.value.schedule_date = slot.date;
+      bulkScheduleForm.value.schedule_time = slot.time;
+      recalculateBulkExcelSchedules();
+    }
+
+    function calculateStaggeredSchedule(startDateStr, startTimeStr, index, intervalMinutes) {
+      if (!startDateStr || !startTimeStr) return { date: '', time: '', display: 'Chưa cài lịch' };
+      let y, m, d;
+      if (startDateStr.includes('-')) {
+        const parts = startDateStr.split('-').map(Number);
+        y = parts[0]; m = parts[1] - 1; d = parts[2];
+      } else if (startDateStr.includes('/')) {
+        const parts = startDateStr.split('/').map(Number);
+        d = parts[0]; m = parts[1] - 1; y = parts[2];
+      } else {
+        return { date: '', time: '', display: 'Lịch không hợp lệ' };
+      }
+      const [hh, mm] = startTimeStr.split(':').map(Number);
+      const dt = new Date(Date.UTC(y, m, d, hh, mm, 0));
+      dt.setUTCMinutes(dt.getUTCMinutes() + (index * intervalMinutes));
+
+      const resYear = dt.getUTCFullYear();
+      const resMonth = String(dt.getUTCMonth() + 1).padStart(2, '0');
+      const resDay = String(dt.getUTCDate()).padStart(2, '0');
+      const resHour = String(dt.getUTCHours()).padStart(2, '0');
+      const resMin = String(dt.getUTCMinutes()).padStart(2, '0');
+
+      return {
+        date: `${resYear}-${resMonth}-${resDay}`,
+        time: `${resHour}:${resMin}`,
+        display: `${resDay}/${resMonth}/${resYear} ${resHour}:${resMin}`
+      };
+    }
+
     function openBulkTaskModal() {
       bulkDataRaw.value = '';
       bulkParsedList.value = [];
       bulkFilesStatus.value = {};
       bulkAssignMethod.value = 'round_robin';
       bulkSpecificPageId.value = pages.value.length > 0 ? pages.value[0].facebook_page_id : '';
+      isUploadingBulkExcelVideos.value = false;
+      bulkExcelUploadProgress.value = { current: 0, total: 0, filename: '' };
+      isSubmittingBulkTasks.value = false;
+
+      // Mặc định hẹn 15 phút từ thời điểm hiện tại
+      const defSlot = getVnNowParts(15);
+      bulkScheduleForm.value.schedule_date = defSlot.date;
+      bulkScheduleForm.value.schedule_time = defSlot.time;
+      bulkScheduleForm.value.interval_minutes = 15;
+      bulkScheduleForm.value.custom_interval = 15;
+
+      loadUserMediaFiles();
       showBulkTaskModal.value = true;
     }
 
-    function parseBulkData(rawText) {
+    function parseBulkExcelData(rawText) {
       if (!rawText || !rawText.trim()) return [];
-      const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+      const lines = rawText.split(/\r?\n/);
       const parsed = [];
+      let validRowIndex = 0;
 
-      for (const line of lines) {
-        // Tách theo tab (\t) hoặc pipe (|)
-        const parts = line.includes('\t') ? line.split('\t') : line.split('|');
-        const videoPath = (parts[0] || '').trim().replace(/^["']|["']$/g, '');
-        if (!videoPath) continue;
+      for (let i = 0; i < lines.length; i++) {
+        const rawLine = lines[i];
+        if (!rawLine.trim()) continue;
 
-        const caption = (parts[1] || '').trim();
-        const comment = (parts[2] || '').trim();
-        let scheduleDate = (parts[3] || '').trim();
-        let scheduleTime = (parts[4] || '').trim();
-        const dmyMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(scheduleDate);
-        if (dmyMatch) {
-          scheduleDate = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+        // Tách theo Tab (\t) hoặc Pipe (|)
+        const sep = rawLine.includes('\t') ? '\t' : (rawLine.includes('|') ? '|' : '\t');
+        const parts = rawLine.split(sep);
+
+        // Bỏ quote đôi bao ngoài do Excel copy nếu có
+        const cleanParts = parts.map(p => {
+          let s = (p || '').trim();
+          if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
+            s = s.slice(1, -1).replace(/""/g, '"').trim();
+          }
+          return s;
+        });
+
+        const vPath = cleanParts[0] || '';
+        const cap = cleanParts[1] !== undefined ? cleanParts[1] : '';
+        const comment = cleanParts[2] !== undefined ? cleanParts[2] : '';
+
+        let isValid = true;
+        let errorReason = '';
+
+        if (parts.length < 3) {
+          isValid = false;
+          errorReason = `Thiếu cột: Chỉ có ${parts.length} cột (Yêu cầu đúng 3 cột: Video, Caption, Bình luận)`;
+        } else if (parts.length > 3) {
+          isValid = false;
+          errorReason = `Thừa cột: Dòng có ${parts.length} cột (Yêu cầu đúng 3 cột: Video, Caption, Bình luận)`;
+        } else if (!vPath) {
+          isValid = false;
+          errorReason = 'Đường dẫn video không được để trống';
+        } else if (!cap) {
+          isValid = false;
+          errorReason = 'Caption không được để trống';
         }
-        if (scheduleTime) {
-          const normT = normalizeTime24hClient(scheduleTime, scheduleDate);
-          if (normT.valid) {
-            scheduleTime = normT.normalizedTime;
+
+        const filename = vPath.split(/[\\/]/).pop().trim();
+
+        let videoStatus = 'checking';
+        let statusMessage = '';
+        let resolvedMediaId = null;
+        let resolvedObjectKey = null;
+
+        if (vPath.startsWith('https://') || vPath.startsWith('http://')) {
+          videoStatus = 'remote_url';
+          statusMessage = '✓ URL video trực tuyến hợp lệ';
+        } else if (vPath.startsWith('r2://') || vPath.startsWith('d1://video/') || vPath.startsWith('med_')) {
+          const cleanId = vPath.replace(/^r2:\/\//, '').replace(/^d1:\/\/video\//, '');
+          const m = userMediaFiles.value.find(item => item.id === cleanId && item.upload_status === 'ready');
+          if (m) {
+            videoStatus = 'ready';
+            statusMessage = `✓ Đã lưu trên R2 (${m.original_filename})`;
+            resolvedMediaId = m.id;
+            resolvedObjectKey = m.object_key;
+          } else {
+            videoStatus = 'missing';
+            statusMessage = `⚠️ Chưa xác minh được video trên R2`;
+          }
+        } else {
+          const m = userMediaFiles.value.find(item =>
+            item.original_filename &&
+            item.original_filename.toLowerCase() === filename.toLowerCase() &&
+            item.upload_status === 'ready'
+          );
+          if (m) {
+            videoStatus = 'ready';
+            statusMessage = `✓ Đã lưu trên R2 (${m.original_filename})`;
+            resolvedMediaId = m.id;
+            resolvedObjectKey = m.object_key;
+          } else {
+            videoStatus = 'missing';
+            statusMessage = `⚠️ Chưa có trên R2 (Cần file: ${filename})`;
           }
         }
 
+        const sched = calculateStaggeredSchedule(
+          bulkScheduleForm.value.schedule_date,
+          bulkScheduleForm.value.schedule_time,
+          validRowIndex,
+          bulkScheduleForm.value.interval_minutes
+        );
+        validRowIndex++;
+
         parsed.push({
-          video_path: videoPath,
-          caption: caption,
+          row_index: i + 1,
+          raw_line: rawLine,
+          video_path: vPath,
+          filename: filename,
+          caption: cap,
           comment_text: comment,
-          schedule_date: scheduleDate,
-          schedule_time: scheduleTime
+          is_valid: isValid,
+          error_reason: errorReason,
+          video_status: videoStatus,
+          status_message: statusMessage,
+          resolved_media_id: resolvedMediaId,
+          resolved_object_key: resolvedObjectKey,
+          schedule_date: sched.date,
+          schedule_time: sched.time,
+          schedule_display: sched.display
         });
       }
+
       return parsed;
     }
 
-    let bulkDebounceTimer = null;
     function handleBulkInputChanged() {
-      bulkParsedList.value = parseBulkData(bulkDataRaw.value);
-      clearTimeout(bulkDebounceTimer);
-      bulkDebounceTimer = setTimeout(checkBulkFilesExistence, 600);
+      bulkParsedList.value = parseBulkExcelData(bulkDataRaw.value);
     }
 
-    async function checkBulkFilesExistence() {
-      const paths = bulkParsedList.value.map(i => i.video_path).filter(p => !!p);
-      if (paths.length === 0) return;
-      try {
-        const res = await fetch('/api/system/check-files', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ paths })
-        });
-        const data = await res.json();
-        if (data.results) {
-          bulkFilesStatus.value = data.results;
-        }
-      } catch (err) {
-        console.error("Lỗi kiểm tra file bulk:", err);
+    function recalculateBulkExcelSchedules() {
+      let idx = 0;
+      for (const item of bulkParsedList.value) {
+        const sched = calculateStaggeredSchedule(
+          bulkScheduleForm.value.schedule_date,
+          bulkScheduleForm.value.schedule_time,
+          idx,
+          bulkScheduleForm.value.interval_minutes
+        );
+        item.schedule_date = sched.date;
+        item.schedule_time = sched.time;
+        item.schedule_display = sched.display;
+        idx++;
       }
     }
 
-    function autoFillBulkSchedules(intervalMinutes = 10) {
-      const step = Math.max(1, Number(intervalMinutes) || 10);
-      for (let i = 0; i < bulkParsedList.value.length; i++) {
-        const item = bulkParsedList.value[i];
-        if (!item.schedule_date || !item.schedule_time) {
-          const slot = getVnNowParts(15 + i * step);
-          item.schedule_date = slot.date;
-          item.schedule_time = slot.time;
+    function recheckBulkExcelVideoStatus() {
+      for (const item of bulkParsedList.value) {
+        const vPath = item.video_path || '';
+        const filename = item.filename || '';
+        if (vPath.startsWith('https://') || vPath.startsWith('http://')) {
+          item.video_status = 'remote_url';
+          item.status_message = '✓ URL video trực tuyến hợp lệ';
+        } else {
+          const cleanId = vPath.replace(/^r2:\/\//, '').replace(/^d1:\/\/video\//, '');
+          const m = userMediaFiles.value.find(media =>
+            (media.id === cleanId || (media.original_filename && media.original_filename.toLowerCase() === filename.toLowerCase())) &&
+            media.upload_status === 'ready'
+          );
+          if (m) {
+            item.video_status = 'ready';
+            item.status_message = `✓ Đã lưu trên R2 (${m.original_filename})`;
+            item.resolved_media_id = m.id;
+            item.resolved_object_key = m.object_key;
+          } else {
+            item.video_status = 'missing';
+            item.status_message = `⚠️ Chưa có trên R2 (Cần file: ${filename})`;
+          }
         }
       }
-      showToast(`Đã tự động điền lịch đăng cách đều ${step} phút cho các dòng!`, "info");
+    }
+
+    function triggerBulkExcelFilePicker() {
+      const fileInput = document.getElementById('bulk-excel-files-input');
+      if (fileInput) {
+        fileInput.value = '';
+        fileInput.click();
+      }
+    }
+
+    async function handleBulkExcelFilesSelected(event) {
+      const files = event.target && event.target.files;
+      if (!files || files.length === 0) return;
+
+      isUploadingBulkExcelVideos.value = true;
+      bulkExcelUploadProgress.value = { current: 0, total: files.length, filename: '' };
+
+      let successCount = 0;
+      let failCount = 0;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        bulkExcelUploadProgress.value.current = i + 1;
+        bulkExcelUploadProgress.value.filename = file.name;
+
+        try {
+          // 1. Upload init
+          const initRes = await fetch('/api/media/upload-init', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              filename: file.name,
+              size_bytes: file.size,
+              mime_type: file.type || 'video/mp4'
+            })
+          });
+          const initData = await initRes.json();
+          if (!initRes.ok || !initData.media_id) {
+            failCount++;
+            continue;
+          }
+
+          // 2. Stream
+          const streamRes = await fetch(initData.upload_url, {
+            method: 'PUT',
+            headers: { 'Content-Type': file.type || 'video/mp4' },
+            body: file
+          });
+          if (!streamRes.ok) {
+            failCount++;
+            continue;
+          }
+
+          // 3. Upload complete
+          const compRes = await fetch('/api/media/upload-complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ media_id: initData.media_id })
+          });
+          if (compRes.ok) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch (err) {
+          console.error("Lỗi upload video bulk:", err);
+          failCount++;
+        }
+      }
+
+      isUploadingBulkExcelVideos.value = false;
+      await loadUserMediaFiles();
+      recheckBulkExcelVideoStatus();
+
+      if (successCount > 0) {
+        showToast(`Đã tải lên và xác minh thành công ${successCount}/${files.length} file video trên Cloudflare R2!`, 'success');
+      }
+      if (failCount > 0) {
+        showToast(`Có ${failCount} file video tải lên thất bại. Bạn có thể chọn lại file để tải lại.`, 'warning');
+      }
     }
 
     async function handleBulkSubmit() {
+      if (isSubmittingBulkTasks.value) return;
+
       if (bulkParsedList.value.length === 0) {
-        showToast("Không có dòng dữ liệu hợp lệ nào để nhập!", "warning");
+        showToast("Vui lòng dán dữ liệu các dòng từ Excel vào ô bên trên!", "warning");
         return;
       }
 
-      // Kiểm tra bắt buộc lịch hẹn hợp lệ của từng dòng
-      for (let i = 0; i < bulkParsedList.value.length; i++) {
-        const item = bulkParsedList.value[i];
-        const val = validateVnScheduleClient(item.schedule_date, item.schedule_time, true);
-        if (!val.valid) {
-          showToast(`Dòng ${i + 1}: ${val.error} (Bạn có thể bấm nút "Tự động điền lịch cách đều" ở trên bảng xem trước)`, "error");
-          return;
-        }
-        item.schedule_date = val.normalizedDate;
-        item.schedule_time = val.normalizedTime;
+      if (bulkSchedulePastWarning.value) {
+        showToast("Thời gian bắt đầu đặt lịch đã qua hoặc trùng hiện tại. Vui lòng bấm nút 'Hẹn lại +5 phút' hoặc chọn giờ tương lai!", "error");
+        return;
       }
 
-      // Xác định danh sách Page được gán
+      const validRows = bulkParsedList.value.filter(item =>
+        item.is_valid && (item.video_status === 'ready' || item.video_status === 'remote_url')
+      );
+
+      if (validRows.length === 0) {
+        showToast("Không có dòng nào hợp lệ và đã có video trên R2 để tạo task. Vui lòng kiểm tra dữ liệu và tải video lên R2!", "warning");
+        return;
+      }
+
       let assignPageIds = [];
       if (bulkAssignMethod.value === 'specific') {
         if (!bulkSpecificPageId.value) {
@@ -1832,7 +2107,6 @@
         }
         assignPageIds = [bulkSpecificPageId.value];
       } else {
-        // Round-robin qua các page đã chọn (hoặc tất cả page nếu chưa chọn)
         const selected = pages.value.filter(p => p.is_selected);
         if (selected.length > 0) {
           assignPageIds = selected.map(p => p.facebook_page_id);
@@ -1846,26 +2120,52 @@
         return;
       }
 
+      isSubmittingBulkTasks.value = true;
       try {
-        const payload = {
-          tasks: bulkParsedList.value,
-          assign_page_ids: assignPageIds
-        };
+        const payloadTasks = validRows.map(r => ({
+          video_path: r.resolved_media_id ? `r2://${r.resolved_media_id}` : r.video_path,
+          media_id: r.resolved_media_id || undefined,
+          object_key: r.resolved_object_key || undefined,
+          caption: r.caption,
+          comment_text: r.comment_text,
+          schedule_date: r.schedule_date,
+          schedule_time: r.schedule_time
+        }));
+
         const res = await apiFetch('/api/tasks/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({
+            tasks: payloadTasks,
+            assign_page_ids: assignPageIds
+          })
         });
+
         const data = await res.json();
         if (res.ok) {
-          showToast(data.message || `Đã nhập thành công ${data.inserted_count} tasks!`, "success");
-          showBulkTaskModal.value = false;
+          const createdCount = data.inserted_count || payloadTasks.length;
+          showToast(`Đã tạo thành công ${createdCount} task từ Excel!`, "success");
+
+          if (validRows.length === bulkParsedList.value.length) {
+            bulkDataRaw.value = '';
+            bulkParsedList.value = [];
+            showBulkTaskModal.value = false;
+          } else {
+            const remainingLines = bulkParsedList.value
+              .filter(item => !item.is_valid || (item.video_status !== 'ready' && item.video_status !== 'remote_url'))
+              .map(item => item.raw_line);
+            bulkDataRaw.value = remainingLines.join('\n');
+            handleBulkInputChanged();
+            showToast(`Đã tạo ${createdCount} task hợp lệ. Giữ lại ${remainingLines.length} dòng lỗi/thiếu video để bạn sửa tiếp.`, "info");
+          }
           await loadAll();
         } else {
-          showToast(data.detail || "Lỗi nhập hàng loạt.", "error");
+          showToast(data.detail || data.message || "Lỗi tạo task hàng loạt.", "error");
         }
       } catch (err) {
-        showToast("Lỗi nhập hàng loạt: " + err.message, "error");
+        showToast("Lỗi kết nối khi tạo task hàng loạt: " + err.message, "error");
+      } finally {
+        isSubmittingBulkTasks.value = false;
       }
     }
 
@@ -2891,6 +3191,22 @@
       openBulkTaskModal,
       handleBulkInputChanged,
       handleBulkSubmit,
+      bulkScheduleForm,
+      bulkSchedulePastWarning,
+      validBulkRowCount,
+      errorBulkRowCount,
+      bulkFirstScheduleDisplay,
+      bulkLastScheduleDisplay,
+      setBulkScheduleDatePreset,
+      setBulkScheduleTimePreset,
+      setBulkScheduleInterval,
+      setBulkSchedulePastQuickFix,
+      recalculateBulkExcelSchedules,
+      isUploadingBulkExcelVideos,
+      bulkExcelUploadProgress,
+      isSubmittingBulkTasks,
+      triggerBulkExcelFilePicker,
+      handleBulkExcelFilesSelected,
       isTaskLocked,
       isTaskInFlight,
       openEditTaskModal,

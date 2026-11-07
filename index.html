@@ -632,7 +632,7 @@
                 <td class="py-2.5 px-3 whitespace-nowrap">
                   <div v-if="t.schedule_date && t.schedule_time">
                     <div class="font-semibold text-slate-200">{{ t.schedule_date }}</div>
-                    <div class="text-[11px] font-mono text-cyan-300">{{ t.schedule_time }} (24h)</div>
+                    <div class="text-[11px] font-mono text-cyan-300">{{ t.schedule_time }}</div>
                     <div v-if="t.original_schedule_date && (t.trigger_source === 'manual_publish_now' || t.trigger_source === 'bulk_publish_now')"
                          class="text-[9px] text-slate-500 font-mono mt-0.5"
                          :title="'Lịch gốc trước khi bấm Đăng ngay: ' + t.original_schedule_date + ' ' + (t.original_schedule_time || '')">
@@ -1682,7 +1682,7 @@
               <select :value="getScheduleHour24(singleTaskForm.schedule_time)"
                       @change="onScheduleHour24Change('single', $event.target.value)"
                       class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
-                <option value="">-- Giờ (24h) --</option>
+                <option value="">-- Giờ --</option>
                 <option v-for="h in hours24List" :key="h" :value="h">
                   {{ h }}h ({{ Number(h) >= 12 ? 'CH / PM' : 'SA / AM' }})
                 </option>
@@ -1728,7 +1728,7 @@
                 🕒 {{ describeTime24h(singleTaskForm.schedule_time, singleTaskForm.schedule_date) }}
               </span>
               <span v-else class="text-slate-500">
-                Bắt buộc chọn Ngày và Giờ đăng (24h). Nếu muốn đăng ngay sau khi tạo, bạn có thể bấm nút ⚡ Đăng ngay trên bảng Task.
+                Bắt buộc chọn Ngày và Giờ đăng. Nếu muốn đăng ngay sau khi tạo, bạn có thể bấm nút ⚡ Đăng ngay trên bảng Task.
               </span>
             </div>
           </div>
@@ -1748,108 +1748,218 @@
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh]">
         <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
           <div>
-            <h3 class="font-bold text-white text-base">Nhập Nhanh Hàng Loạt Từ Excel / Google Sheets</h3>
-            <p class="text-xs text-slate-400">Copy các cột từ bảng tính và dán trực tiếp vào ô bên dưới (tự nhận diện phím Tab hoặc Pipe)</p>
+            <h3 class="font-bold text-white text-base">Thêm Nhanh Hàng Loạt Task Từ Excel / Bảng Tính</h3>
+            <p class="text-xs text-slate-400">Chọn lịch đăng một lần → Dán dữ liệu 3 cột từ Excel → Tự động phân bổ lịch &amp; So khớp video R2</p>
           </div>
           <button @click="showBulkTaskModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
         </div>
 
         <form @submit.prevent="handleBulkSubmit" class="p-5 space-y-4 overflow-y-auto flex-1 flex flex-col">
-          <!-- Textarea dán -->
-          <div>
-            <div class="flex items-center justify-between mb-1.5">
-              <label class="text-xs font-bold text-slate-300">Dán dữ liệu các cột từ Excel:</label>
-              <span class="text-[11px] font-mono text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-400/20">
-                PATH VIDEO \t CAPTION \t BÌNH LUẬN \t NGÀY ĐĂNG \t GIỜ ĐĂNG
+          <!-- BƯỚC 1: CÀI ĐẶT LỊCH ĐĂNG & KHOẢNG CÁCH -->
+          <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                <span>⏰</span> Bước 1: Chọn thời gian đăng &amp; Khoảng cách phân bổ
               </span>
+              <span class="text-[11px] text-cyan-400 font-mono">Asia/Ho_Chi_Minh (24h)</span>
             </div>
-            <textarea v-model="bulkDataRaw" @input="handleBulkInputChanged" rows="5" placeholder="r2://med_video_01&#9;Caption review hay&#9;Link mua hàng: bit.ly/123&#9;2026-11-10&#9;07:00&#10;https://cdn.example.com/reel_02.mp4&#9;Tập 2 kịch tính&#9;&#9;2026-11-10&#9;12:00" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono focus:outline-none focus:border-blue-500 leading-relaxed"></textarea>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <!-- Ngày đăng đầu tiên -->
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <label class="text-xs font-semibold text-slate-300">Ngày đăng đầu tiên: *</label>
+                  <div class="flex gap-1 text-[10px]">
+                    <button type="button" @click="setBulkScheduleDatePreset(0)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[Hôm nay]</button>
+                    <button type="button" @click="setBulkScheduleDatePreset(1)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[Ngày mai]</button>
+                    <button type="button" @click="setBulkScheduleDatePreset(2)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[+2 ngày]</button>
+                  </div>
+                </div>
+                <input type="date" v-model="bulkScheduleForm.schedule_date" @change="recalculateBulkExcelSchedules" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+              </div>
+
+              <!-- Giờ đăng đầu tiên -->
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <label class="text-xs font-semibold text-slate-300">Giờ đăng đầu tiên (HH:MM 24h): *</label>
+                  <div class="flex gap-1 text-[10px]">
+                    <button type="button" @click="setBulkScheduleTimePreset('00:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[00:00]</button>
+                    <button type="button" @click="setBulkScheduleTimePreset('07:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[07:00]</button>
+                    <button type="button" @click="setBulkScheduleTimePreset('12:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[12:00]</button>
+                    <button type="button" @click="setBulkScheduleTimePreset('19:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[19:00]</button>
+                  </div>
+                </div>
+                <input type="time" v-model="bulkScheduleForm.schedule_time" @change="recalculateBulkExcelSchedules" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+              </div>
+            </div>
+
+            <!-- Khoảng cách giữa các task -->
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1.5">Khoảng cách giữa các task (Tự động cộng dồn theo STT):</label>
+              <div class="grid grid-cols-6 gap-2">
+                <button type="button"
+                        v-for="iv in [0, 5, 10, 15, 30, 60]"
+                        :key="iv"
+                        @click="setBulkScheduleInterval(iv)"
+                        class="py-1.5 px-2 rounded-lg font-mono text-xs font-bold border transition text-center"
+                        :class="bulkScheduleForm.interval_minutes === iv ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'">
+                  {{ iv === 0 ? 'Cùng giờ (0p)' : (iv + ' phút') }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Cảnh báo thời gian quá khứ -->
+            <div v-if="bulkSchedulePastWarning" class="p-2.5 rounded-lg bg-rose-950/80 border border-rose-800/80 flex items-center justify-between gap-2 text-xs text-rose-200">
+              <span>⚠️ {{ bulkSchedulePastWarning }}</span>
+              <button type="button" @click="setBulkSchedulePastQuickFix" class="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] shrink-0">
+                ⚡ Hẹn lại +5 phút từ bây giờ
+              </button>
+            </div>
           </div>
 
-          <!-- Lựa chọn phân bổ Fanpage -->
+          <!-- BƯỚC 2: PHÂN BỔ FANPAGE -->
           <div class="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
-            <span class="text-xs font-bold text-slate-300">Phân bổ Fanpage:</span>
-            
+            <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+              <span>📢</span> Bước 2: Phân bổ Fanpage:
+            </span>
             <div class="flex items-center gap-4 flex-wrap">
               <label class="flex items-center gap-2 cursor-pointer">
                 <input type="radio" v-model="bulkAssignMethod" value="round_robin" class="text-blue-600 bg-slate-900 border-slate-700 focus:ring-0">
                 <span class="text-xs text-slate-200">Chia đều (Round-Robin) cho các Fanpage đã chọn ({{ selectedPageCount }})</span>
               </label>
-
               <label class="flex items-center gap-2 cursor-pointer">
                 <input type="radio" v-model="bulkAssignMethod" value="specific" class="text-blue-600 bg-slate-900 border-slate-700 focus:ring-0">
                 <span class="text-xs text-slate-200">Gán cho 1 Fanpage cụ thể:</span>
               </label>
-
               <select v-model="bulkSpecificPageId" :disabled="bulkAssignMethod !== 'specific'" class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500 disabled:opacity-40">
                 <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">{{ p.name }}</option>
               </select>
             </div>
           </div>
 
-          <!-- LIVE PREVIEW TABLE -->
-          <div class="flex-1 flex flex-col min-h-[160px]">
-            <div class="flex items-center justify-between mb-1.5 flex-wrap gap-2">
-              <span class="text-xs font-bold text-slate-300 flex items-center gap-2">
-                <span>Bảng Live Preview (Xem trước):</span>
-                <span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-mono">{{ bulkParsedList.length }} dòng</span>
+          <!-- BƯỚC 3: TEXTAREA DÁN DỮ LIỆU EXCEL -->
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <span>📋</span> Bước 3: Dán dữ liệu từ Excel (Đúng 3 cột, phân cách bằng TAB):
+              </label>
+              <span class="text-[11px] font-mono text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-400/20">
+                ĐƯỜNG DẪN VIDEO \t CAPTION \t BÌNH LUẬN (TÙY CHỌN)
               </span>
-              <button v-if="bulkParsedList.length > 0"
-                      type="button"
-                      @click="autoFillBulkSchedules(10)"
-                      class="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold transition">
-                ⚡ Tự động điền lịch cách đều 10 phút (từ Hiện tại + 15p)
+            </div>
+            <textarea v-model="bulkDataRaw"
+                      @input="handleBulkInputChanged"
+                      rows="5"
+                      placeholder="video01.mp4&#9;Caption video số 1 hay tuyệt&#9;Link mua hàng: bit.ly/123&#10;video02.mp4&#9;Tập 2 kịch tính cuốn hút&#9;&#10;https://example.com/video03.mp4&#9;Review sản phẩm mới&#9;Bình luận tương tác"
+                      class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono focus:outline-none focus:border-blue-500 leading-relaxed"></textarea>
+            <div class="flex items-center justify-between mt-1 text-[11px] text-slate-400">
+              <span>💡 Copy trực tiếp các ô từ Excel/Google Sheets rồi bấm Ctrl+V vào đây. Không cần chuyển sang CSV/JSON.</span>
+              <span>{{ bulkParsedList.length }} dòng nhận diện</span>
+            </div>
+          </div>
+
+          <!-- BƯỚC 4: TẢI VIDEO LÊN CLOUDFLARE R2 (NẾU CẦN) -->
+          <div class="p-3 bg-slate-950/70 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <span>📁</span>
+                <span>Bước 4: Tải các file video từ máy tính lên Cloudflare R2 (Tùy chọn):</span>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-0.5">
+                Nếu dán đường dẫn ổ đĩa (ví dụ C:\Media\video01.mp4 hoặc video01.mp4), hãy chọn các file video tương ứng để hệ thống tự động tải lên R2 và so khớp theo tên file.
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="file"
+                     multiple
+                     accept="video/mp4,video/*"
+                     @change="handleBulkExcelFilesSelected"
+                     id="bulk-excel-files-input"
+                     class="hidden">
+              <button type="button"
+                      @click="triggerBulkExcelFilePicker"
+                      :disabled="isUploadingBulkExcelVideos"
+                      class="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition">
+                <span v-if="isUploadingBulkExcelVideos">⏳ Đang tải {{ bulkExcelUploadProgress.current }}/{{ bulkExcelUploadProgress.total }} ({{ bulkExcelUploadProgress.filename }})...</span>
+                <span v-else>📁 Chọn Các File Video Từ Máy Để Tải Lên R2</span>
               </button>
             </div>
+          </div>
 
-            <div class="flex-1 overflow-auto border border-slate-800 rounded-xl bg-slate-950">
+          <!-- BƯỚC 5: BẢNG LIVE PREVIEW (XEM TRƯỚC PHÂN BỔ) -->
+          <div class="flex-1 flex flex-col min-h-[180px]">
+            <div class="flex items-center justify-between mb-1.5 flex-wrap gap-2">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-2">
+                <span>Bảng Live Preview (Xem trước phân bổ):</span>
+                <span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-mono">{{ bulkParsedList.length }} dòng</span>
+              </span>
+              <div class="flex items-center gap-2 text-[11px]">
+                <span class="text-emerald-400 font-bold">✓ {{ validBulkRowCount }} hợp lệ</span>
+                <span v-if="errorBulkRowCount > 0" class="text-rose-400 font-bold">⚠️ {{ errorBulkRowCount }} lỗi/thiếu video</span>
+              </div>
+            </div>
+
+            <div class="flex-1 overflow-auto border border-slate-800 rounded-xl bg-slate-950 max-h-56">
               <table class="w-full text-left border-collapse text-xs">
                 <thead class="sticky top-0 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 uppercase font-mono">
                   <tr>
-                    <th class="py-2 px-2.5 w-10 text-center">#</th>
-                    <th class="py-2 px-2.5">ĐƯỜNG DẪN VIDEO</th>
+                    <th class="py-2 px-2.5 w-10 text-center">STT</th>
+                    <th class="py-2 px-2.5">ĐƯỜNG DẪN / FILE VIDEO</th>
                     <th class="py-2 px-2.5">CAPTION</th>
                     <th class="py-2 px-2.5">BÌNH LUẬN</th>
-                    <th class="py-2 px-2.5 w-40">NGÀY & GIỜ (BẮT BUỘC) *</th>
+                    <th class="py-2 px-2.5 w-44">THỜI GIAN ĐĂNG</th>
+                    <th class="py-2 px-2.5 w-36">TRẠNG THÁI</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800/60 font-mono">
                   <tr v-if="bulkParsedList.length === 0">
-                    <td colspan="5" class="py-8 text-center text-slate-500 font-sans">
-                      Hãy dán dữ liệu vào ô bên trên để xem trước tại đây (Bắt buộc có Ngày đăng và Giờ đăng cho mỗi dòng).
+                    <td colspan="6" class="py-8 text-center text-slate-500 font-sans">
+                      Dán dữ liệu các dòng từ Excel vào ô bên trên để xem trước phân bổ lịch và kiểm tra trạng thái video.
                     </td>
                   </tr>
 
                   <tr v-for="(item, idx) in bulkParsedList" :key="idx" class="hover:bg-slate-900/50">
                     <td class="py-2 px-2.5 text-center text-slate-500">{{ idx + 1 }}</td>
-                    
-                    <td class="py-2 px-2.5 max-w-[260px]">
-                      <div class="truncate text-slate-200" :title="item.video_path">{{ item.video_path }}</div>
+
+                    <td class="py-2 px-2.5 max-w-[220px]">
+                      <div class="truncate text-slate-200" :title="item.video_path">{{ item.filename || item.video_path }}</div>
                       <div class="mt-0.5">
-                        <span v-if="bulkFilesStatus[item.video_path] === true" class="text-[10px] text-emerald-400 font-sans font-semibold">
-                          ✓ Nguồn video hợp lệ (Cloud / URL)
+                        <span v-if="item.video_status === 'ready'" class="text-[10px] text-emerald-400 font-sans font-semibold">
+                          ✓ Đã lưu trên R2
                         </span>
-                        <span v-else-if="bulkFilesStatus[item.video_path] === false" class="text-[10px] text-rose-400 font-sans font-semibold">
-                          ⚠ Nguồn video cần là link https://...mp4 hoặc đã tải lên Cloud!
+                        <span v-else-if="item.video_status === 'remote_url'" class="text-[10px] text-cyan-400 font-sans font-semibold">
+                          ✓ URL video trực tuyến
+                        </span>
+                        <span v-else class="text-[10px] text-amber-400 font-sans font-semibold">
+                          ⚠️ {{ item.status_message || 'Chưa tải lên R2' }}
                         </span>
                       </div>
                     </td>
 
-                    <td class="py-2 px-2.5 max-w-[200px] truncate text-slate-300 font-sans" :title="item.caption">
+                    <td class="py-2 px-2.5 max-w-[180px] truncate text-slate-300 font-sans" :title="item.caption">
                       {{ item.caption || '—' }}
                     </td>
 
-                    <td class="py-2 px-2.5 max-w-[150px] truncate" :title="item.comment_text">
+                    <td class="py-2 px-2.5 max-w-[140px] truncate" :title="item.comment_text">
                       <span v-if="item.comment_text" class="text-cyan-400 font-sans">{{ item.comment_text }}</span>
                       <span v-else class="text-slate-500 italic text-[11px] font-sans">(Không cmt)</span>
                     </td>
 
                     <td class="py-2 px-2.5 whitespace-nowrap">
-                      <span v-if="item.schedule_date && item.schedule_time" class="text-emerald-300 font-semibold">
-                        {{ item.schedule_date }} {{ item.schedule_time }}
+                      <span class="text-emerald-300 font-semibold font-mono text-xs">
+                        {{ item.schedule_display }}
                       </span>
-                      <span v-else class="text-rose-400 font-sans font-bold text-[11px]">
-                        ⚠ Thiếu ngày/giờ đăng!
+                    </td>
+
+                    <td class="py-2 px-2.5 whitespace-nowrap">
+                      <span v-if="item.is_valid && (item.video_status === 'ready' || item.video_status === 'remote_url')" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[11px] font-bold">
+                        ✓ Hợp lệ
+                      </span>
+                      <span v-else-if="item.is_valid && item.video_status === 'missing'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-[11px] font-bold">
+                        ⚠️ Cần tải video lên R2
+                      </span>
+                      <span v-else class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 text-[11px] font-bold" :title="item.error_reason">
+                        ❌ {{ item.error_reason }}
                       </span>
                     </td>
                   </tr>
@@ -1858,11 +1968,30 @@
             </div>
           </div>
 
-          <div class="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
-            <button type="button" @click="showBulkTaskModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Hủy</button>
-            <button type="submit" :disabled="bulkParsedList.length === 0" class="px-6 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-900/40 disabled:opacity-50">
-              Nhập Hàng Loạt ({{ bulkParsedList.length }} Task)
-            </button>
+          <!-- BƯỚC 6: TÓM TẮT & NÚT XÁC NHẬN -->
+          <div class="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+            <div class="text-xs text-slate-300 space-y-0.5 font-mono">
+              <div class="flex items-center gap-3 flex-wrap">
+                <span>Tổng: <strong class="text-white">{{ bulkParsedList.length }}</strong> dòng</span>
+                <span>Hợp lệ: <strong class="text-emerald-400">{{ validBulkRowCount }}</strong></span>
+                <span v-if="errorBulkRowCount > 0">Lỗi/Chưa có video: <strong class="text-rose-400">{{ errorBulkRowCount }}</strong></span>
+              </div>
+              <div v-if="bulkParsedList.length > 0 && validBulkRowCount > 0" class="text-[11px] text-slate-400 font-sans">
+                Thời gian: <strong class="text-cyan-300">{{ bulkFirstScheduleDisplay }}</strong> → <strong class="text-cyan-300">{{ bulkLastScheduleDisplay }}</strong>
+                (Cách {{ bulkScheduleForm.interval_minutes }} phút)
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2.5">
+              <button type="button" @click="showBulkTaskModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">
+                Hủy
+              </button>
+              <button type="submit"
+                      :disabled="validBulkRowCount === 0 || isSubmittingBulkTasks || Boolean(bulkSchedulePastWarning)"
+                      class="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-indigo-900/40 transition active:scale-95 flex items-center gap-1.5">
+                <span>{{ isSubmittingBulkTasks ? 'Đang tạo task...' : ('Xác Nhận Tạo ' + validBulkRowCount + ' Task') }}</span>
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -1917,7 +2046,7 @@
                 <select :value="getScheduleHour24(editTaskForm.schedule_time)"
                         @change="onScheduleHour24Change('edit', $event.target.value)"
                         class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
-                  <option value="">-- Giờ (24h) --</option>
+                  <option value="">-- Giờ --</option>
                   <option v-for="h in hours24List" :key="h" :value="h">
                     {{ h }}h ({{ Number(h) >= 12 ? 'CH / PM' : 'SA / AM' }})
                   </option>
@@ -1936,7 +2065,7 @@
                        required
                        @blur="normalizeScheduleTimeField('edit')"
                        @keydown.enter.prevent="normalizeScheduleTimeField('edit')"
-                       placeholder="HH:MM (24h)"
+                       placeholder="HH:MM"
                        class="flex-1 min-w-[110px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               </div>
               <div v-if="editTaskForm.schedule_time" class="text-[11px] text-cyan-300 font-mono font-semibold">

@@ -2253,7 +2253,7 @@ async function runAll30Tests() {
     referenceNowUtc: noonVnUtc,
     minLeadSeconds: 60
   });
-  assert.equal(smartNoonFrom1216SA.isValid, true, "12:16 SA lúc 12:15 trưa hôm nay phải tự nhận diện thành 12:16 (24h)");
+  assert.equal(smartNoonFrom1216SA.isValid, true, "12:16 SA lúc 12:15 trưa hôm nay phải tự nhận diện thành 12:16");
   assert.equal(smartNoonFrom1216SA.normalizedTime, "12:16");
   assert.equal(smartNoonFrom1216SA.scheduledAtUtc, noonVnUtc + 60);
 
@@ -2261,7 +2261,7 @@ async function runAll30Tests() {
     referenceNowUtc: noonVnUtc,
     minLeadSeconds: 60
   });
-  assert.equal(smartNoonFrom0016.isValid, true, "00:16 từ input time 12h lúc 12:15 trưa hôm nay phải tự nhận diện thành 12:16 (24h)");
+  assert.equal(smartNoonFrom0016.isValid, true, "00:16 từ input time 12h lúc 12:15 trưa hôm nay phải tự nhận diện thành 12:16");
   assert.equal(smartNoonFrom0016.normalizedDate, "2026-11-07");
   assert.equal(smartNoonFrom0016.normalizedTime, "12:16");
   assert.equal(smartNoonFrom0016.scheduledAtUtc, noonVnUtc + 60);
@@ -3007,10 +3007,243 @@ async function runAll30Tests() {
   assert.ok(sampleItem.fetched_at);
   console.log("  ✓ [Test 43] Tối ưu Graph API: 15-min TTL Cache, Rate-Limit Header Monitor & Hoàn thiện Data Contract /insights 100%");
 
+  // --------------------------------------------------------------------------
+  // [TEST 44] Thêm nhanh hàng loạt Task từ Excel (Bulk Excel Import) & Phân bổ lịch
+  // --------------------------------------------------------------------------
+  console.log("\n  --- BẮT ĐẦU KIỂM THỬ THÊM NHANH HÀNG LOẠT TASK TỪ EXCEL ---");
+
+  // 1. Kiểm tra thuật toán phân tích chuỗi Excel (Clipboard TAB & Newline)
+  function testParseExcelData(rawText, baseDate, baseTime, intervalMinutes) {
+    if (!rawText || !rawText.trim()) return [];
+    const lines = rawText.split(/\r?\n/);
+    const parsed = [];
+    let validRowIndex = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const rawLine = lines[i];
+      if (!rawLine.trim()) continue;
+
+      const sep = rawLine.includes("\t") ? "\t" : (rawLine.includes("|") ? "|" : "\t");
+      const parts = rawLine.split(sep);
+      const cleanParts = parts.map((p) => {
+        let s = (p || "").trim();
+        if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
+          s = s.slice(1, -1).replace(/""/g, '"').trim();
+        }
+        return s;
+      });
+
+      const vPath = cleanParts[0] || "";
+      const cap = cleanParts[1] !== undefined ? cleanParts[1] : "";
+      const comment = cleanParts[2] !== undefined ? cleanParts[2] : "";
+
+      let isValid = true;
+      let errorReason = "";
+
+      if (parts.length < 3) {
+        isValid = false;
+        errorReason = `Thiếu cột: Chỉ có ${parts.length} cột (Yêu cầu đúng 3 cột: Video, Caption, Bình luận)`;
+      } else if (parts.length > 3) {
+        isValid = false;
+        errorReason = `Thừa cột: Dòng có ${parts.length} cột (Yêu cầu đúng 3 cột: Video, Caption, Bình luận)`;
+      } else if (!vPath) {
+        isValid = false;
+        errorReason = "Đường dẫn video không được để trống";
+      } else if (!cap) {
+        isValid = false;
+        errorReason = "Caption không được để trống";
+      }
+
+      // Staggered schedule calculation
+      let schedDate = "";
+      let schedTime = "";
+      if (baseDate && baseTime) {
+        const [y, m, d] = baseDate.split("-").map(Number);
+        const [hh, mm] = baseTime.split(":").map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d, hh, mm, 0));
+        dt.setUTCMinutes(dt.getUTCMinutes() + validRowIndex * intervalMinutes);
+        schedDate = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+        schedTime = `${String(dt.getUTCHours()).padStart(2, "0")}:${String(dt.getUTCMinutes()).padStart(2, "0")}`;
+        validRowIndex++;
+      }
+
+      parsed.push({
+        row_index: i + 1,
+        video_path: vPath,
+        filename: vPath.split(/[\\/]/).pop().trim(),
+        caption: cap,
+        comment_text: comment,
+        is_valid: isValid,
+        error_reason: errorReason,
+        schedule_date: schedDate,
+        schedule_time: schedTime
+      });
+    }
+    return parsed;
+  }
+
+  // 1a. Test 1 dòng hợp lệ
+  const excel1Row = "D:\\Videos\\video01.mp4\tCaption video số 1\tBình luận số 1";
+  const parsed1 = testParseExcelData(excel1Row, "2026-11-10", "08:00", 15);
+  assert.equal(parsed1.length, 1);
+  assert.equal(parsed1[0].is_valid, true);
+  assert.equal(parsed1[0].filename, "video01.mp4");
+  assert.equal(parsed1[0].caption, "Caption video số 1");
+  assert.equal(parsed1[0].comment_text, "Bình luận số 1");
+  assert.equal(parsed1[0].schedule_date, "2026-11-10");
+  assert.equal(parsed1[0].schedule_time, "08:00");
+
+  // 1b. Test caption có tiếng Việt, emoji, dấu phẩy, chấm phẩy & bình luận rỗng
+  const excelComplex = [
+    "D:\\Videos\\reel_vn.mp4\tĐây là video hài, có dấu phẩy; và emoji 🤣🔥\tBình luận số 1",
+    "video02.mp4\tCaption video số 2 có dấu 'nháy đơn' và \"kép\"\t",
+    "https://cdn.example.com/stream.mp4\tCaption video số 3\tBình luận 3"
+  ].join("\n");
+  const parsedComplex = testParseExcelData(excelComplex, "2026-11-10", "23:45", 15);
+  assert.equal(parsedComplex.length, 3);
+  assert.equal(parsedComplex[0].is_valid, true);
+  assert.equal(parsedComplex[0].caption, "Đây là video hài, có dấu phẩy; và emoji 🤣🔥");
+  assert.equal(parsedComplex[1].is_valid, true);
+  assert.equal(parsedComplex[1].comment_text, "", "Bình luận để trống phải hợp lệ");
+
+  // 1c. Test phân bổ lịch vượt qua nửa đêm (23:45 + 15p = 00:00 ngày hôm sau)
+  assert.equal(parsedComplex[0].schedule_date, "2026-11-10");
+  assert.equal(parsedComplex[0].schedule_time, "23:45");
+  assert.equal(parsedComplex[1].schedule_date, "2026-11-11", "Tự động chuyển sang ngày mới khi cộng dồn qua nửa đêm");
+  assert.equal(parsedComplex[1].schedule_time, "00:00");
+  assert.equal(parsedComplex[2].schedule_date, "2026-11-11");
+  assert.equal(parsedComplex[2].schedule_time, "00:15");
+
+  // 1d. Test phát hiện thiếu cột, thừa cột, dòng trống
+  const excelErrors = [
+    "",
+    "D:\\Videos\\err1.mp4\tChỉ có 2 cột",
+    "D:\\Videos\\err2.mp4\tCột 2\tCột 3\tCột 4 thừa",
+    "   ",
+    "D:\\Videos\\valid.mp4\tCaption hợp lệ\tCmt hợp lệ"
+  ].join("\n");
+  const parsedErrors = testParseExcelData(excelErrors, "2026-11-10", "08:00", 15);
+  assert.equal(parsedErrors.length, 3, "Dòng trống phải được bỏ qua hoàn toàn");
+  assert.equal(parsedErrors[0].is_valid, false, "Phải phát hiện dòng thiếu cột");
+  assert.ok(parsedErrors[0].error_reason.includes("Thiếu cột"));
+  assert.equal(parsedErrors[1].is_valid, false, "Phải phát hiện dòng thừa cột");
+  assert.ok(parsedErrors[1].error_reason.includes("Thừa cột"));
+  assert.equal(parsedErrors[2].is_valid, true, "Dòng đúng 3 cột phải hợp lệ");
+
+  // 2. Kiểm tra API POST /api/tasks/bulk tích hợp tự động phân bổ lịch & so khớp video R2
+  // Upload 1 video chuẩn lên R2 của Alice với filename "excel_reel_1.mp4"
+  const excelInitResp = await callWorker("/api/media/upload-init", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: "excel_reel_1.mp4", size_bytes: 4096, mime_type: "video/mp4" })
+  });
+  const excelInitData = await excelInitResp.json();
+  const testBytes = new Uint8Array(4096);
+  testBytes.set([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]);
+  const excelPutResp = await callWorker(excelInitData.upload_url, {
+    method: "PUT",
+    headers: {
+      Cookie: `session_token=${tokenA}`,
+      "Content-Type": "video/mp4",
+      "Content-Length": "4096"
+    },
+    body: testBytes
+  });
+  assert.equal(excelPutResp.status, 200);
+  const excelCompResp = await callWorker("/api/media/upload-complete", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ media_id: excelInitData.media_id })
+  });
+  assert.equal(excelCompResp.status, 200);
+
+  // Gọi POST /api/tasks/bulk với đường dẫn máy tính "D:\MyVideos\excel_reel_1.mp4"
+  // Hệ thống phải tự động tìm thấy video R2 đã upload theo tên file
+  const excelBulkCreateResp = await callWorker("/api/tasks/bulk", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      schedule_date: "2029-11-10",
+      schedule_time: "08:00",
+      interval_minutes: 20,
+      tasks: [
+        {
+          video_path: "D:\\MyVideos\\excel_reel_1.mp4",
+          caption: "Excel Reel 1 Caption",
+          comment_text: "Excel Comment 1"
+        },
+        {
+          video_path: `r2://${excelInitData.media_id}`,
+          caption: "Excel Reel 2 Caption",
+          comment_text: ""
+        }
+      ],
+      assign_page_ids: ["page_101"]
+    })
+  });
+  assert.equal(excelBulkCreateResp.status, 200);
+  const excelBulkJson = await excelBulkCreateResp.json();
+  assert.equal(excelBulkJson.success, true);
+  assert.equal(excelBulkJson.inserted_count, 2);
+
+  // Kiểm tra task 1 được tự động gán media_id và lịch 08:00, task 2 là 08:20
+  const createdExcelTask1 = await d1.prepare("SELECT * FROM tasks WHERE id = ?").bind(excelBulkJson.task_ids[0]).first();
+  const createdExcelTask2 = await d1.prepare("SELECT * FROM tasks WHERE id = ?").bind(excelBulkJson.task_ids[1]).first();
+  assert.equal(createdExcelTask1.media_id, excelInitData.media_id, "Tự động so khớp video R2 theo tên file máy tính D:\\...\\excel_reel_1.mp4");
+  assert.equal(createdExcelTask1.schedule_date, "2029-11-10");
+  assert.equal(createdExcelTask1.schedule_time, "08:00");
+  assert.equal(createdExcelTask1.trigger_source, "excel_bulk");
+  assert.equal(createdExcelTask2.schedule_date, "2029-11-10");
+  assert.equal(createdExcelTask2.schedule_time, "08:20", "Task 2 tự động cộng thêm khoảng cách 20 phút");
+
+  // 3. Chặn đường dẫn video chưa được tải lên R2
+  const unuploadedVideoResp = await callWorker("/api/tasks/bulk", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      schedule_date: "2029-11-10",
+      schedule_time: "08:00",
+      interval_minutes: 15,
+      tasks: [
+        {
+          video_path: "D:\\Videos\\non_existent_video_999.mp4",
+          caption: "Test Error Video",
+          comment_text: ""
+        }
+      ],
+      assign_page_ids: ["page_101"]
+    })
+  });
+  assert.equal(unuploadedVideoResp.status, 400, "Chặn task khi video chưa được tải lên R2");
+  const unuploadedData = await unuploadedVideoResp.json();
+  assert.ok(unuploadedData.detail.includes("chưa được tải lên Cloudflare R2"));
+
+  // 4. Chặn lịch bắt đầu trong quá khứ
+  const pastBulkScheduleResp = await callWorker("/api/tasks/bulk", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      schedule_date: "2020-01-01",
+      schedule_time: "08:00",
+      interval_minutes: 15,
+      tasks: [
+        {
+          video_path: `r2://${excelInitData.media_id}`,
+          caption: "Past Test",
+          comment_text: ""
+        }
+      ],
+      assign_page_ids: ["page_101"]
+    })
+  });
+  assert.equal(pastBulkScheduleResp.status, 400, "Chặn tạo bulk task với lịch bắt đầu trong quá khứ");
+
+  console.log("  ✓ [Test 44] Thêm nhanh hàng loạt Task từ Excel: Phân tích 3 cột TAB, Phân bổ lịch cách đều, So khớp R2 & Chống lỗi 100%");
+
   globalThis.fetch = originalFetch;
 
   console.log("\n==================================================================");
-  console.log(" TẤT CẢ 43/43 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
+  console.log(" TẤT CẢ 44/44 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
   console.log("==================================================================");
 }
 

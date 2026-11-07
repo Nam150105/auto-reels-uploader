@@ -2548,12 +2548,14 @@ export async function addTask(
     objectKey?: string | null;
     status?: string;
     ownerUserId: string;
+    triggerSource?: string;
   },
   options?: {
     allowPast?: boolean;
     minLeadSeconds?: number;
     referenceNowUtc?: number;
     allowEmptySchedule?: boolean;
+    triggerSource?: string;
   }
 ): Promise<number> {
   const now = new Date().toISOString();
@@ -2590,6 +2592,9 @@ export async function addTask(
   const cleanComment = (params.commentText || "").trim();
   const initialCommentStatus = cleanComment ? "pending" : "none";
 
+  const effectiveTriggerSource =
+    params.triggerSource || options?.triggerSource || "scheduled";
+
   const insertSqlWithAuditCols = `INSERT INTO tasks (
          owner_user_id, profile_id, facebook_page_id, media_id, object_key,
          video_path, caption, comment_text, schedule_date, schedule_time,
@@ -2597,7 +2602,7 @@ export async function addTask(
          trigger_source, timezone, status, publish_status, is_locked, idempotency_key, attempt_count, max_attempts,
          log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', 'Asia/Ho_Chi_Minh', ?, ?, 0, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
 
   const insertParamsWithAudit = [
     params.ownerUserId,
@@ -2614,6 +2619,7 @@ export async function addTask(
     scheduledAt,
     finalScheduleDate,
     finalScheduleTime,
+    effectiveTriggerSource,
     status,
     status,
     idempotencyKey,
@@ -2677,15 +2683,18 @@ export async function addTask(
       taskId,
       ownerUserId: params.ownerUserId,
       actorUserId: params.ownerUserId,
-      action: "create_task",
+      action: effectiveTriggerSource === "excel_bulk" ? "create_excel_bulk_task" : "create_task",
+      triggerSource: effectiveTriggerSource,
       oldScheduledAt: null,
       newScheduledAt: scheduledAt,
       oldScheduleText: "",
       newScheduleText: `${finalScheduleDate} ${finalScheduleTime}`.trim(),
       oldStatus: "",
       newStatus: status,
-      reason: "Khởi tạo task mới với lịch đăng bắt buộc",
-      metadata: { facebook_page_id: pageId }
+      reason: effectiveTriggerSource === "excel_bulk"
+        ? "Khởi tạo tác vụ hàng loạt từ bảng tính Excel"
+        : "Khởi tạo task mới với lịch đăng bắt buộc",
+      metadata: { facebook_page_id: pageId, trigger_source: effectiveTriggerSource }
     });
   }
   return taskId;
@@ -2702,12 +2711,14 @@ export async function addTasksBulk(
     facebook_page_id?: string;
     media_id?: string;
     object_key?: string;
+    trigger_source?: string;
   }>,
   assignPageIds: string[] | null,
   ownerUserId: string,
   options?: {
     allowPast?: boolean;
     minLeadSeconds?: number;
+    triggerSource?: string;
   }
 ): Promise<number[]> {
   if (!tasksList || tasksList.length === 0) return [];
@@ -2738,18 +2749,37 @@ export async function addTasksBulk(
       idx++;
     }
 
+    let mediaId = item.media_id || null;
+    let objectKey = item.object_key || null;
+    let effectiveVideoPath = vPath;
+
+    // Tự động phân giải media từ R2 nếu vPath là tên file hoặc đường dẫn máy tính
+    if (!mediaId && !vPath.startsWith("http://") && !vPath.startsWith("https://")) {
+      const cleanKey = vPath.replace(/^r2:\/\//, "").replace(/^d1:\/\/video\//, "");
+      const baseName = vPath.split(/[\\/]/).pop() || vPath;
+      const mediaRec =
+        (await getMediaFileById(db, cleanKey, ownerUserId)) ||
+        (await getMediaFileById(db, baseName, ownerUserId));
+      if (mediaRec && mediaRec.upload_status === "ready") {
+        mediaId = mediaRec.id;
+        objectKey = mediaRec.object_key;
+        effectiveVideoPath = `r2://${mediaRec.id}`;
+      }
+    }
+
     const tid = await addTask(
       db,
       {
-        videoPath: vPath,
+        videoPath: effectiveVideoPath,
         caption: item.caption || "",
         commentText: item.comment_text || "",
         scheduleDate: item.schedule_date || "",
         scheduleTime: item.schedule_time || "",
         facebookPageId: targetPageId,
-        mediaId: item.media_id || null,
-        objectKey: item.object_key || null,
-        ownerUserId
+        mediaId,
+        objectKey,
+        ownerUserId,
+        triggerSource: item.trigger_source || options?.triggerSource || "excel_bulk"
       },
       options
     );

@@ -14,7 +14,7 @@ import type {
   QueueTaskMessage
 } from "./types.ts";
 import { getEncryptionKeyMaterial } from "./utils/crypto.ts";
-import { parseVnScheduleToUtc } from "./utils/timezone.ts";
+import { parseVnScheduleToUtc, formatUtcToVn } from "./utils/timezone.ts";
 import {
   ensureDatabaseInitialized,
   verifyUserCredentials,
@@ -987,7 +987,7 @@ export async function handleWorkerRequest(
     }
 
     if (pathname === "/api/tasks/bulk" && method === "POST") {
-      const body = (await request.json()) as {
+      const body = (await request.json().catch(() => ({}))) as {
         tasks?: Array<{
           video_path: string;
           caption?: string;
@@ -997,15 +997,100 @@ export async function handleWorkerRequest(
           facebook_page_id?: string;
           media_id?: string;
           object_key?: string;
+          trigger_source?: string;
         }>;
         assign_page_ids?: string[];
         assign_profile_ids?: string[];
         allow_past?: boolean;
+        schedule_date?: string;
+        schedule_time?: string;
+        interval_minutes?: number;
       };
 
       const tasksList = body.tasks || [];
       if (tasksList.length === 0) {
         return jsonResponse({ detail: "Danh sách tác vụ trống." }, 400);
+      }
+
+      // 1. Phân bổ lịch hẹn tự động nếu có ngày giờ bắt đầu và khoảng cách
+      const baseDate = (body.schedule_date || "").trim();
+      const baseTime = (body.schedule_time || "").trim();
+      const intervalMinutes = Math.max(0, Number(body.interval_minutes) || 0);
+
+      if (baseDate && baseTime) {
+        const parsedBase = parseVnScheduleToUtc(baseDate, baseTime, {
+          allowPast: Boolean(body.allow_past),
+          requireSchedule: true
+        });
+        if (!parsedBase.isValid) {
+          return jsonResponse(
+            {
+              error_code: parsedBase.isPast ? "SCHEDULE_IN_PAST" : "SCHEDULE_INVALID",
+              detail: parsedBase.error || "Thời gian bắt đầu đặt lịch không hợp lệ hoặc đã qua.",
+              message: parsedBase.error || "Thời gian bắt đầu đặt lịch không hợp lệ hoặc đã qua.",
+              field_errors: parsedBase.fieldErrors,
+              is_past: parsedBase.isPast,
+              missing_date: parsedBase.missingDate,
+              missing_time: parsedBase.missingTime
+            },
+            400
+          );
+        }
+        const baseUtc = parsedBase.scheduledAtUtc!;
+        for (let i = 0; i < tasksList.length; i++) {
+          if (!tasksList[i].schedule_date || !tasksList[i].schedule_time) {
+            const taskUtc = baseUtc + i * intervalMinutes * 60;
+            const vnSlot = formatUtcToVn(taskUtc);
+            tasksList[i].schedule_date = vnSlot.schedule_date;
+            tasksList[i].schedule_time = vnSlot.schedule_time;
+          }
+        }
+      }
+
+      // 2. Kiểm tra tính hợp lệ và phân giải R2 cho từng task
+      for (let i = 0; i < tasksList.length; i++) {
+        const item = tasksList[i];
+        const vPath = (item.video_path || "").trim();
+        const cap = (item.caption || "").trim();
+
+        if (!vPath) {
+          return jsonResponse({ detail: `Dòng ${i + 1}: Đường dẫn video không được để trống.` }, 400);
+        }
+        if (!cap) {
+          return jsonResponse({ detail: `Dòng ${i + 1}: Caption không được để trống.` }, 400);
+        }
+
+        // Tự động giải quyết media R2
+        const isUrl = vPath.startsWith("https://") || vPath.startsWith("http://");
+        const isExplicitR2 =
+          vPath.startsWith("r2://") ||
+          vPath.startsWith("d1://video/") ||
+          vPath.startsWith("med_") ||
+          Boolean(item.media_id);
+
+        if (!isUrl) {
+          const cleanKey = vPath.replace(/^r2:\/\//, "").replace(/^d1:\/\/video\//, "");
+          const baseName = vPath.split(/[\\/]/).pop() || vPath;
+          const lookupKey = item.media_id || cleanKey;
+
+          let mediaRecord = await getMediaFileById(db, lookupKey, ownerUserId);
+          if (!mediaRecord && baseName) {
+            mediaRecord = await getMediaFileById(db, baseName, ownerUserId);
+          }
+
+          if (mediaRecord && mediaRecord.upload_status === "ready") {
+            item.media_id = mediaRecord.id;
+            item.object_key = mediaRecord.object_key;
+            item.video_path = `r2://${mediaRecord.id}`;
+          } else if (isExplicitR2 || /^[a-zA-Z]:\\/.test(vPath) || vPath.endsWith(".mp4")) {
+            return jsonResponse(
+              {
+                detail: `Dòng ${i + 1}: Video '${baseName}' chưa được tải lên Cloudflare R2 hoặc upload chưa hoàn tất. Vui lòng chọn file và tải lên R2 trước khi tạo task.`
+              },
+              400
+            );
+          }
+        }
       }
 
       let assignIds = body.assign_page_ids || body.assign_profile_ids || null;
@@ -1020,7 +1105,8 @@ export async function handleWorkerRequest(
 
       try {
         const inserted = await addTasksBulk(db, tasksList, assignIds, ownerUserId, {
-          allowPast: Boolean(body.allow_past)
+          allowPast: Boolean(body.allow_past),
+          triggerSource: "excel_bulk"
         });
         return jsonResponse({
           success: true,
