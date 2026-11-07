@@ -404,8 +404,8 @@
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </button>
 
-                    <!-- Thêm Task Cho Page Này -->
-                    <button @click="openSingleTaskModal(p.facebook_page_id)" class="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded transition" title="Tạo task mới cho Fanpage này">
+                    <!-- Thêm Task Cho Page Này (Tối đa 4 task, chia đều sau X tiếng) -->
+                    <button @click.stop="openPageTasksModal(p)" class="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded transition" title="Lên lịch đăng cho Fanpage này (Tối đa 4 bài, chia đều sau X tiếng)">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
                     </button>
 
@@ -557,7 +557,7 @@
           </div>
         </div>
 
-        <!-- Task Table -->
+        <!-- Task Table: Gọn gàng, độ cao hàng chuẩn, ẩn thông tin backend, click vào hàng để xem chi tiết -->
         <div class="flex-1 overflow-auto">
           <table class="w-full text-left border-collapse">
             <thead class="sticky top-0 bg-slate-950/95 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider select-none z-10 backdrop-blur-sm">
@@ -569,207 +569,143 @@
                          title="Chọn tất cả task"
                          class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer">
                 </th>
-                <th class="py-2.5 px-3 w-12 text-center">ID</th>
-                <th class="py-2.5 px-3 w-40">Fanpage</th>
-                <th class="py-2.5 px-3 min-w-[180px]">Video File</th>
-                <th class="py-2.5 px-3 min-w-[200px]">Caption & Bình luận</th>
+                <th class="py-2.5 px-2 w-12 text-center">#</th>
+                <th class="py-2.5 px-3 w-44">Fanpage</th>
+                <th class="py-2.5 px-3 w-40">Video</th>
+                <th class="py-2.5 px-3 min-w-[240px]">Caption &amp; Bình luận</th>
                 <th class="py-2.5 px-3 w-32">Hẹn Giờ Meta</th>
                 <th class="py-2.5 px-3 w-28 text-center">Trạng Thái</th>
-                <th class="py-2.5 px-3 min-w-[160px]">Link Reels / Log Lỗi</th>
-                <th class="py-2.5 px-3 w-24 text-center">Thao tác</th>
+                <th class="py-2.5 px-3 w-28 text-center">Thao tác</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60 text-xs font-normal">
               <tr v-if="tasks.length === 0">
-                <td colspan="9" class="text-center py-20 text-slate-500">
+                <td colspan="8" class="text-center py-20 text-slate-500">
                   Chưa có task nào.<br>Bấm <b>Thêm Task Đơn Lẻ</b> hoặc <b>Nhập Nhanh Từ Excel</b> để tạo lịch đăng.
                 </td>
               </tr>
 
-              <tr v-for="t in tasks" :key="t.id" :class="selectedTaskIds.includes(t.id) ? 'bg-blue-950/25' : 'hover:bg-slate-800/40'" class="transition">
-                <td class="py-2.5 px-3 text-center">
+              <tr v-for="(t, idx) in tasks" :key="t.id"
+                  @click="openTaskDetailModal(t)"
+                  :class="selectedTaskIds.includes(t.id) ? 'bg-blue-950/35' : 'hover:bg-slate-800/50'"
+                  class="cursor-pointer transition h-14 select-none group border-b border-slate-800/40"
+                  title="Nhấn vào hàng để xem đầy đủ Caption, Bình luận, Video và Lịch sử đăng">
+                
+                <!-- Checkbox -->
+                <td class="py-2 px-3 text-center" @click.stop>
                   <input type="checkbox"
                          :checked="selectedTaskIds.includes(t.id)"
                          :disabled="isTaskLocked(t) || isTaskInFlight(t)"
                          @change="toggleTaskSelection(t.id)"
-                         :title="isTaskLocked(t) ? 'Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử.' : 'Chọn task'"
+                         :title="isTaskLocked(t) ? 'Task đã đăng thành công (Đã khóa).' : 'Chọn task'"
                          class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">
                 </td>
-                <td class="py-2.5 px-3 text-center font-mono text-slate-400 font-semibold">{{ t.id }}</td>
-                
-                <!-- Fanpage -->
-                <td class="py-2.5 px-3">
-                  <div class="font-bold text-white text-xs truncate max-w-[160px]">{{ t.page_name || t.profile_name || 'Chưa gán Page' }}</div>
-                  <div class="text-[10px] text-slate-500 font-mono truncate" v-if="t.facebook_page_id">
-                    ID: {{ t.facebook_page_id }}
-                  </div>
+
+                <!-- STT (#) -->
+                <td class="py-2 px-2 text-center font-mono text-slate-500 text-xs font-medium">
+                  #{{ idx + 1 }}
                 </td>
 
-                <!-- Video File -->
-                <td class="py-2.5 px-3 max-w-[220px]">
-                  <div class="flex items-center gap-1.5 group/vid">
-                    <span class="truncate font-mono text-[11px] text-slate-200" :title="t.video_path">
-                      {{ getFileName(t.video_path) }}
-                    </span>
-                    <button @click="copyToClipboard(t.video_path)" class="opacity-0 group-hover/vid:opacity-100 text-slate-400 hover:text-white transition" title="Sao chép đường dẫn">
-                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                    </button>
-                  </div>
-                  <div class="text-[10px] text-slate-500 truncate font-mono" :title="t.video_path">{{ t.video_path }}</div>
-                </td>
-
-                <!-- Caption & Comment -->
-                <td class="py-2.5 px-3 max-w-[240px]">
-                  <div class="text-slate-300 truncate font-medium whitespace-pre-line" :title="t.caption">
-                    {{ t.caption || '—' }}
-                  </div>
-                  <div v-if="t.comment_text" class="text-[10px] text-indigo-400 truncate mt-0.5" :title="t.comment_text">
-                    💬 {{ t.comment_text }}
-                  </div>
-                </td>
-
-                <!-- Schedule -->
-                <td class="py-2.5 px-3 whitespace-nowrap">
-                  <div v-if="t.schedule_date && t.schedule_time">
-                    <div class="font-semibold text-slate-200">{{ t.schedule_date }}</div>
-                    <div class="text-[11px] font-mono text-cyan-300">{{ t.schedule_time }}</div>
-                    <div v-if="t.original_schedule_date && (t.trigger_source === 'manual_publish_now' || t.trigger_source === 'bulk_publish_now')"
-                         class="text-[9px] text-slate-500 font-mono mt-0.5"
-                         :title="'Lịch gốc trước khi bấm Đăng ngay: ' + t.original_schedule_date + ' ' + (t.original_schedule_time || '')">
-                      Gốc: {{ t.original_schedule_date }} {{ t.original_schedule_time }}
+                <!-- Fanpage: Tên + Avatar/Icon, Ẩn ID số backend thô -->
+                <td class="py-2 px-3 max-w-[170px]">
+                  <div class="flex items-center gap-2">
+                    <div class="w-6 h-6 rounded-full bg-blue-600/30 border border-blue-500/40 text-blue-300 font-bold text-[10px] flex items-center justify-center shrink-0">
+                      {{ (t.page_name || 'P').charAt(0).toUpperCase() }}
                     </div>
+                    <span class="font-bold text-white text-xs truncate" :title="t.page_name || 'Fanpage'">
+                      {{ t.page_name || t.profile_name || 'Chưa gán Page' }}
+                    </span>
                   </div>
-                  <div v-else class="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-bold inline-block">
+                </td>
+
+                <!-- Video: Tên file sạch + Icon 🎬, Ẩn toàn bộ hash r2://med_... -->
+                <td class="py-2 px-3 max-w-[160px]">
+                  <div class="flex items-center gap-1.5 font-mono text-xs text-slate-200">
+                    <span class="text-blue-400">🎬</span>
+                    <span class="truncate" :title="getCleanFileName(t)">
+                      {{ getCleanFileName(t) }}
+                    </span>
+                  </div>
+                </td>
+
+                <!-- Caption & Bình luận: GỌN GÀNG ĐÚNG 1 DÒNG, KHÔNG PHÌNH TO CHIỀU CAO -->
+                <td class="py-2 px-3 max-w-[280px]">
+                  <div class="text-slate-200 truncate font-medium text-xs leading-normal" :title="t.caption">
+                    {{ getFirstLine(t.caption) || '—' }}
+                  </div>
+                  <div v-if="t.comment_text" class="text-[11px] text-indigo-300 truncate mt-0.5 flex items-center gap-1" :title="'Bình luận: ' + t.comment_text">
+                    <span class="text-xs">💬</span>
+                    <span class="truncate">{{ getFirstLine(t.comment_text) }}</span>
+                  </div>
+                </td>
+
+                <!-- Hẹn Giờ Meta -->
+                <td class="py-2 px-3 whitespace-nowrap">
+                  <div v-if="t.schedule_date && t.schedule_time" class="font-mono text-xs">
+                    <div class="font-semibold text-slate-200">{{ t.schedule_date }}</div>
+                    <div class="text-cyan-300 font-bold">{{ t.schedule_time }}</div>
+                  </div>
+                  <div v-else class="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 text-[10px] font-bold inline-block">
                     ⚠️ Cần bổ sung lịch
                   </div>
                 </td>
 
-                <!-- Trạng thái (Tách biệt rõ ràng giữa R2 Storage, Đăng Reels & Đăng Bình luận) -->
-                <td class="py-2.5 px-3 text-center whitespace-nowrap">
-                  <div class="flex flex-col gap-1 items-center">
-                    <!-- Trạng thái R2 -->
-                    <div v-if="t.media_id || (t.video_path && t.video_path.startsWith('r2://'))">
-                      <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/20" title="Video đã được lưu và xác minh trên Cloudflare R2">
-                        ☁️ R2: Đã lưu
-                      </span>
-                    </div>
-
-                    <!-- Trạng thái Reels -->
-                    <div>
-                      <span v-if="t.status === 'needs_schedule'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">⚠️ Cần bổ sung lịch</span>
-                      <span v-else-if="t.status === 'due_soon'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-orange-500/15 text-orange-300 border border-orange-500/30 animate-pulse">⏰ Sắp đến giờ</span>
-                      <span v-else-if="t.status === 'scheduled'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">🕒 Chờ đăng</span>
-                      <span v-else-if="t.status === 'queued'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">⏳ Hàng đợi</span>
-                      <span v-else-if="t.status === 'pending'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">🕒 Chờ đăng</span>
-                      <span v-else-if="t.status === 'running'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/30 animate-pulse">🔄 Đang đăng Reels...</span>
-                      <span v-else-if="t.status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">✅ Thành công</span>
-                      <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">❌ Thất bại</span>
-                      <span v-else-if="t.status === 'cancelled'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">🚫 Đã hủy</span>
-                    </div>
-
-                    <!-- Trạng thái khóa sau khi đăng -->
-                    <div v-if="isTaskLocked(t)">
-                      <span class="px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-800 text-slate-300 border border-slate-700" title="Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử. Bạn vẫn có thể xem thông tin và thống kê bài đăng.">
-                        🔒 Đã khóa sau khi đăng
-                      </span>
-                    </div>
-
-                    <!-- Trạng thái Comment (Chỉ hiển thị khi task có nhập nội dung comment) -->
-                    <div v-if="t.comment_text">
-                      <span v-if="t.comment_status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-teal-500/10 text-teal-300 border border-teal-500/20" title="Bình luận đã đăng thành công">
-                        💬 Comment: Thành công
-                      </span>
-                      <span v-else-if="t.comment_status === 'processing'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-300 border border-sky-500/20 animate-pulse">
-                        💬 Comment: Đang xử lý...
-                      </span>
-                      <span v-else-if="t.comment_status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30 cursor-pointer hover:bg-amber-500/25" :title="t.comment_log || 'Lỗi bình luận'" @click="openLogModal(t)">
-                        ⚠️ Comment: Thất bại
-                      </span>
-                      <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700/60" title="Chưa gửi bình luận">
-                        💬 Comment: Chưa gửi
-                      </span>
-                    </div>
-                  </div>
+                <!-- Trạng Thái Gọn Gàng -->
+                <td class="py-2 px-3 text-center whitespace-nowrap">
+                  <span v-if="t.status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                    ✅ Đã đăng
+                  </span>
+                  <span v-else-if="t.status === 'running'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-300 border border-blue-500/30 animate-pulse">
+                    🔄 Đang đăng...
+                  </span>
+                  <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                    ❌ Thất bại
+                  </span>
+                  <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                    🕒 Chờ đăng
+                  </span>
                 </td>
 
-                <!-- Link Reels / Log -->
-                <td class="py-2.5 px-3 max-w-[220px]">
-                  <div v-if="t.video_url" class="truncate">
-                    <a :href="t.video_url" target="_blank" class="text-blue-400 hover:underline font-semibold text-[11px] flex items-center gap-1">
-                      <span>🔗 Mở bài đăng Facebook</span>
-                    </a>
-                  </div>
-                  <div @click="openLogModal(t)" class="truncate cursor-pointer hover:underline text-[11px] mt-0.5" :class="t.status === 'failed' ? 'text-rose-400 font-semibold' : 'text-slate-400'" :title="formatFriendlyLog(t)">
-                    {{ formatFriendlyLog(t) }}
-                  </div>
-                  <div v-if="t.done_time" class="text-[10px] font-mono text-slate-500 mt-0.5">
-                    Xong: {{ t.done_time }}
-                  </div>
-                </td>
-
-                <!-- Actions -->
-                <td class="py-2.5 px-3 text-center whitespace-nowrap">
+                <!-- Thao tác: Icon buttons with @click.stop -->
+                <td class="py-2 px-3 text-center whitespace-nowrap" @click.stop>
                   <div class="flex items-center justify-center gap-1">
-                    <!-- Nút Thử đăng lại comment (Chỉ khi Reels thành công nhưng comment thất bại) -->
-                    <button v-if="isTaskLocked(t) && t.comment_text && t.comment_status === 'failed'"
-                            @click="handleRetryComment(t.id)"
-                            :disabled="retryingCommentTaskId === t.id"
-                            title="Thử đăng lại bình luận (Tuyệt đối không đăng lại video)"
-                            class="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-semibold flex items-center gap-1 transition">
-                      <svg v-if="retryingCommentTaskId === t.id" class="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-                      <svg v-else class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                      <span>Đăng lại cmt</span>
+                    <!-- Đăng ngay (Chỉ khi chưa đăng) -->
+                    <button v-if="!isTaskLocked(t)"
+                            @click="handlePublishSingleTaskNow(t)"
+                            :disabled="isTaskInFlight(t) || publishingNowTaskId === t.id"
+                            title="Đăng ngay lập tức"
+                            class="p-1.5 text-emerald-400 hover:bg-emerald-950/60 rounded-lg transition disabled:opacity-30">
+                      ⚡
                     </button>
-
-                    <!-- Khi task đã đăng thành công (isTaskLocked): Chỉ cho Xem thống kê & Xem chi tiết, khóa Sửa/Đặt lại/Xóa -->
-                    <template v-if="isTaskLocked(t)">
-                      <button @click="openReelInsightModal(t.id)"
-                              title="Xem thống kê hiệu suất Reels"
-                              class="px-2 py-1 bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition">
-                        <span>📊 Thống kê</span>
-                      </button>
-                      <button @click="openLogModal(t)"
-                              title="Xem chi tiết task & lịch sử thao tác"
-                              class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                      </button>
-                    </template>
-
-                    <!-- Khi task chưa đăng thành công: Cho phép Đăng ngay / Sửa / Thử lại / Xem log / Xóa -->
-                    <template v-else>
-                      <button @click="handlePublishSingleTaskNow(t)"
-                              :disabled="isTaskInFlight(t) || publishingNowTaskId === t.id"
-                              title="Đăng ngay lập tức (Tự động cập nhật lịch đăng về hiện tại và đưa vào hàng đợi xuất bản)"
-                              class="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600/35 text-emerald-300 border border-emerald-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition disabled:opacity-30 disabled:cursor-not-allowed">
-                        <svg v-if="publishingNowTaskId === t.id" class="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-                        <span v-else>⚡</span>
-                        <span>{{ publishingNowTaskId === t.id ? 'Đang gửi...' : 'Đăng ngay' }}</span>
-                      </button>
-                      <button @click="openEditTaskModal(t)"
-                              :disabled="isTaskInFlight(t)"
-                              title="Sửa nội dung & lịch đăng task"
-                              class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-                      </button>
-                      <button v-if="t.status === 'failed' || t.status === 'cancelled'"
-                              @click="handleResetTask(t.id)"
-                              :disabled="isTaskInFlight(t)"
-                              title="Thử lại (Đặt lại về trạng thái Chờ đăng)"
-                              class="p-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                      </button>
-                      <button @click="openLogModal(t)"
-                              title="Xem chi tiết task & lịch sử thao tác"
-                              class="p-1 text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded transition">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                      </button>
-                      <button @click="handleDeleteTask(t.id)"
-                              :disabled="isTaskInFlight(t)"
-                              title="Xóa task"
-                              class="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                      </button>
-                    </template>
+                    <!-- Xem thống kê (Khi đã đăng) -->
+                    <button v-if="isTaskLocked(t)"
+                            @click="openReelInsightModal(t.id)"
+                            title="Xem thống kê Reels"
+                            class="p-1.5 text-indigo-400 hover:bg-indigo-950/60 rounded-lg transition">
+                      📊
+                    </button>
+                    <!-- Sửa task (Khi chưa đăng) -->
+                    <button v-if="!isTaskLocked(t)"
+                            @click="openEditTaskModal(t)"
+                            :disabled="isTaskInFlight(t)"
+                            title="Chỉnh sửa task"
+                            class="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition disabled:opacity-30">
+                      ✏️
+                    </button>
+                    <!-- Xóa task (Khi chưa đăng) -->
+                    <button v-if="!isTaskLocked(t)"
+                            @click="handleDeleteTask(t.id)"
+                            :disabled="isTaskInFlight(t)"
+                            title="Xóa task"
+                            class="p-1.5 text-rose-400 hover:bg-rose-950/60 rounded-lg transition disabled:opacity-30">
+                      🗑️
+                    </button>
+                    <!-- Mở modal chi tiết -->
+                    <button @click="openTaskDetailModal(t)"
+                            title="Xem chi tiết toàn bộ Task"
+                            class="p-1.5 text-cyan-400 hover:bg-cyan-950/60 rounded-lg transition">
+                      👁️
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -891,10 +827,10 @@
                 <span class="text-blue-400">▶️</span>
               </div>
               <div class="text-base font-extrabold text-white font-mono mt-1.5">
-                {{ formatMetricValue(insightsData.overview.total_views) }}
+                {{ formatMetricValue((insightsData.overview ? insightsData.overview.total_views : null)) }}
               </div>
               <div class="text-[10px] text-slate-500 mt-1">
-                Trên {{ insightsData.overview.total_reels_count || 0 }} bài Reels đã đăng
+                Trên {{ (insightsData.overview ? insightsData.overview.total_reels_count : 0) || 0 }} bài Reels đã đăng
               </div>
             </div>
 
@@ -905,7 +841,7 @@
                 <span class="text-cyan-400">👁️</span>
               </div>
               <div class="text-base font-extrabold text-cyan-300 font-mono mt-1.5">
-                {{ formatMetricValue(insightsData.overview.total_reach) }}
+                {{ formatMetricValue((insightsData.overview ? insightsData.overview.total_reach : null)) }}
               </div>
               <div class="text-[10px] text-slate-500 mt-1">Unique Reach (post_impressions_unique)</div>
             </div>
@@ -917,7 +853,7 @@
                 <span class="text-indigo-400">⚡</span>
               </div>
               <div class="text-base font-extrabold text-indigo-300 font-mono mt-1.5">
-                {{ formatMetricValue(insightsData.overview.total_interactions) }}
+                {{ formatMetricValue((insightsData.overview ? insightsData.overview.total_interactions : null)) }}
               </div>
               <div class="text-[10px] text-slate-500 mt-1">Cảm xúc + Bình luận + Chia sẻ</div>
             </div>
@@ -929,7 +865,7 @@
                 <span class="text-pink-400">❤️</span>
               </div>
               <div class="text-base font-extrabold text-pink-300 font-mono mt-1.5">
-                {{ formatMetricValue(insightsData.overview.total_likes) }}
+                {{ formatMetricValue((insightsData.overview ? insightsData.overview.total_likes : null)) }}
               </div>
               <div class="text-[10px] text-slate-500 mt-1">Reactions trên bài Reels</div>
             </div>
@@ -941,7 +877,7 @@
                 <span class="text-teal-400">💬</span>
               </div>
               <div class="text-base font-extrabold text-teal-300 font-mono mt-1.5">
-                {{ formatMetricValue(insightsData.overview.total_comments) }}
+                {{ formatMetricValue((insightsData.overview ? insightsData.overview.total_comments : null)) }}
               </div>
               <div class="text-[10px] text-slate-500 mt-1">Comments trên bài Reels</div>
             </div>
@@ -953,7 +889,7 @@
                 <span class="text-emerald-400">🔁</span>
               </div>
               <div class="text-base font-extrabold text-emerald-300 font-mono mt-1.5">
-                {{ formatMetricValue(insightsData.overview.total_shares) }}
+                {{ formatMetricValue((insightsData.overview ? insightsData.overview.total_shares : null)) }}
               </div>
               <div class="text-[10px] text-slate-500 mt-1">Shares trên bài Reels</div>
             </div>
@@ -965,7 +901,7 @@
                 <span class="text-amber-400">⏱️</span>
               </div>
               <div class="text-base font-extrabold text-amber-300 font-mono mt-1.5">
-                {{ formatDurationMs(insightsData.overview.total_watch_time_ms) }}
+                {{ formatDurationMs((insightsData.overview ? insightsData.overview.total_watch_time_ms : null)) }}
               </div>
               <div class="text-[10px] text-slate-500 mt-1">post_video_view_time</div>
             </div>
@@ -977,7 +913,7 @@
                 <span class="text-purple-400">⏳</span>
               </div>
               <div class="text-base font-extrabold text-purple-300 font-mono mt-1.5">
-                {{ formatDurationMs(insightsData.overview.avg_watch_time_ms) }}
+                {{ formatDurationMs((insightsData.overview ? insightsData.overview.avg_watch_time_ms : null)) }}
               </div>
               <div class="text-[10px] text-slate-500 mt-1">post_video_avg_time_watched</div>
             </div>
@@ -994,12 +930,12 @@
                 </div>
                 <span class="text-[10px] font-mono text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">Time Series</span>
               </div>
-              <div v-if="!insightsData.charts.views_over_time || insightsData.charts.views_over_time.length === 0"
+              <div v-if="!(insightsData.charts && insightsData.charts.views_over_time) || insightsData.charts.views_over_time.length === 0"
                    class="h-40 flex items-center justify-center text-xs text-slate-500 italic">
                 Chưa có dữ liệu biểu đồ trong khoảng thời gian đã chọn.
               </div>
               <div v-else class="space-y-2 max-h-48 overflow-y-auto pr-1">
-                <div v-for="pt in insightsData.charts.views_over_time" :key="pt.date" class="space-y-1">
+                <div v-for="pt in (insightsData.charts ? insightsData.charts.views_over_time : [])" :key="pt.date" class="space-y-1">
                   <div class="flex items-center justify-between text-[11px] font-mono">
                     <span class="text-slate-300 font-semibold">{{ pt.date }} <span class="text-slate-500">({{ pt.reels_count }} Reels)</span></span>
                     <span class="text-blue-300">▶️ {{ formatMetricNumber(pt.views) }} views <span class="text-slate-600">|</span> <span class="text-cyan-300">👁️ {{ formatMetricNumber(pt.reach) }} reach</span></span>
@@ -1021,12 +957,12 @@
                 </div>
                 <span class="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">Top Reels</span>
               </div>
-              <div v-if="!insightsData.charts.reel_performance || insightsData.charts.reel_performance.length === 0"
+              <div v-if="!(insightsData.charts && insightsData.charts.reel_performance) || insightsData.charts.reel_performance.length === 0"
                    class="h-40 flex items-center justify-center text-xs text-slate-500 italic">
                 Chưa có bài Reels nào có số liệu.
               </div>
               <div v-else class="space-y-2 max-h-48 overflow-y-auto pr-1">
-                <div v-for="rp in insightsData.charts.reel_performance.slice(0, 8)" :key="rp.task_id" class="space-y-1">
+                <div v-for="rp in (insightsData.charts && insightsData.charts.reel_performance ? insightsData.charts.reel_performance.slice(0, 8) : [])" :key="rp.task_id" class="space-y-1">
                   <div class="flex items-center justify-between text-[11px]">
                     <span class="text-slate-200 truncate max-w-[230px] font-medium" :title="rp.label">#{{ rp.task_id }} • {{ rp.page_name }}: {{ rp.label }}</span>
                     <span class="font-mono text-indigo-300 shrink-0">{{ formatMetricNumber(rp.views) }} views • {{ formatMetricNumber(rp.reach) }} reach</span>
@@ -1048,12 +984,12 @@
                 </div>
                 <span class="text-[10px] font-mono text-pink-400 bg-pink-500/10 px-2 py-0.5 rounded border border-pink-500/20">Engagement</span>
               </div>
-              <div v-if="!insightsData.charts.interactions_breakdown || insightsData.charts.interactions_breakdown.length === 0"
+              <div v-if="!(insightsData.charts && insightsData.charts.interactions_breakdown) || insightsData.charts.interactions_breakdown.length === 0"
                    class="h-40 flex items-center justify-center text-xs text-slate-500 italic">
                 Chưa có dữ liệu tương tác.
               </div>
               <div v-else class="space-y-2 max-h-48 overflow-y-auto pr-1">
-                <div v-for="ib in insightsData.charts.interactions_breakdown.slice(0, 8)" :key="ib.task_id" class="space-y-1">
+                <div v-for="ib in (insightsData.charts && insightsData.charts.interactions_breakdown ? insightsData.charts.interactions_breakdown.slice(0, 8) : [])" :key="ib.task_id" class="space-y-1">
                   <div class="flex items-center justify-between text-[11px]">
                     <span class="text-slate-200 truncate max-w-[200px]">#{{ ib.task_id }} {{ ib.label }}</span>
                     <span class="font-mono text-[10px] space-x-2 shrink-0">
@@ -1080,12 +1016,12 @@
                 </div>
                 <span class="text-[10px] font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">Watch Time &amp; Pages</span>
               </div>
-              <div v-if="(!insightsData.charts.page_comparison || insightsData.charts.page_comparison.length === 0)"
+              <div v-if="(!(insightsData.charts && insightsData.charts.page_comparison) || insightsData.charts.page_comparison.length === 0)"
                    class="h-40 flex items-center justify-center text-xs text-slate-500 italic">
                 Chưa có dữ liệu so sánh Fanpage.
               </div>
               <div v-else class="space-y-2.5 max-h-48 overflow-y-auto pr-1">
-                <div v-for="pg in insightsData.charts.page_comparison" :key="pg.facebook_page_id"
+                <div v-for="pg in (insightsData.charts ? insightsData.charts.page_comparison : [])" :key="pg.facebook_page_id"
                      class="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800/80 space-y-1">
                   <div class="flex items-center justify-between text-xs">
                     <span class="font-bold text-white">{{ pg.page_name }} <span class="text-[10px] text-slate-400 font-mono">({{ pg.reels_count }} Reels)</span></span>
@@ -1663,32 +1599,33 @@
             <p v-if="singleScheduleErrors.schedule_date" class="text-[11px] text-rose-400 font-semibold">⚠️ {{ singleScheduleErrors.schedule_date }}</p>
           </div>
 
-          <!-- Giờ lên lịch bắt buộc (24 tiếng) + Tự nhận biết SA/CH/AM/PM -->
-          <div class="space-y-2 p-3 rounded-xl bg-slate-950/60 border" :class="singleScheduleErrors.schedule_time || singleScheduleErrors.general ? 'border-rose-500/80' : 'border-slate-800'">
+          <!-- Giờ đăng 24 tiếng đơn giản hóa + Presets thông minh & Nhận biết quá khứ -->
+          <div class="space-y-2 p-3.5 rounded-xl bg-slate-950/60 border" :class="singleScheduleErrors.schedule_time || singleScheduleErrors.general ? 'border-rose-500/80' : 'border-slate-800'">
             <div class="flex items-center justify-between flex-wrap gap-1.5">
-              <label class="text-xs font-semibold text-slate-300">Giờ đăng bắt buộc (24 tiếng - HH:MM): <span class="text-rose-400">*</span></label>
+              <label class="text-xs font-semibold text-slate-300">Giờ đăng (24 Tiếng - HH:MM): <span class="text-rose-400">*</span></label>
               <div class="flex items-center gap-1 flex-wrap">
-                <button type="button" @click="setRelativeTimePreset(5, 'single')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[11px] text-emerald-300 font-bold border border-emerald-700/60 transition" title="Đặt nhanh hiện tại + 5 phút">[+5 phút]</button>
-                <button type="button" @click="setRelativeTimePreset(15, 'single')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[11px] text-emerald-300 font-bold border border-emerald-700/60 transition" title="Đặt nhanh hiện tại + 15 phút">[+15 phút]</button>
-                <button type="button" @click="setTimePreset('00:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[00:00]</button>
+                <button type="button" @click="setEarliestSchedule('single')" class="px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-[11px] text-emerald-300 font-bold border border-emerald-700/60 transition" title="Đặt sớm nhất có thể theo Meta (+25 phút)">[+25 phút (Sớm nhất)]</button>
+                <button type="button" @click="setQuickTomorrow0001('single')" class="px-2 py-0.5 rounded bg-purple-950/80 hover:bg-purple-900 text-[11px] text-purple-300 font-bold border border-purple-700/60 transition" title="Đặt 00:01 sáng mai">[00:01 Sáng mai]</button>
                 <button type="button" @click="setTimePreset('07:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[07:00]</button>
-                <button type="button" @click="setTimePreset('12:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[12:00]</button>
-                <button type="button" @click="setTimePreset('19:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[19:00]</button>
+                <button type="button" @click="setTimePreset('11:30')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[11:30]</button>
+                <button type="button" @click="setTimePreset('14:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[14:00]</button>
+                <button type="button" @click="setTimePreset('17:30')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[17:30]</button>
+                <button type="button" @click="setTimePreset('20:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[20:00]</button>
               </div>
             </div>
 
             <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-              <!-- Chọn Giờ 24h (00 - 23) -->
+              <!-- Ô chọn Giờ 24h nhanh (00 - 23) -->
               <select :value="getScheduleHour24(singleTaskForm.schedule_time)"
                       @change="onScheduleHour24Change('single', $event.target.value)"
                       class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
-                <option value="">-- Giờ --</option>
+                <option value="">-- Giờ (24h) --</option>
                 <option v-for="h in hours24List" :key="h" :value="h">
-                  {{ h }}h ({{ Number(h) >= 12 ? 'CH / PM' : 'SA / AM' }})
+                  {{ h }}h {{ Number(h) === 0 ? '(Nửa đêm)' : (Number(h) < 12 ? '(Sáng)' : (Number(h) === 12 ? '(Trưa)' : (Number(h) < 18 ? '(Chiều)' : '(Tối)'))) }}
                 </option>
               </select>
               <span class="text-slate-400 font-bold">:</span>
-              <!-- Chọn Phút (00 - 59) -->
+              <!-- Ô chọn Phút (00 - 59) -->
               <select :value="getScheduleMinute24(singleTaskForm.schedule_time)"
                       @change="onScheduleMinute24Change('single', $event.target.value)"
                       class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
@@ -1698,28 +1635,37 @@
                 </option>
               </select>
 
-              <!-- Ô nhập trực tiếp 24h hoặc gõ kèm SA/CH/AM/PM -->
-              <div class="relative flex-1 min-w-[150px]">
+              <!-- Ô nhập trực tiếp dạng 24h hoặc SA/CH -->
+              <div class="relative flex-1 min-w-[160px]">
                 <input type="text"
                        v-model="singleTaskForm.schedule_time"
                        @input="clearSingleScheduleErrors"
                        @blur="normalizeScheduleTimeField('single')"
                        @keydown.enter.prevent="normalizeScheduleTimeField('single')"
-                       placeholder="Nhập 24h: VD 12:16, 14:30 hoặc 2:30 CH"
+                       placeholder="Ví dụ: 00:01, 14:30, 20:00"
                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 pr-7 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
                 <button v-if="singleTaskForm.schedule_time"
                         type="button"
                         @click="singleTaskForm.schedule_time = ''"
                         class="absolute right-2 top-1.5 text-slate-500 hover:text-slate-300 text-xs font-bold"
-                        title="Xóa giờ hẹn">&times;</button>
+                        title="Xóa giờ">&times;</button>
               </div>
+            </div>
+
+            <!-- Cảnh báo nếu người dùng chọn giờ trong quá khứ của ngày hôm nay -->
+            <div v-if="isTimeInPastToday(singleTaskForm.schedule_time, singleTaskForm.schedule_date)"
+                 class="p-2.5 rounded-lg bg-amber-950/70 border border-amber-600/50 text-[11px] text-amber-200 flex items-center justify-between gap-2">
+              <span>⚠️ Mốc {{ singleTaskForm.schedule_time }} trong ngày hôm nay đã trôi qua!</span>
+              <button type="button" @click="shiftToTomorrow('single')" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold shrink-0 text-[10px] transition">
+                👉 Đổi sang Ngày mai ({{ getVnDateString(1) }})
+              </button>
             </div>
 
             <p v-if="singleScheduleErrors.schedule_time" class="text-[11px] text-rose-400 font-semibold">⚠️ {{ singleScheduleErrors.schedule_time }}</p>
             <div v-if="singleScheduleErrors.general" class="p-2.5 rounded-lg bg-amber-950/60 border border-amber-600/50 text-[11px] text-amber-200 flex items-center justify-between gap-2">
               <span>⚠️ {{ singleScheduleErrors.general }}</span>
-              <button type="button" @click="setRelativeTimePreset(5, 'single'); clearSingleScheduleErrors()" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold shrink-0 text-[10px]">
-                Đặt hiện tại + 5 phút
+              <button type="button" @click="setEarliestSchedule('single')" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold shrink-0 text-[10px]">
+                Đặt sớm nhất (+25 phút)
               </button>
             </div>
 
@@ -1728,7 +1674,7 @@
                 🕒 {{ describeTime24h(singleTaskForm.schedule_time, singleTaskForm.schedule_date) }}
               </span>
               <span v-else class="text-slate-500">
-                Bắt buộc chọn Ngày và Giờ đăng. Nếu muốn đăng ngay sau khi tạo, bạn có thể bấm nút ⚡ Đăng ngay trên bảng Task.
+                Bắt buộc chọn Ngày và Giờ đăng dạng 24 tiếng (HH:MM).
               </span>
             </div>
           </div>
@@ -1748,92 +1694,93 @@
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh]">
         <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
           <div>
-            <h3 class="font-bold text-white text-base">Thêm Nhanh Hàng Loạt Task Từ Excel / Bảng Tính</h3>
-            <p class="text-xs text-slate-400">Chọn lịch đăng một lần → Dán dữ liệu 3 cột từ Excel → Tự động phân bổ lịch &amp; So khớp video R2</p>
+            <h3 class="font-bold text-white text-base">Thêm Nhanh Hàng Loạt Task Từ Excel (Chia Đều Các Page • Chung 1 Mốc Giờ)</h3>
+            <p class="text-xs text-slate-400">Chọn 1 mốc thời gian đăng chung → Dán dữ liệu 3 cột từ Excel → Hệ thống tự động chia đều mỗi Page 1 task và so khớp video R2</p>
           </div>
           <button @click="showBulkTaskModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
         </div>
 
         <form @submit.prevent="handleBulkSubmit" class="p-5 space-y-4 overflow-y-auto flex-1 flex flex-col">
-          <!-- BƯỚC 1: CÀI ĐẶT LỊCH ĐĂNG & KHOẢNG CÁCH -->
+          <!-- BƯỚC 1: CHỌN 1 MỐC THỜI GIAN ĐĂNG CHUNG -->
           <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between flex-wrap gap-2">
               <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                <span>⏰</span> Bước 1: Chọn thời gian đăng &amp; Khoảng cách phân bổ
+                <span>⏰</span> Bước 1: Chọn 1 mốc thời gian đăng chung (Dùng cho toàn bộ task):
               </span>
               <span class="text-[11px] text-cyan-400 font-mono">Asia/Ho_Chi_Minh (24h)</span>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <!-- Ngày đăng đầu tiên -->
+              <!-- Ngày đăng chung -->
               <div>
                 <div class="flex items-center justify-between mb-1">
-                  <label class="text-xs font-semibold text-slate-300">Ngày đăng đầu tiên: *</label>
+                  <label class="text-xs font-semibold text-slate-300">Ngày đăng chung: *</label>
                   <div class="flex gap-1 text-[10px]">
                     <button type="button" @click="setBulkScheduleDatePreset(0)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[Hôm nay]</button>
                     <button type="button" @click="setBulkScheduleDatePreset(1)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[Ngày mai]</button>
                     <button type="button" @click="setBulkScheduleDatePreset(2)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[+2 ngày]</button>
                   </div>
                 </div>
-                <input type="date" v-model="bulkScheduleForm.schedule_date" @change="recalculateBulkExcelSchedules" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+                <input type="date" v-model="bulkScheduleForm.schedule_date" @change="recalculateBulkExcelSchedules" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               </div>
 
-              <!-- Giờ đăng đầu tiên -->
+              <!-- Giờ đăng chung (24 tiếng) -->
               <div>
-                <div class="flex items-center justify-between mb-1">
-                  <label class="text-xs font-semibold text-slate-300">Giờ đăng đầu tiên (HH:MM 24h): *</label>
-                  <div class="flex gap-1 text-[10px]">
-                    <button type="button" @click="setBulkScheduleTimePreset('00:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[00:00]</button>
+                <div class="flex items-center justify-between mb-1 flex-wrap gap-1">
+                  <label class="text-xs font-semibold text-slate-300">Giờ đăng chung (24h): *</label>
+                  <div class="flex gap-1 text-[10px] flex-wrap">
+                    <button type="button" @click="setEarliestSchedule('bulk')" class="px-1.5 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 font-bold border border-emerald-700/60" title="Đặt sớm nhất (+25 phút)">[+25p]</button>
+                    <button type="button" @click="setQuickTomorrow0001('bulk')" class="px-1.5 py-0.5 rounded bg-purple-950/80 hover:bg-purple-900 text-purple-300 font-bold border border-purple-700/60" title="00:01 sáng mai">[00:01 Sáng mai]</button>
                     <button type="button" @click="setBulkScheduleTimePreset('07:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[07:00]</button>
-                    <button type="button" @click="setBulkScheduleTimePreset('12:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[12:00]</button>
-                    <button type="button" @click="setBulkScheduleTimePreset('19:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[19:00]</button>
+                    <button type="button" @click="setBulkScheduleTimePreset('11:30')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[11:30]</button>
+                    <button type="button" @click="setBulkScheduleTimePreset('17:30')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[17:30]</button>
+                    <button type="button" @click="setBulkScheduleTimePreset('20:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[20:00]</button>
                   </div>
                 </div>
-                <input type="time" v-model="bulkScheduleForm.schedule_time" @change="recalculateBulkExcelSchedules" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
-              </div>
-            </div>
-
-            <!-- Khoảng cách giữa các task -->
-            <div>
-              <label class="block text-xs font-semibold text-slate-300 mb-1.5">Khoảng cách giữa các task (Tự động cộng dồn theo STT):</label>
-              <div class="grid grid-cols-6 gap-2">
-                <button type="button"
-                        v-for="iv in [0, 5, 10, 15, 30, 60]"
-                        :key="iv"
-                        @click="setBulkScheduleInterval(iv)"
-                        class="py-1.5 px-2 rounded-lg font-mono text-xs font-bold border transition text-center"
-                        :class="bulkScheduleForm.interval_minutes === iv ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'">
-                  {{ iv === 0 ? 'Cùng giờ (0p)' : (iv + ' phút') }}
-                </button>
+                <input type="text"
+                       v-model="bulkScheduleForm.schedule_time"
+                       @input="recalculateBulkExcelSchedules"
+                       placeholder="Ví dụ: 00:01, 14:30, 20:00"
+                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               </div>
             </div>
 
             <!-- Cảnh báo thời gian quá khứ -->
-            <div v-if="bulkSchedulePastWarning" class="p-2.5 rounded-lg bg-rose-950/80 border border-rose-800/80 flex items-center justify-between gap-2 text-xs text-rose-200">
-              <span>⚠️ {{ bulkSchedulePastWarning }}</span>
-              <button type="button" @click="setBulkSchedulePastQuickFix" class="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] shrink-0">
-                ⚡ Hẹn lại +5 phút từ bây giờ
+            <div v-if="bulkSchedulePastWarning || isTimeInPastToday(bulkScheduleForm.schedule_time, bulkScheduleForm.schedule_date)"
+                 class="p-2.5 rounded-lg bg-amber-950/80 border border-amber-600/60 flex items-center justify-between gap-2 text-xs text-amber-200">
+              <span>⚠️ Mốc thời gian này đã trôi qua. Vui lòng chọn thời điểm trong tương lai!</span>
+              <button type="button" @click="shiftToTomorrow('bulk')" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-[11px] shrink-0 transition">
+                👉 Chuyển sang Ngày mai ({{ getVnDateString(1) }})
               </button>
             </div>
           </div>
 
-          <!-- BƯỚC 2: PHÂN BỔ FANPAGE -->
-          <div class="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
-            <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-              <span>📢</span> Bước 2: Phân bổ Fanpage:
-            </span>
-            <div class="flex items-center gap-4 flex-wrap">
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input type="radio" v-model="bulkAssignMethod" value="round_robin" class="text-blue-600 bg-slate-900 border-slate-700 focus:ring-0">
-                <span class="text-xs text-slate-200">Chia đều (Round-Robin) cho các Fanpage đã chọn ({{ selectedPageCount }})</span>
-              </label>
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input type="radio" v-model="bulkAssignMethod" value="specific" class="text-blue-600 bg-slate-900 border-slate-700 focus:ring-0">
-                <span class="text-xs text-slate-200">Gán cho 1 Fanpage cụ thể:</span>
-              </label>
-              <select v-model="bulkSpecificPageId" :disabled="bulkAssignMethod !== 'specific'" class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500 disabled:opacity-40">
-                <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">{{ p.name }}</option>
-              </select>
+          <!-- BƯỚC 2: PHÂN BỔ FANPAGE (CHIA ĐỀU MỖI PAGE 1 TASK, GIỚI HẠN N x 10) -->
+          <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                <span>📢</span> Bước 2: Phân bổ đều cho các Fanpage đã chọn (Chia đều mỗi Page 1 task):
+              </span>
+              <span class="text-[11px] font-mono px-2 py-0.5 rounded border"
+                    :class="isBulkOverLimit ? 'bg-rose-950/80 text-rose-300 border-rose-700/80' : 'bg-blue-950/60 text-blue-300 border-blue-800/60'">
+                Hạn mức: Tối đa {{ maxBulkTasksAllowed }} task ({{ selectedPages.length }} Page × 10 task)
+              </span>
+            </div>
+
+            <div v-if="selectedPages.length === 0" class="p-2.5 rounded-lg bg-rose-950/50 border border-rose-800/60 text-xs text-rose-300">
+              ⚠️ Bạn chưa chọn Fanpage nào ở danh sách bên trái! Hãy tick chọn ít nhất 1 Fanpage để thêm task.
+            </div>
+            <div v-else class="flex items-center gap-2 flex-wrap">
+              <span class="text-xs text-slate-400">Các Page nhận task:</span>
+              <span v-for="p in selectedPages" :key="p.facebook_page_id" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span class="font-medium">{{ p.name }}</span>
+              </span>
+            </div>
+
+            <!-- Cảnh báo nếu số task dán vượt quá N x 10 -->
+            <div v-if="isBulkOverLimit" class="p-2.5 rounded-lg bg-rose-950/90 border border-rose-600 text-xs text-rose-200 font-semibold flex items-center gap-2">
+              <span>⚠️ Bạn đang dán {{ bulkParsedList.length }} task, vượt quá giới hạn tối đa cho phép là {{ maxBulkTasksAllowed }} task đối với {{ selectedPages.length }} Fanpage đã chọn! Vui lòng xóa bớt dòng thừa.</span>
             </div>
           </div>
 
@@ -1853,8 +1800,8 @@
                       placeholder="video01.mp4&#9;Caption video số 1 hay tuyệt&#9;Link mua hàng: bit.ly/123&#10;video02.mp4&#9;Tập 2 kịch tính cuốn hút&#9;&#10;https://example.com/video03.mp4&#9;Review sản phẩm mới&#9;Bình luận tương tác"
                       class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono focus:outline-none focus:border-blue-500 leading-relaxed"></textarea>
             <div class="flex items-center justify-between mt-1 text-[11px] text-slate-400">
-              <span>💡 Copy trực tiếp các ô từ Excel/Google Sheets rồi bấm Ctrl+V vào đây. Không cần chuyển sang CSV/JSON.</span>
-              <span>{{ bulkParsedList.length }} dòng nhận diện</span>
+              <span>💡 Copy trực tiếp từ Excel (Ctrl+C) rồi dán vào đây (Ctrl+V). Tự động chia đều cho {{ selectedPages.length }} Fanpage.</span>
+              <span :class="isBulkOverLimit ? 'text-rose-400 font-bold' : 'text-slate-300'">{{ bulkParsedList.length }} / {{ maxBulkTasksAllowed }} dòng</span>
             </div>
           </div>
 
@@ -1863,10 +1810,10 @@
             <div>
               <div class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
                 <span>📁</span>
-                <span>Bước 4: Tải các file video từ máy tính lên Cloudflare R2 (Tùy chọn):</span>
+                <span>Bước 4: Nạp video từ máy tính lên Cloudflare R2:</span>
               </div>
               <p class="text-[11px] text-slate-400 mt-0.5">
-                Nếu dán đường dẫn ổ đĩa (ví dụ C:\Media\video01.mp4 hoặc video01.mp4), hãy chọn các file video tương ứng để hệ thống tự động tải lên R2 và so khớp theo tên file.
+                Nếu đường dẫn ở Cột 1 là file từ máy tính (ví dụ video01.mp4), bấm nút bên cạnh chọn các file đó để nạp lên R2. Hệ thống sẽ tự động so khớp theo tên file!
               </p>
             </div>
             <div class="flex items-center gap-2">
@@ -1877,11 +1824,11 @@
                      id="bulk-excel-files-input"
                      class="hidden">
               <button type="button"
-                      @click="triggerBulkExcelFilePicker"
-                      :disabled="isUploadingBulkExcelVideos"
-                      class="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition">
+                     @click="triggerBulkExcelFilePicker"
+                     :disabled="isUploadingBulkExcelVideos"
+                     class="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition">
                 <span v-if="isUploadingBulkExcelVideos">⏳ Đang tải {{ bulkExcelUploadProgress.current }}/{{ bulkExcelUploadProgress.total }} ({{ bulkExcelUploadProgress.filename }})...</span>
-                <span v-else>📁 Chọn Các File Video Từ Máy Để Tải Lên R2</span>
+                <span v-else>📁 Chọn Các File Video Từ Máy Để Nạp Lên R2</span>
               </button>
             </div>
           </div>
@@ -1904,11 +1851,11 @@
                 <thead class="sticky top-0 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 uppercase font-mono">
                   <tr>
                     <th class="py-2 px-2.5 w-10 text-center">STT</th>
-                    <th class="py-2 px-2.5">ĐƯỜNG DẪN / FILE VIDEO</th>
+                    <th class="py-2 px-2.5 w-40">FANPAGE NHẬN TASK</th>
+                    <th class="py-2 px-2.5">FILE VIDEO</th>
                     <th class="py-2 px-2.5">CAPTION</th>
                     <th class="py-2 px-2.5">BÌNH LUẬN</th>
-                    <th class="py-2 px-2.5 w-44">THỜI GIAN ĐĂNG</th>
-                    <th class="py-2 px-2.5 w-36">TRẠNG THÁI</th>
+                    <th class="py-2 px-2.5 w-36 text-center">TRẠNG THÁI</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800/60 font-mono">
@@ -1921,7 +1868,15 @@
                   <tr v-for="(item, idx) in bulkParsedList" :key="idx" class="hover:bg-slate-900/50">
                     <td class="py-2 px-2.5 text-center text-slate-500">{{ idx + 1 }}</td>
 
-                    <td class="py-2 px-2.5 max-w-[220px]">
+                    <!-- Fanpage nhận task (Chia đều mỗi page 1 task) -->
+                    <td class="py-2 px-2.5 font-sans">
+                      <div class="text-slate-200 font-semibold truncate max-w-[150px]" :title="item.assigned_page_name">
+                        {{ item.assigned_page_name }}
+                      </div>
+                    </td>
+
+                    <!-- File video & trạng thái R2 -->
+                    <td class="py-2 px-2.5 max-w-[200px]">
                       <div class="truncate text-slate-200" :title="item.video_path">{{ item.filename || item.video_path }}</div>
                       <div class="mt-0.5">
                         <span v-if="item.video_status === 'ready'" class="text-[10px] text-emerald-400 font-sans font-semibold">
@@ -1936,27 +1891,21 @@
                       </div>
                     </td>
 
-                    <td class="py-2 px-2.5 max-w-[180px] truncate text-slate-300 font-sans" :title="item.caption">
+                    <td class="py-2 px-2.5 max-w-[160px] truncate text-slate-300 font-sans" :title="item.caption">
                       {{ item.caption || '—' }}
                     </td>
 
-                    <td class="py-2 px-2.5 max-w-[140px] truncate" :title="item.comment_text">
+                    <td class="py-2 px-2.5 max-w-[120px] truncate" :title="item.comment_text">
                       <span v-if="item.comment_text" class="text-cyan-400 font-sans">{{ item.comment_text }}</span>
                       <span v-else class="text-slate-500 italic text-[11px] font-sans">(Không cmt)</span>
                     </td>
 
-                    <td class="py-2 px-2.5 whitespace-nowrap">
-                      <span class="text-emerald-300 font-semibold font-mono text-xs">
-                        {{ item.schedule_display }}
-                      </span>
-                    </td>
-
-                    <td class="py-2 px-2.5 whitespace-nowrap">
+                    <td class="py-2 px-2.5 whitespace-nowrap text-center">
                       <span v-if="item.is_valid && (item.video_status === 'ready' || item.video_status === 'remote_url')" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[11px] font-bold">
                         ✓ Hợp lệ
                       </span>
                       <span v-else-if="item.is_valid && item.video_status === 'missing'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-[11px] font-bold">
-                        ⚠️ Cần tải video lên R2
+                        ⚠️ Cần nạp R2
                       </span>
                       <span v-else class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 text-[11px] font-bold" :title="item.error_reason">
                         ❌ {{ item.error_reason }}
@@ -1972,13 +1921,12 @@
           <div class="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
             <div class="text-xs text-slate-300 space-y-0.5 font-mono">
               <div class="flex items-center gap-3 flex-wrap">
-                <span>Tổng: <strong class="text-white">{{ bulkParsedList.length }}</strong> dòng</span>
+                <span>Đã nhập: <strong class="text-white">{{ bulkParsedList.length }}</strong> / {{ maxBulkTasksAllowed }} dòng</span>
                 <span>Hợp lệ: <strong class="text-emerald-400">{{ validBulkRowCount }}</strong></span>
-                <span v-if="errorBulkRowCount > 0">Lỗi/Chưa có video: <strong class="text-rose-400">{{ errorBulkRowCount }}</strong></span>
+                <span v-if="errorBulkRowCount > 0">Chưa có video R2: <strong class="text-amber-400">{{ errorBulkRowCount }}</strong></span>
               </div>
-              <div v-if="bulkParsedList.length > 0 && validBulkRowCount > 0" class="text-[11px] text-slate-400 font-sans">
-                Thời gian: <strong class="text-cyan-300">{{ bulkFirstScheduleDisplay }}</strong> → <strong class="text-cyan-300">{{ bulkLastScheduleDisplay }}</strong>
-                (Cách {{ bulkScheduleForm.interval_minutes }} phút)
+              <div v-if="bulkScheduleForm.schedule_date && bulkScheduleForm.schedule_time" class="text-[11px] text-slate-400 font-sans">
+                Lịch đăng chung: <strong class="text-cyan-300">{{ bulkScheduleForm.schedule_date }} {{ bulkScheduleForm.schedule_time }}</strong> (Asia/Ho_Chi_Minh)
               </div>
             </div>
 
@@ -1987,7 +1935,7 @@
                 Hủy
               </button>
               <button type="submit"
-                      :disabled="validBulkRowCount === 0 || isSubmittingBulkTasks || Boolean(bulkSchedulePastWarning)"
+                      :disabled="validBulkRowCount === 0 || isSubmittingBulkTasks || isBulkOverLimit || selectedPages.length === 0"
                       class="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-indigo-900/40 transition active:scale-95 flex items-center gap-1.5">
                 <span>{{ isSubmittingBulkTasks ? 'Đang tạo task...' : ('Xác Nhận Tạo ' + validBulkRowCount + ' Task') }}</span>
               </button>
@@ -1997,7 +1945,6 @@
       </div>
     </div>
 
-    <!-- ================= MODAL: SỬA TASK ================= -->
     <div v-if="showEditTaskModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
@@ -2219,11 +2166,17 @@
       </div>
     </div>
 
-    <!-- ================= MODAL: XEM LOG & META DETAILS ================= -->
+    <!-- ================= MODAL: CHI TIẾT TASK & THÔNG TIN XUẤT BẢN ================= -->
     <div v-if="showLogModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
-          <h3 class="font-bold text-white text-base">{{ currentLogTask.title }}</h3>
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div class="flex items-center gap-2.5">
+            <span class="text-lg">📋</span>
+            <div>
+              <h3 class="font-bold text-white text-base">{{ currentLogTask.title }}</h3>
+              <p class="text-[11px] text-slate-400">Xem đầy đủ nội dung bài đăng, bình luận, video và trạng thái xuất bản</p>
+            </div>
+          </div>
           <button @click="showLogModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
         </div>
         <div class="p-5 overflow-y-auto space-y-4">
@@ -2231,38 +2184,71 @@
           <div v-if="currentLogTask.status === 'success'" class="p-3 rounded-xl bg-slate-950 border border-slate-700/80 flex items-center justify-between gap-3">
             <div class="text-xs text-slate-200 flex items-center gap-2">
               <span class="text-sm">🔒</span>
-              <span>Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử. Bạn vẫn có thể xem thông tin và thống kê bài đăng.</span>
+              <span>Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử.</span>
             </div>
             <button @click="showLogModal = false; openReelInsightModal(currentLogTask.id)"
                     class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shrink-0 transition">
-              📊 Xem thống kê bài đăng
+              📊 Xem thống kê Reels
             </button>
           </div>
 
-          <!-- 1. Chi tiết Reels Facebook -->
-          <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                <span>📹</span> Trạng thái Reels
-              </span>
-              <span class="text-xs font-semibold px-2 py-0.5 rounded-full"
-                    :class="currentLogTask.status === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800 text-slate-300'">
-                {{ currentLogTask.status === 'success' ? 'Đã xuất bản thành công' : currentLogTask.status }}
-              </span>
+          <!-- 1. Thông tin Fanpage & Lịch hẹn -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+              <span class="text-[11px] font-semibold text-slate-400 block mb-1">Fanpage đích:</span>
+              <div class="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>📢</span>
+                <span>{{ currentLogTask.page_name }}</span>
+              </div>
+              <div v-if="currentLogTask.facebook_page_id" class="text-[10px] text-slate-500 font-mono mt-0.5">
+                ID: {{ currentLogTask.facebook_page_id }}
+              </div>
             </div>
-            <div class="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-300 pt-1">
-              <div><span class="text-slate-500">Video ID:</span> {{ currentLogTask.video_id || '—' }}</div>
-              <div><span class="text-slate-500">Post ID:</span> {{ currentLogTask.post_id || '—' }}</div>
-            </div>
-            <div v-if="currentLogTask.video_url" class="pt-1">
-              <label class="block text-[11px] font-semibold text-slate-400 mb-0.5">Liên kết xem bài viết / Reels:</label>
-              <a :href="currentLogTask.video_url" target="_blank" class="text-blue-400 hover:underline break-all font-mono text-xs flex items-center gap-1">
-                <span>🔗 {{ currentLogTask.video_url }}</span>
-              </a>
+
+            <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+              <span class="text-[11px] font-semibold text-slate-400 block mb-1">Thời gian đăng:</span>
+              <div class="text-xs font-mono font-bold text-cyan-300">
+                🕒 {{ currentLogTask.schedule_date }} {{ currentLogTask.schedule_time }}
+              </div>
+              <div v-if="currentLogTask.done_time" class="text-[10px] text-emerald-400 font-mono mt-0.5">
+                Đăng xong: {{ currentLogTask.done_time }}
+              </div>
             </div>
           </div>
 
-          <!-- 2. Chi tiết Tự động Bình luận (Comment) -->
+          <!-- 2. Video bài đăng -->
+          <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[11px] font-semibold text-slate-400">File Video:</span>
+              <button @click="copyToClipboard(currentLogTask.video_path)" class="text-[10px] text-slate-400 hover:text-white transition">
+                Sao chép link
+              </button>
+            </div>
+            <div class="flex items-center gap-2 font-mono text-xs text-slate-200">
+              <span class="text-blue-400">🎬</span>
+              <span class="font-bold truncate">{{ currentLogTask.clean_filename || getCleanFileName(currentLogTask.video_path) }}</span>
+            </div>
+            <div class="text-[10px] text-slate-500 font-mono truncate mt-0.5">
+              {{ currentLogTask.video_path }}
+            </div>
+          </div>
+
+          <!-- 3. TOÀN BỘ CAPTION (Bảo toàn định dạng) -->
+          <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <span>📝</span> Toàn bộ Caption:
+              </span>
+              <button @click="copyToClipboard(currentLogTask.caption)" class="text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold transition">
+                📋 Sao chép Caption
+              </button>
+            </div>
+            <div class="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-xs text-slate-200 font-sans leading-relaxed whitespace-pre-wrap max-h-56 overflow-y-auto select-text">
+              {{ currentLogTask.caption || '(Không có caption)' }}
+            </div>
+          </div>
+
+          <!-- 4. TOÀN BỘ BÌNH LUẬN (Comment) -->
           <div v-if="currentLogTask.comment_text" class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
             <div class="flex items-center justify-between">
               <span class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
@@ -2278,8 +2264,8 @@
                 {{ currentLogTask.comment_status === 'success' ? 'Thành công' : (currentLogTask.comment_status === 'failed' ? 'Thất bại' : (currentLogTask.comment_status === 'processing' ? 'Đang gửi...' : 'Chưa gửi')) }}
               </span>
             </div>
-            <div class="text-xs text-slate-200 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800/80 font-sans">
-              "{{ currentLogTask.comment_text }}"
+            <div class="text-xs text-slate-200 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800/80 font-sans whitespace-pre-wrap select-text">
+              {{ currentLogTask.comment_text }}
             </div>
             <div v-if="currentLogTask.comment_id" class="text-[11px] font-mono text-slate-400">
               <span class="text-slate-500">Comment ID:</span> {{ currentLogTask.comment_id }}
@@ -2299,7 +2285,20 @@
             </div>
           </div>
 
-          <!-- 3. Lịch sử thao tác & Audit Log (Phần 8) -->
+          <!-- 5. Link bài viết Reels nếu đã xuất bản -->
+          <div v-if="currentLogTask.video_url" class="bg-slate-950 p-3.5 rounded-xl border border-blue-900/40 flex items-center justify-between gap-3">
+            <div>
+              <span class="text-xs font-bold text-white block mb-0.5">Bài viết đã xuất bản trên Facebook:</span>
+              <a :href="currentLogTask.video_url" target="_blank" class="text-blue-400 hover:underline break-all font-mono text-xs flex items-center gap-1">
+                <span>🔗 {{ currentLogTask.video_url }}</span>
+              </a>
+            </div>
+            <a :href="currentLogTask.video_url" target="_blank" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition shrink-0">
+              Mở Facebook
+            </a>
+          </div>
+
+          <!-- 6. Lịch sử thao tác & Audit Log (Phần 8) -->
           <div v-if="currentLogTask.audit_logs && currentLogTask.audit_logs.length > 0" class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
             <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
               <span>📜</span> Lịch sử thao tác &amp; đổi lịch (Audit Logs)
@@ -2320,7 +2319,7 @@
             </div>
           </div>
 
-          <!-- 4. Logs hệ thống / Chi tiết kỹ thuật -->
+          <!-- 7. Logs hệ thống / Chi tiết kỹ thuật -->
           <div>
             <label class="block text-xs font-semibold text-slate-400 mb-1">Chi tiết kỹ thuật (Logs):</label>
             <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80 font-mono text-xs text-slate-300 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">

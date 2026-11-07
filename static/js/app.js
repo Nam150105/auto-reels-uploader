@@ -157,6 +157,17 @@
     const isDeletingAccount = ref(false);
     const showSingleTaskModal = ref(false);
     const showBulkTaskModal = ref(false);
+    const showPageTasksModal = ref(false);
+    const pageTaskTargetPage = ref(null);
+    const pageScheduleConfig = ref({
+      start_date: '',
+      start_time: '08:00',
+      interval_hours: 4
+    });
+    const pageSlots = ref([]);
+    const isSubmittingPageTasks = ref(false);
+    const isUploadingPageSlotVideo = ref(null);
+    const pageSlotUploadError = ref('');
     const showEditTaskModal = ref(false);
     const showLogModal = ref(false);
     const retryingCommentTaskId = ref(null);
@@ -303,7 +314,11 @@
       return accounts.value.filter(a => a.status === 'connected' && !a.has_read_insights);
     });
 
-    const selectedPageCount = computed(() => {
+        const selectedPages = computed(() => {
+      return pages.value.filter(p => p.is_selected);
+    });
+
+const selectedPageCount = computed(() => {
       return pages.value.filter(p => p.is_selected).length;
     });
 
@@ -1560,7 +1575,73 @@
       return `${parsed.normalizedTime} (24 tiếng • tương đương ${String(h12).padStart(2, '0')}:${mStr} ${meridiem} - ${periodName})${autoNote}`;
     }
 
-    function setDatePreset(offsetDays) {
+        function setQuickTomorrow0001(target = 'single') {
+      const tomorrowStr = getVnDateString(1);
+      if (target === 'bulk') {
+        bulkScheduleForm.value.schedule_date = tomorrowStr;
+        bulkScheduleForm.value.schedule_time = '00:01';
+        recalculateBulkExcelSchedules();
+      } else if (target === 'page') {
+        pageScheduleConfig.value.start_date = tomorrowStr;
+        pageScheduleConfig.value.start_time = '00:01';
+        recalculatePageSlotTimes();
+      } else {
+        const formObj = target === 'edit' ? editTaskForm.value : singleTaskForm.value;
+        formObj.schedule_date = tomorrowStr;
+        formObj.schedule_time = '00:01';
+        clearSingleScheduleErrors();
+      }
+    }
+
+    function setEarliestSchedule(target = 'single') {
+      const parts = getVnNowParts(25);
+      if (target === 'bulk') {
+        bulkScheduleForm.value.schedule_date = parts.date;
+        bulkScheduleForm.value.schedule_time = parts.time;
+        recalculateBulkExcelSchedules();
+      } else if (target === 'page') {
+        pageScheduleConfig.value.start_date = parts.date;
+        pageScheduleConfig.value.start_time = parts.time;
+        recalculatePageSlotTimes();
+      } else {
+        const formObj = target === 'edit' ? editTaskForm.value : singleTaskForm.value;
+        formObj.schedule_date = parts.date;
+        formObj.schedule_time = parts.time;
+        clearSingleScheduleErrors();
+      }
+    }
+
+    function shiftToTomorrow(target = 'single') {
+      const tomorrowStr = getVnDateString(1);
+      if (target === 'bulk') {
+        bulkScheduleForm.value.schedule_date = tomorrowStr;
+        recalculateBulkExcelSchedules();
+      } else if (target === 'page') {
+        pageScheduleConfig.value.start_date = tomorrowStr;
+        recalculatePageSlotTimes();
+      } else {
+        const formObj = target === 'edit' ? editTaskForm.value : singleTaskForm.value;
+        formObj.schedule_date = tomorrowStr;
+        clearSingleScheduleErrors();
+      }
+    }
+
+    function isTimeInPastToday(timeStr, dateStr) {
+      if (!timeStr || !dateStr) return false;
+      const todayVn = getVnNowParts(0);
+      let d = dateStr.trim();
+      const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(d);
+      if (dmy) d = `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+      if (d !== todayVn.date) return false;
+
+      const parsed = normalizeTime24hClient(timeStr, d);
+      if (!parsed.valid) return false;
+      const nowMin = todayVn.hour * 60 + todayVn.minute;
+      const targetMin = parsed.hour * 60 + parsed.minute;
+      return targetMin <= nowMin;
+    }
+
+function setDatePreset(offsetDays) {
       singleTaskForm.value.schedule_date = getVnDateString(offsetDays);
       if (singleTaskForm.value.schedule_time) {
         normalizeScheduleTimeField('single');
@@ -1921,12 +2002,14 @@
           }
         }
 
-        const sched = calculateStaggeredSchedule(
-          bulkScheduleForm.value.schedule_date,
-          bulkScheduleForm.value.schedule_time,
-          validRowIndex,
-          bulkScheduleForm.value.interval_minutes
-        );
+        // MỖI LẦN THÊM HÀNG LOẠT DÙNG CHUNG 1 MỐC THỜI GIAN ĐĂNG CÙNG NHAU. KHÔNG CÓ MỐC THỨ 2.
+        const sDate = bulkScheduleForm.value.schedule_date;
+        const sTime = bulkScheduleForm.value.schedule_time;
+        const selectedPages = pages.value.filter(p => p.is_selected);
+        let assignedPage = null;
+        if (selectedPages.length > 0) {
+          assignedPage = selectedPages[validRowIndex % selectedPages.length];
+        }
         validRowIndex++;
 
         parsed.push({
@@ -1942,31 +2025,53 @@
           status_message: statusMessage,
           resolved_media_id: resolvedMediaId,
           resolved_object_key: resolvedObjectKey,
-          schedule_date: sched.date,
-          schedule_time: sched.time,
-          schedule_display: sched.display
+          schedule_date: sDate,
+          schedule_time: sTime,
+          schedule_display: `${sDate} ${sTime}`,
+          assigned_page_id: assignedPage ? assignedPage.facebook_page_id : null,
+          assigned_page_name: assignedPage ? assignedPage.name : 'Chưa chọn Fanpage'
         });
       }
 
       return parsed;
     }
 
+    const maxBulkTasksAllowed = computed(() => {
+      const selected = pages.value.filter(p => p.is_selected);
+      return Math.max(1, selected.length) * 10;
+    });
+
+    const isBulkOverLimit = computed(() => {
+      return bulkParsedList.value.length > maxBulkTasksAllowed.value;
+    });
+
+    const bulkSharedScheduleDisplay = computed(() => {
+      if (!bulkScheduleForm.value.schedule_date || !bulkScheduleForm.value.schedule_time) return '—';
+      return `${bulkScheduleForm.value.schedule_date} ${bulkScheduleForm.value.schedule_time}`;
+    });
+
     function handleBulkInputChanged() {
       bulkParsedList.value = parseBulkExcelData(bulkDataRaw.value);
     }
 
     function recalculateBulkExcelSchedules() {
+      checkBulkSchedulePastWarning();
+      const sDate = bulkScheduleForm.value.schedule_date;
+      const sTime = bulkScheduleForm.value.schedule_time;
+      const selectedPages = pages.value.filter(p => p.is_selected);
       let idx = 0;
       for (const item of bulkParsedList.value) {
-        const sched = calculateStaggeredSchedule(
-          bulkScheduleForm.value.schedule_date,
-          bulkScheduleForm.value.schedule_time,
-          idx,
-          bulkScheduleForm.value.interval_minutes
-        );
-        item.schedule_date = sched.date;
-        item.schedule_time = sched.time;
-        item.schedule_display = sched.display;
+        item.schedule_date = sDate;
+        item.schedule_time = sTime;
+        item.schedule_display = `${sDate} ${sTime}`;
+        if (selectedPages.length > 0) {
+          const assignedPage = selectedPages[idx % selectedPages.length];
+          item.assigned_page_id = assignedPage.facebook_page_id;
+          item.assigned_page_name = assignedPage.name;
+        } else {
+          item.assigned_page_id = null;
+          item.assigned_page_name = 'Chưa chọn Fanpage';
+        }
         idx++;
       }
     }
@@ -2085,8 +2190,20 @@
         return;
       }
 
+      const selected = pages.value.filter(p => p.is_selected);
+      if (selected.length === 0) {
+        showToast("Vui lòng tick chọn ít nhất 1 Fanpage ở danh sách bên trái trước khi thêm hàng loạt!", "warning");
+        return;
+      }
+
+      const maxLimit = selected.length * 10;
+      if (bulkParsedList.value.length > maxLimit) {
+        showToast(`Bạn đang chọn ${selected.length} Fanpage, chỉ được dán tối đa ${maxLimit} task (10 task/page). Danh sách hiện có ${bulkParsedList.value.length} dòng. Vui lòng giảm bớt!`, "error");
+        return;
+      }
+
       if (bulkSchedulePastWarning.value) {
-        showToast("Thời gian bắt đầu đặt lịch đã qua hoặc trùng hiện tại. Vui lòng bấm nút 'Hẹn lại +5 phút' hoặc chọn giờ tương lai!", "error");
+        showToast("Thời gian bắt đầu đặt lịch đã qua hoặc trùng hiện tại. Vui lòng chọn giờ trong tương lai!", "error");
         return;
       }
 
@@ -2099,37 +2216,19 @@
         return;
       }
 
-      let assignPageIds = [];
-      if (bulkAssignMethod.value === 'specific') {
-        if (!bulkSpecificPageId.value) {
-          showToast("Vui lòng chọn 1 Fanpage cụ thể!", "warning");
-          return;
-        }
-        assignPageIds = [bulkSpecificPageId.value];
-      } else {
-        const selected = pages.value.filter(p => p.is_selected);
-        if (selected.length > 0) {
-          assignPageIds = selected.map(p => p.facebook_page_id);
-        } else {
-          assignPageIds = pages.value.map(p => p.facebook_page_id);
-        }
-      }
-
-      if (assignPageIds.length === 0) {
-        showToast("Chưa có Fanpage nào được đồng bộ để gán task!", "warning");
-        return;
-      }
+      const assignPageIds = selected.map(p => p.facebook_page_id);
 
       isSubmittingBulkTasks.value = true;
       try {
-        const payloadTasks = validRows.map(r => ({
+        const payloadTasks = validRows.map((r, i) => ({
           video_path: r.resolved_media_id ? `r2://${r.resolved_media_id}` : r.video_path,
           media_id: r.resolved_media_id || undefined,
           object_key: r.resolved_object_key || undefined,
           caption: r.caption,
           comment_text: r.comment_text,
-          schedule_date: r.schedule_date,
-          schedule_time: r.schedule_time
+          schedule_date: bulkScheduleForm.value.schedule_date,
+          schedule_time: bulkScheduleForm.value.schedule_time,
+          facebook_page_id: r.assigned_page_id || selected[i % selected.length].facebook_page_id
         }));
 
         const res = await apiFetch('/api/tasks/bulk', {
@@ -2137,7 +2236,10 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             tasks: payloadTasks,
-            assign_page_ids: assignPageIds
+            assign_page_ids: assignPageIds,
+            schedule_date: bulkScheduleForm.value.schedule_date,
+            schedule_time: bulkScheduleForm.value.schedule_time,
+            interval_minutes: 0
           })
         });
 
@@ -2166,6 +2268,231 @@
         showToast("Lỗi kết nối khi tạo task hàng loạt: " + err.message, "error");
       } finally {
         isSubmittingBulkTasks.value = false;
+      }
+    }
+
+    // ==========================================
+    // 8B. THÊM TASK CHO TỪNG FANPAGE (TỐI ĐA 4 TASK, CHIA ĐỀU SAU X TIẾNG)
+    // ==========================================
+    function openPageTasksModal(page) {
+      if (!page) {
+        if (pages.value.length === 0) {
+          showToast("Chưa có Fanpage nào được kết nối để thêm task!", "warning");
+          return;
+        }
+        page = pages.value[0];
+      }
+      pageTaskTargetPage.value = page;
+      const defSlot = getVnNowParts(15);
+      pageScheduleConfig.value = {
+        start_date: defSlot.date,
+        start_time: defSlot.time || '08:00',
+        interval_hours: 4
+      };
+      pageSlots.value = [
+        {
+          id: 1,
+          video_path: '',
+          media_id: '',
+          object_key: '',
+          clean_filename: '',
+          caption: '',
+          comment_text: '',
+          isUploading: false,
+          schedule_date: defSlot.date,
+          schedule_time: defSlot.time,
+          schedule_display: `${defSlot.date} ${defSlot.time}`
+        }
+      ];
+      recalculatePageSlotTimes();
+      loadUserMediaFiles();
+      showPageTasksModal.value = true;
+    }
+
+    function addPageSlot() {
+      if (pageSlots.value.length >= 4) {
+        showToast("Tối đa mỗi Fanpage được thêm 4 task trong một lần lên lịch!", "warning");
+        return;
+      }
+      const nextId = pageSlots.value.length + 1;
+      pageSlots.value.push({
+        id: nextId,
+        video_path: '',
+        media_id: '',
+        object_key: '',
+        clean_filename: '',
+        caption: '',
+        comment_text: '',
+        isUploading: false,
+        schedule_date: '',
+        schedule_time: '',
+        schedule_display: ''
+      });
+      recalculatePageSlotTimes();
+    }
+
+    function removePageSlot(idx) {
+      if (pageSlots.value.length <= 1) return;
+      pageSlots.value.splice(idx, 1);
+      recalculatePageSlotTimes();
+    }
+
+    function recalculatePageSlotTimes() {
+      const sDate = (pageScheduleConfig.value.start_date || '').trim();
+      const sTime = (pageScheduleConfig.value.start_time || '').trim();
+      const intHours = Math.max(1, Number(pageScheduleConfig.value.interval_hours) || 4);
+      if (!sDate || !sTime) return;
+
+      const baseParsed = parseVnScheduleToUtc(sDate, sTime, { allowPast: true });
+      if (!baseParsed.isValid || !baseParsed.scheduledAtUtc) return;
+
+      const baseUtc = baseParsed.scheduledAtUtc;
+      pageSlots.value.forEach((slot, idx) => {
+        const slotUtc = baseUtc + idx * intHours * 3600;
+        const vnSlot = formatUtcToVn(slotUtc);
+        slot.schedule_date = vnSlot.schedule_date;
+        slot.schedule_time = vnSlot.schedule_time;
+        slot.schedule_display = `${vnSlot.schedule_date} ${vnSlot.schedule_time}`;
+      });
+    }
+
+    function setPageScheduleDatePreset(offsetDays) {
+      const targetUtc = Date.now() + offsetDays * 86400 * 1000;
+      const vnTarget = formatUtcToVn(Math.floor(targetUtc / 1000));
+      pageScheduleConfig.value.start_date = vnTarget.schedule_date;
+      recalculatePageSlotTimes();
+    }
+
+    function setPageScheduleTimePreset(timeStr) {
+      pageScheduleConfig.value.start_time = timeStr;
+      recalculatePageSlotTimes();
+    }
+
+    function setPageScheduleIntervalHours(hours) {
+      pageScheduleConfig.value.interval_hours = hours;
+      recalculatePageSlotTimes();
+    }
+
+    function triggerPageSlotFilePicker(slotId) {
+      isUploadingPageSlotVideo.value = slotId;
+      const input = document.getElementById('page-slot-file-input');
+      if (input) {
+        input.value = '';
+        input.click();
+      }
+    }
+
+    async function handlePageSlotFileSelected(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file || !isUploadingPageSlotVideo.value) return;
+      const slotId = isUploadingPageSlotVideo.value;
+      const targetSlot = pageSlots.value.find(s => s.id === slotId);
+      if (!targetSlot) return;
+
+      targetSlot.isUploading = true;
+      try {
+        const initRes = await fetch('/api/media/upload-init', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            size_bytes: file.size,
+            mime_type: file.type || 'video/mp4'
+          })
+        });
+        const initData = await initRes.json();
+        if (!initRes.ok) throw new Error(initData.detail || "Không thể khởi tạo upload R2");
+
+        const chunkRes = await fetch(`/api/media/upload-chunk?media_id=${encodeURIComponent(initData.media_id)}&chunk_index=0&total_chunks=1`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: file
+        });
+        if (!chunkRes.ok) throw new Error("Lỗi tải dữ liệu video lên R2");
+
+        const compRes = await fetch('/api/media/upload-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ media_id: initData.media_id })
+        });
+        if (!compRes.ok) throw new Error("Không thể xác minh video trên R2");
+
+        targetSlot.media_id = initData.media_id;
+        targetSlot.object_key = initData.object_key;
+        targetSlot.video_path = `r2://${initData.media_id}`;
+        targetSlot.clean_filename = file.name;
+        showToast(`Đã tải lên R2 thành công: ${file.name}`, 'success');
+        await loadUserMediaFiles();
+      } catch (err) {
+        showToast(err.message || "Lỗi tải video lên R2", "error");
+      } finally {
+        targetSlot.isUploading = false;
+        isUploadingPageSlotVideo.value = null;
+      }
+    }
+
+    function selectExistingR2ForPageSlot(slot, mediaItem) {
+      if (!slot || !mediaItem) return;
+      slot.media_id = mediaItem.id;
+      slot.object_key = mediaItem.object_key;
+      slot.video_path = `r2://${mediaItem.id}`;
+      slot.clean_filename = mediaItem.original_filename || mediaItem.object_key;
+    }
+
+    async function handlePageTasksSubmit() {
+      if (isSubmittingPageTasks.value) return;
+      if (!pageTaskTargetPage.value) {
+        showToast("Chưa chọn Fanpage để thêm task!", "warning");
+        return;
+      }
+
+      for (let i = 0; i < pageSlots.value.length; i++) {
+        const slot = pageSlots.value[i];
+        if (!slot.video_path || !slot.video_path.trim()) {
+          showToast(`Bài #${i + 1}: Vui lòng chọn hoặc tải video lên R2!`, "warning");
+          return;
+        }
+        if (!slot.caption || !slot.caption.trim()) {
+          showToast(`Bài #${i + 1}: Caption không được để trống!`, "warning");
+          return;
+        }
+      }
+
+      isSubmittingPageTasks.value = true;
+      try {
+        const payloadTasks = pageSlots.value.map(slot => ({
+          video_path: slot.media_id ? `r2://${slot.media_id}` : slot.video_path,
+          media_id: slot.media_id || undefined,
+          object_key: slot.object_key || undefined,
+          caption: slot.caption,
+          comment_text: slot.comment_text,
+          facebook_page_id: pageTaskTargetPage.value.facebook_page_id,
+          schedule_date: slot.schedule_date,
+          schedule_time: slot.schedule_time
+        }));
+
+        const res = await apiFetch('/api/tasks/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tasks: payloadTasks,
+            assign_page_ids: [pageTaskTargetPage.value.facebook_page_id]
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          showToast(`Đã tạo thành công ${payloadTasks.length} task cho Fanpage "${pageTaskTargetPage.value.name}"!`, "success");
+          showPageTasksModal.value = false;
+          await loadTasks();
+          await loadSystemStats();
+        } else {
+          showToast(data.detail || data.message || "Lỗi khi lên lịch cho Fanpage.", "error");
+        }
+      } catch (err) {
+        showToast(err.message || "Lỗi mạng khi lên lịch.", "error");
+      } finally {
+        isSubmittingPageTasks.value = false;
       }
     }
 
@@ -2572,17 +2899,26 @@
     }
 
     async function openLogModal(t) {
+      if (!t) return;
       const friendly = formatFriendlyLog(t);
       currentLogTask.value = {
         id: t.id,
         status: t.status,
-        title: `Chi tiết Task #${t.id} - ${t.page_name || 'Fanpage'}`,
+        title: `Chi tiết Task #${t.id} – ${t.page_name || 'Fanpage'}`,
+        page_name: t.page_name || t.profile_name || 'Chưa gán Page',
+        facebook_page_id: t.facebook_page_id || '',
+        video_path: t.video_path || '',
+        clean_filename: getCleanFileName(t),
+        caption: t.caption || '',
+        comment_text: t.comment_text || '',
+        schedule_date: t.schedule_date || '',
+        schedule_time: t.schedule_time || '',
+        done_time: t.done_time || '',
         friendlyLog: friendly,
         log: t.log || t.error_message || '(Chưa có thông điệp log)',
         video_id: t.video_id || '',
         post_id: t.post_id || '',
         video_url: t.video_url || '',
-        comment_text: t.comment_text || '',
         comment_status: t.comment_status || 'none',
         comment_id: t.comment_id || '',
         comment_log: t.comment_log || '',
@@ -2615,6 +2951,8 @@
         // Giữ nguyên log tóm tắt nếu không lấy được chi tiết
       }
     }
+
+    const openTaskDetailModal = openLogModal;
 
     async function handleRetryComment(taskId) {
       if (!taskId || retryingCommentTaskId.value) return;
@@ -2862,6 +3200,28 @@
       });
     }
 
+    function getFirstLine(str) {
+      if (!str) return '';
+      const lines = String(str).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      return lines.length > 0 ? lines[0] : '';
+    }
+
+    function getCleanFileName(t) {
+      if (!t) return '—';
+      const pathStr = typeof t === 'string' ? t : (t.video_path || '');
+      const mediaId = typeof t === 'object' ? t.media_id : null;
+      if (userMediaFiles.value && userMediaFiles.value.length > 0) {
+        const found = userMediaFiles.value.find(m => (mediaId && m.id === mediaId) || (pathStr && (m.object_key === pathStr || pathStr.includes(m.object_key))));
+        if (found && found.original_filename) return found.original_filename;
+      }
+      if (!pathStr) return '—';
+      const raw = pathStr.split('\\').pop().split('/').pop();
+      if (raw.startsWith('med_') && raw.length > 25) {
+        return '🎬 Video R2';
+      }
+      return raw;
+    }
+
     function getFileName(pathStr) {
       if (!pathStr) return '';
       return pathStr.split('\\').pop().split('/').pop();
@@ -3047,6 +3407,12 @@
     });
 
     return {
+      selectedPages,
+      setQuickTomorrow0001,
+      setEarliestSchedule,
+      shiftToTomorrow,
+      isTimeInPastToday,
+
       authState,
       isPageLoading,
       pageLoadError,
@@ -3196,6 +3562,9 @@
       errorBulkRowCount,
       bulkFirstScheduleDisplay,
       bulkLastScheduleDisplay,
+      bulkSharedScheduleDisplay,
+      maxBulkTasksAllowed,
+      isBulkOverLimit,
       setBulkScheduleDatePreset,
       setBulkScheduleTimePreset,
       setBulkScheduleInterval,
@@ -3206,6 +3575,27 @@
       isSubmittingBulkTasks,
       triggerBulkExcelFilePicker,
       handleBulkExcelFilesSelected,
+      getFirstLine,
+      getCleanFileName,
+      openTaskDetailModal,
+      showPageTasksModal,
+      pageTaskTargetPage,
+      pageScheduleConfig,
+      pageSlots,
+      isSubmittingPageTasks,
+      isUploadingPageSlotVideo,
+      pageSlotUploadError,
+      openPageTasksModal,
+      addPageSlot,
+      removePageSlot,
+      recalculatePageSlotTimes,
+      setPageScheduleDatePreset,
+      setPageScheduleTimePreset,
+      setPageScheduleIntervalHours,
+      triggerPageSlotFilePicker,
+      handlePageSlotFileSelected,
+      selectExistingR2ForPageSlot,
+      handlePageTasksSubmit,
       isTaskLocked,
       isTaskInFlight,
       openEditTaskModal,
