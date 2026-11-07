@@ -215,7 +215,7 @@ export async function handleWorkerRequest(
   // ==========================================
   // 3. ĐIỀU HƯỚNG GIAO DIỆN HTML FRONTEND (/, /login, /page, /pages, /schedules, /reels)
   // ==========================================
-  if (pathname === "/login" && method === "GET") {
+  if (pathname === "/login" && (method === "GET" || method === "HEAD")) {
     if (currentUser) {
       const target = sanitizeInternalRedirect(url.searchParams.get("redirect"));
       return redirectResponse(`${url.origin}${target}`, 302);
@@ -224,7 +224,7 @@ export async function handleWorkerRequest(
     if (staticResp) return staticResp;
   }
 
-  if (pathname === "/" && method === "GET") {
+  if (pathname === "/" && (method === "GET" || method === "HEAD")) {
     const ua = request.headers.get("User-Agent") || "";
     const isFbCrawler = /facebookexternalhit|Facebot|meta-externalagent/i.test(ua);
     if (currentUser) {
@@ -247,7 +247,7 @@ export async function handleWorkerRequest(
       pathname === "/posts" ||
       pathname === "/comments" ||
       pathname === "/reels") &&
-    method === "GET"
+    (method === "GET" || method === "HEAD")
   ) {
     const ua = request.headers.get("User-Agent") || "";
     const isFbCrawler = /facebookexternalhit|Facebot|meta-externalagent/i.test(ua);
