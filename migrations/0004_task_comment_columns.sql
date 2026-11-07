@@ -7,3 +7,4 @@ ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT '';
 ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none';
 ALTER TABLE tasks ADD COLUMN comment_log TEXT DEFAULT '';
 ALTER TABLE tasks ADD COLUMN comment_posted_at TEXT;
+

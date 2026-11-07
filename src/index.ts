@@ -973,6 +973,7 @@ export async function handleWorkerRequest(
         facebookPageId: task.facebook_page_id,
         pageAccessToken: page.page_access_token,
         postId: task.post_id,
+        videoId: task.video_id,
         commentText: cleanComment,
         ownerUserId,
         taskId: task.id
@@ -983,6 +984,18 @@ export async function handleWorkerRequest(
           commentId: cmtRes.comment_id,
           commentPostedAt: new Date().toISOString()
         });
+        if (
+          cmtRes.post_id &&
+          cmtRes.post_id !== task.video_id &&
+          cmtRes.post_id !== task.post_id
+        ) {
+          try {
+            await db
+              .prepare("UPDATE tasks SET post_id = ? WHERE id = ?")
+              .bind(cmtRes.post_id, task.id)
+              .run();
+          } catch {}
+        }
         await appendTaskStageLog(db, task.id, ownerUserId, "INFO", "comment_success", cmtRes.message);
         return jsonResponse({
           success: true,

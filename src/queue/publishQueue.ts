@@ -231,6 +231,7 @@ export async function consumeSingleTaskMessage(
           facebookPageId: existingTask.facebook_page_id!,
           pageAccessToken: page.page_access_token,
           postId: existingTask.post_id || existingTask.video_id,
+          videoId: existingTask.video_id,
           commentText: cleanComment,
           ownerUserId: msg.owner_user_id,
           taskId: existingTask.id
@@ -240,6 +241,18 @@ export async function consumeSingleTaskMessage(
             commentId: cmtRes.comment_id,
             commentPostedAt: new Date().toISOString()
           });
+          if (
+            cmtRes.post_id &&
+            cmtRes.post_id !== existingTask.video_id &&
+            cmtRes.post_id !== existingTask.post_id
+          ) {
+            try {
+              await db
+                .prepare("UPDATE tasks SET post_id = ? WHERE id = ?")
+                .bind(cmtRes.post_id, existingTask.id)
+                .run();
+            } catch {}
+          }
           await updateTaskExecutionState(
             db,
             existingTask.id,
@@ -410,6 +423,7 @@ export async function consumeSingleTaskMessage(
         facebookPageId: claimedTask.facebook_page_id,
         pageAccessToken: page.page_access_token,
         postId: rawPostId,
+        videoId: pubRes.video_id || claimedTask.video_id,
         commentText: cleanComment,
         ownerUserId: msg.owner_user_id,
         taskId: claimedTask.id
@@ -420,6 +434,18 @@ export async function consumeSingleTaskMessage(
           commentId: cmtRes.comment_id,
           commentPostedAt: new Date().toISOString()
         });
+        if (
+          cmtRes.post_id &&
+          cmtRes.post_id !== (pubRes.video_id || claimedTask.video_id) &&
+          cmtRes.post_id !== rawPostId
+        ) {
+          try {
+            await db
+              .prepare("UPDATE tasks SET post_id = ? WHERE id = ?")
+              .bind(cmtRes.post_id, claimedTask.id)
+              .run();
+          } catch {}
+        }
         await updateTaskExecutionState(
           db,
           claimedTask.id,

@@ -721,6 +721,20 @@ async function runAll30Tests() {
       );
     }
 
+    // Giả lập lỗi (#12) singular statuses API is deprecated khi gọi bare ID không có prefix (giống đúng lỗi production của user)
+    if (u.match(/\/122107908045520254\/comments/)) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: "(#12) singular statuses API is deprecated for versions v2.4 and higher",
+            type: "OAuthException",
+            code: 12
+          }
+        }),
+        { status: 400 }
+      );
+    }
+
     if (u.includes("/comments")) {
       const method = (init?.method || "GET").toUpperCase();
       if (method === "GET") {
@@ -1716,7 +1730,38 @@ async function runAll30Tests() {
   assert.ok(duplicateRetryData.message.includes("đã được đăng thành công"));
   assert.equal(duplicateRetryData.comment_id, finishedNetRetried.comment_id);
   console.log("    ✓ [Scenario 9] Chống đăng trùng Reels & Comment: Idempotency bảo vệ toàn vẹn");
-  console.log("  ✓ [Test 31] Bổ sung API tự động Comment sau khi đăng Reels (Pass toàn bộ 9 kịch bản)");
+
+  // [Kịch bản 10] Khắc phục lỗi (#12) singular statuses API is deprecated khi Post ID là bare ID (Task #6 trong ảnh của user)
+  const barePostTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task tái hiện lỗi singular statuses",
+      comment_text: "test cmt"
+    })
+  });
+  const barePostTask = (await barePostTaskResp.json()).task;
+  await d1.prepare("UPDATE tasks SET status = 'success', video_id = '1439027771006176', post_id = '122107908045520254', comment_status = 'failed', comment_log = 'Lỗi đăng bình luận: (#12) singular statuses API is deprecated for versions v2.4 and higher' WHERE id = ?")
+    .bind(barePostTask.id).run();
+
+  const retryBareResp = await callWorker(`/api/tasks/${barePostTask.id}/retry-comment`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(retryBareResp.status, 200);
+  const retryBareData = await retryBareResp.json();
+  assert.equal(retryBareData.success, true);
+  assert.equal(retryBareData.comment_status, "success");
+  assert.ok(retryBareData.comment_id);
+
+  const bareTaskAfterRetry = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const finishedBare = bareTaskAfterRetry.find(t => t.id === barePostTask.id);
+  assert.equal(finishedBare.comment_status, "success");
+  assert.equal(finishedBare.comment_id, retryBareData.comment_id);
+  console.log("    ✓ [Scenario 10] Tự động vượt qua lỗi (#12) singular statuses API deprecated: Fallback thành công 100%");
+  console.log("  ✓ [Test 31] Bổ sung API tự động Comment sau khi đăng Reels (Pass toàn bộ 10 kịch bản)");
 
   // --------------------------------------------------------------------------
   // [TEST 32] Chọn task để xóa (Bulk Delete Tasks) & Dọn dẹp Orphan Media
