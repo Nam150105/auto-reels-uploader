@@ -800,7 +800,7 @@ export async function publishSelectedTasksNow(
 
   return {
     success: messagesToEnqueue.length > 0,
-    requested_count: prep.requested_count,
+    requested_count: params.taskIds.length,
     eligible_count: messagesToEnqueue.length,
     skipped_count: skippedList.length,
     enqueued_task_ids: enqueuedIds,

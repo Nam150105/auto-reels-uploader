@@ -10,7 +10,12 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
   },
-  "include": ["src/**/*.ts", "functions/**/*.ts"]
+  "include": ["src/**/*.ts", "functions/**/*.ts"],
+  "exclude": ["src/frontend/**/*", "node_modules", "dist", "static"]
 }

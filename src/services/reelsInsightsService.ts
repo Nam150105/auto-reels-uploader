@@ -281,7 +281,7 @@ export async function syncSingleReelInsights(
 
   try {
     const viResp = await fetch(videoInsightsUrl);
-    trackMetaGraphResponse("video_insights", viResp);
+    await trackMetaGraphResponse(db, "video_insights", viResp);
     const viData = (await viResp.json().catch(() => ({}))) as Record<string, unknown>;
 
     if (viResp.ok && Array.isArray(viData.data)) {
@@ -335,7 +335,7 @@ export async function syncSingleReelInsights(
             const singleResp = await fetch(
               `${cfg.graphBase}/${encodeURIComponent(videoId)}/video_insights?metric=${encodeURIComponent(singleMetric)}&access_token=${encodeURIComponent(pageToken)}`
             );
-            trackMetaGraphResponse("video_insights_single", singleResp);
+            await trackMetaGraphResponse(db, "video_insights_single", singleResp);
             const singleData = (await singleResp.json().catch(() => ({}))) as Record<
               string,
               unknown
@@ -423,7 +423,7 @@ export async function syncSingleReelInsights(
       const vNodeResp = await fetch(
         `${cfg.graphBase}/${encodeURIComponent(videoId)}?fields=id,views,length,permalink_url,likes.summary(true),comments.summary(true)&access_token=${encodeURIComponent(pageToken)}`
       );
-      trackMetaGraphResponse("video_node_engagement", vNodeResp);
+      await trackMetaGraphResponse(db, "video_node_engagement", vNodeResp);
       const vNodeData = (await vNodeResp.json().catch(() => ({}))) as Record<string, unknown>;
       if (vNodeResp.ok && vNodeData.id) {
         anyInsightSuccess = true;
@@ -468,7 +468,7 @@ export async function syncSingleReelInsights(
         const pResp = await fetch(
           `${cfg.graphBase}/${encodeURIComponent(targetPostId)}?fields=id,shares,reactions.summary(true),comments.summary(true)&access_token=${encodeURIComponent(pageToken)}`
         );
-        trackMetaGraphResponse("post_node_engagement", pResp);
+        await trackMetaGraphResponse(db, "post_node_engagement", pResp);
         const pData = (await pResp.json().catch(() => ({}))) as Record<string, unknown>;
         if (pResp.ok && pData.id) {
           anyInsightSuccess = true;

@@ -1,0 +1,138 @@
+import { ref, computed } from "vue";
+import { api } from "../services/api";
+import type { FacebookPageRecord, FacebookAccount } from "@shared/types";
+import { useToast } from "./useToast";
+
+const pages = ref<FacebookPageRecord[]>([]);
+const accounts = ref<FacebookAccount[]>([]);
+const isLoading = ref<boolean>(false);
+const searchQuery = ref<string>("");
+const isConnectModalOpen = ref<boolean>(false);
+const isAccountsModalOpen = ref<boolean>(false);
+const connectTargetAccountId = ref<string | null>(null);
+
+export function usePages() {
+  const toast = useToast();
+
+  const loadPages = async () => {
+    isLoading.value = true;
+    try {
+      const [pagesRes, accountsRes] = await Promise.all([
+        api.getPages().catch((err) => {
+          console.warn("getPages fallback to empty array:", err);
+          return [];
+        }),
+        api.getAccounts().catch((err) => {
+          console.warn("getAccounts fallback to empty array:", err);
+          return [];
+        })
+      ]);
+      pages.value = Array.isArray(pagesRes) ? pagesRes : ((pagesRes as any)?.pages || []);
+      accounts.value = Array.isArray(accountsRes) ? accountsRes : ((accountsRes as any)?.accounts || []);
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tải danh sách Fanpage.");
+    } finally {
+      isLoading.value = false;
+    }
+  };
+
+  const expiredAccounts = computed(() => {
+    return accounts.value.filter(
+      (a) => a.token_status === "expired" || a.token_status === "revoked" || a.token_status === "invalid"
+    );
+  });
+
+  const expiredAccountNames = computed(() => {
+    return expiredAccounts.value.map((a) => a.facebook_user_name || a.facebook_user_id).join(", ");
+  });
+
+  const filteredPages = computed(() => {
+    const q = searchQuery.value.trim().toLowerCase();
+    if (!q) return pages.value;
+    return pages.value.filter(
+      (p) =>
+        (p.page_name || "").toLowerCase().includes(q) ||
+        (p.facebook_page_id || "").includes(q) ||
+        (p.category || "").toLowerCase().includes(q)
+    );
+  });
+
+  const syncPages = async () => {
+    isLoading.value = true;
+    try {
+      await api.syncPages();
+      await loadPages();
+      toast.success("Đã đồng bộ lại danh sách Fanpage từ Facebook!");
+    } catch (err: any) {
+      toast.error(err?.message || "Đồng bộ Fanpage thất bại.");
+    } finally {
+      isLoading.value = false;
+    }
+  };
+
+  const openConnectModal = (accountId: string | null = null) => {
+    connectTargetAccountId.value = accountId;
+    isConnectModalOpen.value = true;
+  };
+
+  const connectWithToken = async (token: string, targetAccountId: string | null = null) => {
+    isLoading.value = true;
+    try {
+      let res: any;
+      if (targetAccountId) {
+        res = await api.updateAccountToken(targetAccountId, token);
+      } else {
+        res = await api.connectDirectToken(token);
+      }
+      if (res?.pages && Array.isArray(res.pages)) {
+        pages.value = res.pages;
+      }
+      if (res?.accounts && Array.isArray(res.accounts)) {
+        accounts.value = res.accounts;
+      }
+      await loadPages();
+      toast.success(res?.message || "Cập nhật tài khoản & Fanpage thành công!");
+      isConnectModalOpen.value = false;
+      connectTargetAccountId.value = null;
+      return true;
+    } catch (err: any) {
+      toast.error(err?.message || "Kết nối thất bại. Vui lòng kiểm tra lại Access Token.");
+      return false;
+    } finally {
+      isLoading.value = false;
+    }
+  };
+
+  const deleteAccount = async (accountId: string) => {
+    isLoading.value = true;
+    try {
+      await api.deleteAccount(accountId);
+      await loadPages();
+      toast.success("Đã xóa tài khoản Facebook thành công.");
+      return true;
+    } catch (err: any) {
+      toast.error(err?.message || "Xóa tài khoản Facebook thất bại.");
+      return false;
+    } finally {
+      isLoading.value = false;
+    }
+  };
+
+  return {
+    pages,
+    accounts,
+    expiredAccounts,
+    expiredAccountNames,
+    isLoading,
+    searchQuery,
+    filteredPages,
+    isConnectModalOpen,
+    isAccountsModalOpen,
+    connectTargetAccountId,
+    loadPages,
+    syncPages,
+    openConnectModal,
+    connectWithToken,
+    deleteAccount
+  };
+}

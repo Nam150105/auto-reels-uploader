@@ -100,9 +100,65 @@ class SqliteD1Database {
   }
 }
 
+async function mockR2ToBytes(value) {
+  if (value instanceof ReadableStream) {
+    return new Uint8Array(await new Response(value).arrayBuffer());
+  }
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return new TextEncoder().encode(String(value || ""));
+}
+
 class MockR2Bucket {
   constructor() {
     this.objects = new Map();
+    this.multipartSessions = new Map();
+  }
+  async createMultipartUpload(key, options = {}) {
+    const uploadId = `mpu_${Math.random().toString(36).slice(2)}`;
+    this.multipartSessions.set(uploadId, { key, options, parts: new Map() });
+    return this.resumeMultipartUpload(key, uploadId);
+  }
+  resumeMultipartUpload(key, uploadId) {
+    const bucket = this;
+    const session = () => {
+      const s = bucket.multipartSessions.get(uploadId);
+      if (!s || s.key !== key) throw new Error("NoSuchUpload");
+      return s;
+    };
+    return {
+      key,
+      uploadId,
+      async uploadPart(partNumber, value) {
+        const s = session();
+        const bytes = new Uint8Array(await mockR2ToBytes(value));
+        const etag = `part_${partNumber}_${bytes.byteLength}`;
+        s.parts.set(partNumber, { bytes, etag });
+        return { partNumber, etag };
+      },
+      async abort() {
+        bucket.multipartSessions.delete(uploadId);
+      },
+      async complete(uploadedParts) {
+        const s = session();
+        const chunks = uploadedParts.map((p) => {
+          const stored = s.parts.get(p.partNumber);
+          if (!stored || stored.etag !== p.etag) throw new Error(`InvalidPart ${p.partNumber}`);
+          return stored.bytes;
+        });
+        const total = chunks.reduce((n, c) => n + c.byteLength, 0);
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (const c of chunks) {
+          merged.set(c, offset);
+          offset += c.byteLength;
+        }
+        bucket.multipartSessions.delete(uploadId);
+        return bucket.put(key, merged, s.options);
+      }
+    };
   }
   async put(key, value, options = {}) {
     let bytes;
@@ -1257,6 +1313,80 @@ async function runAll30Tests() {
   const compUploadData = await compUploadResp.json();
   assert.equal(compUploadData.video_path, `r2://${initUploadData.media_id}`);
   console.log("  ✓ [Test 15] R2 Streaming Video Upload (upload-init -> stream -> upload-complete)");
+
+  // --------------------------------------------------------------------------
+  // [TEST 15b] R2 Multipart Upload theo phân đoạn (upload-init -> upload-part xN -> upload-complete)
+  // --------------------------------------------------------------------------
+  const mpTotalSize = 8 * 1024 * 1024 + 1000;
+  const mpInitResp = await callWorker("/api/media/upload-init", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: "alice_multipart.mp4",
+      size_bytes: mpTotalSize,
+      mime_type: "video/mp4",
+      upload_mode: "multipart"
+    })
+  });
+  assert.equal(mpInitResp.status, 200);
+  const mpInit = await mpInitResp.json();
+  assert.ok(mpInit.upload_id, "upload-init phải trả về upload_id khi upload_mode=multipart");
+  const mpChunk = mpInit.chunk_size_bytes;
+  assert.ok(mpChunk >= 5 * 1024 * 1024, "R2 yêu cầu phân đoạn >= 5 MiB");
+
+  const mpPartUrl = (uploadId, n) =>
+    `/api/media/upload-part?${new URLSearchParams({ media_id: mpInit.media_id, upload_id: uploadId, part_number: String(n) })}`;
+
+  const wrongIdResp = await callWorker(mpPartUrl("not_the_upload_id", 1), {
+    method: "PUT",
+    headers: { Cookie: `session_token=${tokenA}` },
+    body: new Uint8Array(16)
+  });
+  assert.equal(wrongIdResp.status, 400, "upload_id sai phải bị từ chối");
+
+  const otherUserResp = await callWorker(mpPartUrl(mpInit.upload_id, 1), {
+    method: "PUT",
+    headers: { Cookie: `session_token=${tokenB}` },
+    body: new Uint8Array(16)
+  });
+  assert.equal(otherUserResp.status, 404, "User khác không được ghi phân đoạn vào media của Alice");
+
+  const mpBytes = new Uint8Array(mpTotalSize);
+  mpBytes[0] = 0x11;
+  mpBytes[mpTotalSize - 1] = 0x22;
+  const mpParts = [];
+  for (let n = 1, off = 0; off < mpTotalSize; n++, off += mpChunk) {
+    const partResp = await callWorker(mpPartUrl(mpInit.upload_id, n), {
+      method: "PUT",
+      headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/octet-stream" },
+      body: mpBytes.slice(off, Math.min(off + mpChunk, mpTotalSize))
+    });
+    assert.equal(partResp.status, 200);
+    const partJson = await partResp.json();
+    assert.ok(partJson.etag);
+    mpParts.push({ part_number: n, etag: partJson.etag });
+  }
+  assert.equal(mpParts.length, 2);
+
+  const mpCompleteResp = await callWorker("/api/media/upload-complete", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ media_id: mpInit.media_id, upload_id: mpInit.upload_id, parts: mpParts })
+  });
+  assert.equal(mpCompleteResp.status, 200);
+  const mpComplete = await mpCompleteResp.json();
+  assert.equal(mpComplete.media_id, mpInit.media_id);
+  assert.equal(mpComplete.size_bytes, mpTotalSize);
+  const storedMp = r2.objects.get(mpInit.object_key);
+  assert.equal(storedMp.bytes[0], 0x11);
+  assert.equal(storedMp.bytes[mpTotalSize - 1], 0x22);
+
+  const mpDeleteResp = await callWorker(`/api/media/${mpInit.media_id}`, {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(mpDeleteResp.status, 200);
+  console.log("  ✓ [Test 15b] R2 Multipart Upload theo phân đoạn (upload-part) & kiểm tra quyền sở hữu");
 
   // Bob thử truy cập, xóa hoặc gắn media_id của Alice vào Task của Bob -> Phải bị chặn!
   const bobDeleteAliceMedia = await callWorker(`/api/media/${initUploadData.media_id}`, {

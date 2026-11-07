@@ -2539,19 +2539,26 @@ export async function recordTaskAuditLog(
     ownerUserId: string;
     actorUserId?: string | null;
     action: string;
+    triggerSource?: string | null;
     oldScheduledAt?: number | null;
     newScheduledAt?: number | null;
     oldScheduleText?: string | null;
     newScheduleText?: string | null;
     oldStatus?: string | null;
     newStatus?: string | null;
+    beforeStatus?: string | null;
+    afterStatus?: string | null;
     reason?: string | null;
     metadata?: Record<string, unknown> | null;
+    details?: Record<string, unknown> | null;
   }
 ): Promise<void> {
   const now = new Date().toISOString();
   const cleanReason = sanitizeSensitiveText(params.reason || "");
-  const cleanMeta = sanitizeSensitiveText(JSON.stringify(params.metadata || {}));
+  const effectiveMetadata = params.metadata || params.details || {};
+  const cleanMeta = sanitizeSensitiveText(JSON.stringify(effectiveMetadata));
+  const effectiveOldStatus = params.oldStatus || params.beforeStatus || "";
+  const effectiveNewStatus = params.newStatus || params.afterStatus || "";
   const insertSql = `INSERT INTO task_audit_logs (
     task_id, owner_user_id, actor_user_id, action,
     old_scheduled_at, new_scheduled_at, old_schedule_text, new_schedule_text,
@@ -2566,8 +2573,8 @@ export async function recordTaskAuditLog(
     params.newScheduledAt ?? null,
     params.oldScheduleText || "",
     params.newScheduleText || "",
-    params.oldStatus || "",
-    params.newStatus || "",
+    effectiveOldStatus,
+    effectiveNewStatus,
     cleanReason,
     cleanMeta,
     now
@@ -4226,7 +4233,8 @@ export async function cleanupCompletedTasks(
 export async function deleteTasksBulk(
   db: D1Database,
   taskIds: number[],
-  ownerUserId: string
+  ownerUserId: string,
+  options?: { allowPublished?: boolean }
 ): Promise<{
   deletedCount: number;
   orphanMediaIds: string[];
@@ -4271,7 +4279,10 @@ export async function deleteTasksBulk(
   const deletableTasks: typeof targetTasks = [];
 
   for (const t of targetTasks) {
-    if (isTaskPublishedAndLocked(t) || isTaskCurrentlyRunning(t)) {
+    const isLocked = options?.allowPublished
+      ? isTaskCurrentlyRunning(t)
+      : (isTaskPublishedAndLocked(t) || isTaskCurrentlyRunning(t));
+    if (isLocked) {
       lockedTaskIds.push(t.id);
     } else {
       deletableTasks.push(t);
@@ -4292,14 +4303,12 @@ export async function deleteTasksBulk(
     .filter((m): m is string => Boolean(m && m.trim().length > 0));
 
   const delPlaceholders = idsToDelete.map(() => "?").join(",");
+  const delSql = options?.allowPublished
+    ? `DELETE FROM tasks WHERE id IN (${delPlaceholders}) AND owner_user_id = ? AND (status != 'running' OR status IS NULL)`
+    : `DELETE FROM tasks WHERE id IN (${delPlaceholders}) AND owner_user_id = ? AND status != 'success' AND COALESCE(is_locked, 0) = 0`;
+
   await db
-    .prepare(
-      `DELETE FROM tasks
-       WHERE id IN (${delPlaceholders})
-         AND owner_user_id = ?
-         AND status != 'success'
-         AND COALESCE(is_locked, 0) = 0`
-    )
+    .prepare(delSql)
     .bind(...idsToDelete, ownerUserId)
     .run();
 

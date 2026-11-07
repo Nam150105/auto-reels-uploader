@@ -29,6 +29,10 @@ export function getR2Bucket(env: Env): R2Bucket | null {
   return env.MEDIA_BUCKET || env.auto_reels_media || env.VIDEOS_BUCKET || null;
 }
 
+/** Kích thước mỗi phân đoạn multipart (R2 yêu cầu >= 5 MiB, các phần trừ phần cuối phải bằng nhau) */
+export const MULTIPART_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
+export const MULTIPART_MAX_PARTS = 10000;
+
 export function getMaxVideoSizeBytes(env: Env): number {
   const mb = parseInt(env.MAX_VIDEO_SIZE_MB || "200", 10);
   const safeMb = !isNaN(mb) && mb > 0 ? mb : 200;
@@ -100,11 +104,15 @@ export async function initiateVideoUpload(
     sizeBytes: number;
     mimeType?: string;
     sha256Checksum?: string | null;
+    /** true: tạo phiên R2 multipart để trình duyệt tải lên theo từng phân đoạn */
+    multipart?: boolean;
   }
 ): Promise<{
   success: boolean;
   message?: string;
   media?: MediaFileRecord;
+  upload_id?: string | null;
+  chunk_size_bytes?: number;
   upload_url?: string;
   complete_url?: string;
   video_path?: string;
@@ -125,7 +133,8 @@ export async function initiateVideoUpload(
   const storageBackend = bucket ? "r2" : "d1_fallback";
 
   let r2UploadId: string | null = null;
-  if (bucket && bucket.createMultipartUpload && params.sizeBytes > 50 * 1024 * 1024) {
+  const wantsMultipart = params.multipart === true || params.sizeBytes > 50 * 1024 * 1024;
+  if (bucket && bucket.createMultipartUpload && wantsMultipart) {
     try {
       const mp = await bucket.createMultipartUpload(objectKey, {
         httpMetadata: { contentType: check.normalizedMime },
@@ -153,6 +162,8 @@ export async function initiateVideoUpload(
   return {
     success: true,
     media,
+    upload_id: r2UploadId,
+    chunk_size_bytes: r2UploadId ? MULTIPART_CHUNK_SIZE_BYTES : undefined,
     upload_url: `/api/media/upload-stream/${mediaId}`,
     complete_url: `/api/media/upload-complete`,
     video_path: `r2://${mediaId}`
@@ -704,4 +715,142 @@ export async function cleanupExpiredR2Media(
   };
 }
 
+/**
+ * Nhận 1 phân đoạn (part) của phiên R2 multipart upload và ghi vào R2.
+ * Mỗi request chỉ chứa 1 phân đoạn nhỏ (~8 MiB) nên không vượt giới hạn body của Workers.
+ */
+export async function uploadVideoPart(
+  request: Request,
+  db: D1Database,
+  env: Env,
+  params: { mediaId: string; uploadId: string; partNumber: number; ownerUserId: string }
+): Promise<{ success: boolean; status: number; message?: string; etag?: string; part_number?: number }> {
+  const { mediaId, uploadId, partNumber, ownerUserId } = params;
 
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > MULTIPART_MAX_PARTS) {
+    return { success: false, status: 400, message: "part_number không hợp lệ (1 - 10000)." };
+  }
+
+  const media = await getMediaFileById(db, mediaId, ownerUserId);
+  if (!media || media.id !== mediaId) {
+    return {
+      success: false,
+      status: 404,
+      message: "Không tìm thấy phiên upload media hoặc bạn không có quyền sở hữu."
+    };
+  }
+  if (!media.r2_upload_id || media.r2_upload_id !== uploadId) {
+    return { success: false, status: 400, message: "upload_id không khớp với phiên upload của media này." };
+  }
+  if (media.upload_status === "ready") {
+    return { success: false, status: 409, message: "Phiên upload này đã hoàn tất." };
+  }
+
+  const bucket = getR2Bucket(env);
+  if (!bucket || !bucket.resumeMultipartUpload) {
+    return { success: false, status: 500, message: "Chưa gắn R2 Bucket hỗ trợ multipart upload." };
+  }
+
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    return { success: false, status: 400, message: "Phân đoạn video rỗng." };
+  }
+  if (bytes.byteLength > MULTIPART_CHUNK_SIZE_BYTES) {
+    return {
+      success: false,
+      status: 413,
+      message: `Phân đoạn vượt quá kích thước cho phép (${MULTIPART_CHUNK_SIZE_BYTES} bytes).`
+    };
+  }
+
+  try {
+    const mp = bucket.resumeMultipartUpload(media.object_key, uploadId);
+    const part = await mp.uploadPart(partNumber, bytes);
+    return { success: true, status: 200, etag: part.etag, part_number: part.partNumber };
+  } catch (err) {
+    return {
+      success: false,
+      status: 502,
+      message: `Lỗi ghi phân đoạn ${partNumber} lên R2: ${(err as Error).message}`
+    };
+  }
+}
+
+/**
+ * Ghép các phân đoạn đã tải lên thành object hoàn chỉnh trên R2, sau đó xác minh và đánh dấu 'ready'.
+ */
+export async function completeMultipartVideoUpload(
+  db: D1Database,
+  env: Env,
+  params: {
+    mediaId: string;
+    uploadId: string;
+    parts: Array<{ part_number?: number; partNumber?: number; etag?: string }>;
+    ownerUserId: string;
+  }
+): Promise<{ success: boolean; status: number; message?: string; media?: MediaFileRecord }> {
+  const { mediaId, uploadId, ownerUserId } = params;
+  const media = await getMediaFileById(db, mediaId, ownerUserId);
+  if (!media || media.id !== mediaId) {
+    return {
+      success: false,
+      status: 404,
+      message: "Không tìm thấy media_id hoặc bạn không có quyền truy cập."
+    };
+  }
+  if (media.upload_status === "ready") {
+    return { success: true, status: 200, media };
+  }
+  if (!media.r2_upload_id || media.r2_upload_id !== uploadId) {
+    return { success: false, status: 400, message: "upload_id không khớp với phiên upload của media này." };
+  }
+
+  const parts = (params.parts || [])
+    .map((p) => ({ partNumber: Number(p.part_number ?? p.partNumber), etag: String(p.etag || "") }))
+    .filter((p) => Number.isInteger(p.partNumber) && p.partNumber > 0 && p.etag)
+    .sort((a, b) => a.partNumber - b.partNumber);
+  if (parts.length === 0) {
+    return { success: false, status: 400, message: "Danh sách phân đoạn (parts) rỗng hoặc không hợp lệ." };
+  }
+
+  const bucket = getR2Bucket(env);
+  if (!bucket || !bucket.resumeMultipartUpload) {
+    return { success: false, status: 500, message: "Chưa gắn R2 Bucket hỗ trợ multipart upload." };
+  }
+
+  const mp = bucket.resumeMultipartUpload(media.object_key, uploadId);
+  try {
+    await mp.complete(parts);
+  } catch (err) {
+    await markMediaFileFailed(db, media.id, ownerUserId, `Ghép phân đoạn R2 thất bại: ${(err as Error).message}`);
+    return {
+      success: false,
+      status: 502,
+      message: `Không thể ghép các phân đoạn video trên R2: ${(err as Error).message}`
+    };
+  }
+
+  const headObj = await bucket.head(media.object_key);
+  const maxBytes = getMaxVideoSizeBytes(env);
+  if (!headObj || headObj.size <= 0 || headObj.size > maxBytes) {
+    const reason = !headObj || headObj.size <= 0
+      ? "Không tìm thấy file video trên R2 sau khi ghép phân đoạn."
+      : `Dung lượng video vượt quá giới hạn cho phép (${(maxBytes / 1048576).toFixed(0)} MB).`;
+    if (headObj) {
+      try { await bucket.delete(media.object_key); } catch {}
+    }
+    await markMediaFileFailed(db, media.id, ownerUserId, reason);
+    return { success: false, status: headObj ? 413 : 500, message: reason };
+  }
+
+  const updated = await completeMediaFileUpload(
+    db,
+    media.id,
+    ownerUserId,
+    headObj.size,
+    headObj.etag || media.sha256_checksum,
+    "r2",
+    "auto-reels-media"
+  );
+  return { success: true, status: 200, media: updated || media };
+}

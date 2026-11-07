@@ -13,6 +13,9 @@ export interface D1Result<T = Record<string, unknown>> {
     duration?: number;
     rows_read?: number;
     rows_written?: number;
+    size_after?: number;
+    changed_db?: boolean;
+    [key: string]: unknown;
   };
 }
 
@@ -270,6 +273,7 @@ export interface FacebookPageRecord {
   success_count?: number;
   admin_accounts: AdminAccountLink[];
   admin_names: string[];
+  page_access_token?: string;
 }
 
 export interface MediaFileRecord {

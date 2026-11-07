@@ -188,6 +188,7 @@ export async function handleWorkerRequest(
     env.ASSETS &&
     (method === "GET" || method === "HEAD") &&
     (pathname.startsWith("/static/") ||
+      pathname.startsWith("/assets/") ||
       pathname.startsWith("/js/") ||
       pathname.startsWith("/css/") ||
       pathname === "/favicon.ico")
@@ -533,7 +534,10 @@ export async function handleWorkerRequest(
       return jsonResponse(status);
     }
 
-    if (pathname === "/api/meta/accounts" && method === "GET") {
+    if (
+      (pathname === "/api/meta/accounts" || pathname === "/api/accounts") &&
+      method === "GET"
+    ) {
       const accounts = await getFacebookAccounts(
         db,
         encryptionKey,
@@ -583,7 +587,10 @@ export async function handleWorkerRequest(
       return Response.redirect(res.oauth_url, 302);
     }
 
-    if (pathname === "/api/meta/connect-token" && method === "POST") {
+    if (
+      (pathname === "/api/meta/connect-token" || pathname === "/api/meta/connect-direct-token") &&
+      method === "POST"
+    ) {
       const body = (await request.json().catch(() => ({}))) as {
         access_token?: string;
         token?: string;
@@ -1598,7 +1605,7 @@ export async function handleWorkerRequest(
         let fbDeleted = false;
         if (deleteFb && (existing.video_id || existing.post_id)) {
           const fbRes = await deleteFacebookReelOrPost(db, env, {
-            pageId: existing.facebook_page_id,
+            pageId: existing.facebook_page_id || "",
             videoId: existing.video_id,
             postId: existing.post_id,
             ownerUserId
@@ -1713,17 +1720,26 @@ export async function handleWorkerRequest(
         return jsonResponse({ detail: "Bài viết này chưa được xuất bản lên Facebook nên chưa thể thêm bình luận." }, 400);
       }
 
-      const cmtRes = await postReelCommentViaGraphApi(db, env, task, msg, {
-        isRetry: true,
-        skipInitialDuplicateCheck: true,
-        ownerUserId
+      const page = await getFacebookPageByFbId(db, encryptionKey, task.facebook_page_id || "", true, ownerUserId);
+      if (!page || !page.page_access_token) {
+        return jsonResponse({ detail: "Không tìm thấy quyền truy cập Fanpage tương ứng." }, 400);
+      }
+
+      const cmtRes = await postReelCommentViaGraphApi(db, env, {
+        facebookPageId: page.facebook_page_id || task.facebook_page_id || "",
+        pageAccessToken: page.page_access_token,
+        postId: task.post_id || task.video_id,
+        videoId: task.video_id,
+        commentText: msg,
+        ownerUserId,
+        taskId: task.id,
+        skipInitialDuplicateCheck: true
       });
 
       if (cmtRes.success) {
-        await updateTaskCommentState(db, taskId, ownerUserId, {
-          comment_status: "success",
-          comment_id: cmtRes.comment_id,
-          comment_text: msg
+        await updateTaskCommentState(db, taskId, "success", cmtRes.message, {
+          commentId: cmtRes.comment_id,
+          commentPostedAt: new Date().toISOString()
         });
         return jsonResponse({
           success: true,
@@ -1731,6 +1747,7 @@ export async function handleWorkerRequest(
           message: "Đã đăng bình luận thành công lên bài viết Facebook."
         });
       } else {
+        await updateTaskCommentState(db, taskId, "failed", cmtRes.message);
         return jsonResponse({
           success: false,
           detail: cmtRes.message || "Không thể đăng bình luận lên Facebook."

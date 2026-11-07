@@ -2,6 +2,7 @@
  * Cloudflare R2 Media Upload & Management Routes
  * - POST /api/media/upload-init
  * - PUT|POST /api/media/upload-stream/{media_id}
+ * - PUT /api/media/upload-part?media_id=&upload_id=&part_number= (R2 multipart, theo phân đoạn)
  * - POST /api/media/upload-complete
  * - GET /api/media
  * - DELETE /api/media/{media_id}
@@ -14,6 +15,8 @@ import {
   initiateVideoUpload,
   streamVideoToStorage,
   finalizeVideoUpload,
+  uploadVideoPart,
+  completeMultipartVideoUpload,
   listUserVideos,
   deleteUserVideo,
   openVideoFromStorage
@@ -38,12 +41,14 @@ export async function handleMediaRoutes(
       const sizeBytes = Number(body.size_bytes || body.size || 0);
       const mimeType = String(body.mime_type || body.content_type || "video/mp4");
       const sha256Checksum = body.sha256_checksum ? String(body.sha256_checksum) : null;
+      const multipart = body.upload_mode === "multipart" || body.multipart === true;
 
       const initRes = await initiateVideoUpload(db, env, currentUser.id, {
         filename,
         sizeBytes,
         mimeType,
-        sha256Checksum
+        sha256Checksum,
+        multipart
       });
 
       if (!initRes.success || !initRes.media) {
@@ -54,6 +59,8 @@ export async function handleMediaRoutes(
         success: true,
         media_id: initRes.media.id,
         object_key: initRes.media.object_key,
+        upload_id: initRes.upload_id || null,
+        chunk_size_bytes: initRes.chunk_size_bytes || null,
         upload_url: initRes.upload_url,
         complete_url: initRes.complete_url,
         video_path: initRes.video_path,
@@ -84,6 +91,26 @@ export async function handleMediaRoutes(
     });
   }
 
+  // 2b. Nhận từng phân đoạn của phiên R2 multipart upload
+  if (pathname === "/api/media/upload-part" && (method === "PUT" || method === "POST")) {
+    const mediaId = (url.searchParams.get("media_id") || "").trim();
+    const uploadId = (url.searchParams.get("upload_id") || "").trim();
+    const partNumber = Number(url.searchParams.get("part_number"));
+    if (!mediaId || !uploadId) {
+      return jsonResponse({ detail: "Thiếu tham số media_id hoặc upload_id." }, 400);
+    }
+    const res = await uploadVideoPart(request, db, env, {
+      mediaId,
+      uploadId,
+      partNumber,
+      ownerUserId: currentUser.id
+    });
+    if (!res.success) {
+      return jsonResponse({ detail: res.message || "Lỗi tải phân đoạn lên R2." }, res.status);
+    }
+    return jsonResponse({ success: true, media_id: mediaId, part_number: res.part_number, etag: res.etag });
+  }
+
   // 3. Xác nhận hoàn tất upload video lên R2
   if (pathname === "/api/media/upload-complete" && method === "POST") {
     try {
@@ -93,7 +120,16 @@ export async function handleMediaRoutes(
         return jsonResponse({ detail: "Thiếu tham số media_id." }, 400);
       }
 
-      const finRes = await finalizeVideoUpload(db, env, mediaId, currentUser.id);
+      const uploadId = body.upload_id ? String(body.upload_id).trim() : "";
+      const finRes =
+        uploadId && Array.isArray(body.parts)
+          ? await completeMultipartVideoUpload(db, env, {
+              mediaId,
+              uploadId,
+              parts: body.parts as Array<{ part_number?: number; etag?: string }>,
+              ownerUserId: currentUser.id
+            })
+          : await finalizeVideoUpload(db, env, mediaId, currentUser.id);
       if (!finRes.success || !finRes.media) {
         return jsonResponse({ detail: finRes.message || "Chưa hoàn tất upload." }, finRes.status);
       }
@@ -101,6 +137,8 @@ export async function handleMediaRoutes(
       return jsonResponse({
         success: true,
         media_id: finRes.media.id,
+        original_filename: finRes.media.original_filename,
+        size_bytes: finRes.media.size_bytes,
         object_key: finRes.media.object_key,
         video_path: `r2://${finRes.media.id}`,
         stream_url: `/api/media/${finRes.media.id}/stream`,

@@ -4,7 +4,7 @@
  * Tách biệt Posts (Kho lưu trữ tập trung) và Tasks (Hàng đợi đăng bài)
  */
 
-import type { Env } from "../types.ts";
+import type { Env, D1Database } from "../types.ts";
 import { getEncryptionKeyMaterial, decryptToken } from "../utils/crypto.ts";
 import { deleteFacebookReelOrPost } from "./metaGraphService.ts";
 import { getFacebookPageByFbId } from "../db.ts";

@@ -265,6 +265,7 @@ export async function connectFacebookWithAccessToken(
   success: boolean;
   message: string;
   error_type?: MetaErrorCategory;
+  error_code?: string | number;
   account_id?: string;
   user_id?: string;
   user_name?: string;
@@ -873,6 +874,7 @@ export async function validateVideoSource(
   size_mb: number;
   storage_type: string;
   media_id?: string;
+  object_key?: string;
   message: string;
 }> {
   const clean = (videoPath || "").trim();
@@ -2487,11 +2489,11 @@ export async function syncRecentPageVideos(
     includeToken: true
   });
   const page = pages.find((p) => p.facebook_page_id === pageId);
-  if (!page || !page.access_token) {
+  if (!page || !page.page_access_token) {
     return { success: false, synced_count: 0, total_remote: 0, error: "Không tìm thấy token Fanpage." };
   }
 
-  const token = page.access_token;
+  const token = page.page_access_token;
   try {
     const resp = await fetch(
       `${cfg.graphBase}/${pageId}/videos?fields=id,description,created_time,permalink_url&limit=${limit}&access_token=${encodeURIComponent(token)}`
