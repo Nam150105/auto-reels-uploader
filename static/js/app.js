@@ -31,7 +31,7 @@
     const isPageLoading = ref(true);
     const pageLoadError = ref('');
     const currentUser = ref(null);
-    const mainView = ref('schedule'); // 'schedule' | 'analytics' | 'pages'
+    const mainView = ref('composer'); // 'composer' | 'schedule' | 'analytics'
     const currentTab = ref('schedules'); // 'pages' | 'schedules'
     const pages = ref([]);
     const tasks = ref([]);
@@ -62,6 +62,34 @@
       schedule_time: '',
       general: ''
     });
+
+    // ==========================================
+    // COMPOSER STATE (VIẾT BÀI TẬP TRUNG)
+    // ==========================================
+    const composerForm = ref({
+      selectedPageIds: [],
+      caption: '',
+      video_path: '',
+      media_id: '',
+      object_key: '',
+      media_filename: '',
+      media_size_mb: 0,
+      media_type: 'video', // 'video' | 'image'
+      publish_mode: 'now', // 'now' | 'schedule'
+      schedule_date: '',
+      schedule_time: '',
+      comment_text: '',
+      comment_delay_minutes: 0,
+      has_comment: false
+    });
+    const isUploadingComposerMedia = ref(false);
+    const composerUploadProgress = ref(0);
+    const composerUploadError = ref('');
+    const showComposerChannelModal = ref(false);
+    const showComposerCommentModal = ref(false);
+    const composerChannelSearch = ref('');
+    const tempCommentText = ref('');
+    const tempCommentDelay = ref(0);
 
     // ==========================================
     // FACEBOOK POSTS & COMMENTS MANAGER STATE
@@ -829,13 +857,20 @@ const selectedPageCount = computed(() => {
         const targetPath = '/analytics';
         if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
         loadAnalyticsDashboard();
-      } else {
+      } else if (view === 'schedule' || view === 'tasks' || view === 'pages' || view === 'page') {
         mainView.value = 'schedule';
         currentTab.value = 'schedules';
         const targetPath = (view === 'pages' || view === 'page') ? '/pages' : '/schedule';
         if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
         loadTasks();
         loadPages();
+      } else {
+        mainView.value = 'composer';
+        const targetPath = '/';
+        if (window.location.pathname !== targetPath && window.location.pathname !== '/schedule') {
+          history.pushState(null, '', targetPath);
+        }
+        initComposerForm();
       }
     }
 
@@ -2170,7 +2205,6 @@ function setDatePreset(offsetDays) {
     });
 
     const totalBulkTasksCount = computed(() => bulkGeneratedTasks.value.length);
-    const validBulkRowCount = computed(() => bulkParsedList.value.filter(r => r.is_valid && r.video_path).length);
     const missingBulkRowCount = computed(() => bulkParsedList.value.filter(r => r.is_valid && r.video_status === 'missing').length);
 
     function handleBulkInputChanged() {
@@ -3828,10 +3862,13 @@ async function handleDeleteTask(taskId) {
       if (p === '/analytics' || p === '/insights' || p === '/posts' || p === '/comments') {
         mainView.value = 'analytics';
         loadAnalyticsDashboard();
-      } else {
+      } else if (p === '/schedule' || p === '/pages' || p === '/tasks') {
         mainView.value = 'schedule';
         loadTasks();
         loadPages();
+      } else {
+        mainView.value = 'composer';
+        initComposerForm();
       }
     }
 
@@ -4085,6 +4122,230 @@ async function handleDeleteTask(taskId) {
       }
     }
 
+    // ==========================================
+    // COMPOSER METHODS (VIẾT BÀI TẬP TRUNG)
+    // ==========================================
+    function initComposerForm() {
+      const defSched = getVnNowParts(15);
+      if (!composerForm.value.schedule_date) composerForm.value.schedule_date = defSched.date;
+      if (!composerForm.value.schedule_time) composerForm.value.schedule_time = defSched.time;
+      if (pages.value.length > 0 && composerForm.value.selectedPageIds.length === 0) {
+        composerForm.value.selectedPageIds = [pages.value[0].facebook_page_id];
+      }
+    }
+
+    function toggleComposerPage(pageId) {
+      if (!pageId) return;
+      const idx = composerForm.value.selectedPageIds.indexOf(pageId);
+      if (idx >= 0) {
+        composerForm.value.selectedPageIds.splice(idx, 1);
+      } else {
+        composerForm.value.selectedPageIds.push(pageId);
+      }
+    }
+
+    function isComposerPageSelected(pageId) {
+      return composerForm.value.selectedPageIds.includes(pageId);
+    }
+
+    function selectAllComposerPages() {
+      composerForm.value.selectedPageIds = pages.value.map(p => p.facebook_page_id);
+    }
+
+    function deselectAllComposerPages() {
+      composerForm.value.selectedPageIds = [];
+    }
+
+    const filteredComposerPages = computed(() => {
+      let list = pages.value || [];
+      if (composerChannelSearch.value && composerChannelSearch.value.trim()) {
+        const q = composerChannelSearch.value.toLowerCase().trim();
+        list = list.filter(p => (p.name || p.page_name || '').toLowerCase().includes(q) || (p.facebook_page_id || '').includes(q));
+      }
+      return list;
+    });
+
+    const selectedComposerPagesList = computed(() => {
+      const set = new Set(composerForm.value.selectedPageIds);
+      return (pages.value || []).filter(p => set.has(p.facebook_page_id));
+    });
+
+    async function handleComposerMediaUpload(file) {
+      if (!file) return;
+      isUploadingComposerMedia.value = true;
+      composerUploadError.value = '';
+      showToast(`Đang tải tệp "${file.name}" lên Cloudflare R2...`, "info");
+      try {
+        const isImage = file.type && file.type.startsWith('image/');
+        const mimeType = file.type || (isImage ? 'image/jpeg' : 'video/mp4');
+        const initRes = await fetch('/api/media/upload-init', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            size_bytes: file.size,
+            mime_type: mimeType
+          })
+        });
+        const initData = await initRes.json();
+        if (!initRes.ok || !initData.media_id) {
+          const msg = initData.detail || "Không thể khởi tạo upload R2.";
+          composerUploadError.value = msg;
+          isUploadingComposerMedia.value = false;
+          showToast(msg, "error");
+          return;
+        }
+
+        const streamRes = await fetch(initData.upload_url, {
+          method: 'PUT',
+          headers: { 'Content-Type': mimeType },
+          body: file
+        });
+        if (!streamRes.ok) {
+          const msg = "Lỗi truyền tệp lên Cloudflare R2.";
+          composerUploadError.value = msg;
+          isUploadingComposerMedia.value = false;
+          showToast(msg, "error");
+          return;
+        }
+
+        const compRes = await fetch('/api/media/upload-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ media_id: initData.media_id })
+        });
+        const compData = await compRes.json();
+        if (compRes.ok && (compData.video_path || compData.object_key)) {
+          composerForm.value.video_path = compData.video_path || file.name;
+          composerForm.value.media_id = compData.media_id || initData.media_id;
+          composerForm.value.object_key = compData.object_key || initData.object_key || '';
+          composerForm.value.media_filename = file.name;
+          composerForm.value.media_size_mb = compData.size_mb || Math.round((file.size / 1048576) * 100) / 100;
+          composerForm.value.media_type = isImage ? 'image' : 'video';
+          isUploadingComposerMedia.value = false;
+          composerUploadError.value = '';
+          showToast(`Đã tải & xác minh "${file.name}" (${composerForm.value.media_size_mb} MB) trên Cloudflare R2!`, "success");
+        } else {
+          const msg = compData.detail || "Không thể xác nhận hoàn tất tải lên.";
+          composerUploadError.value = msg;
+          isUploadingComposerMedia.value = false;
+          showToast(msg, "error");
+        }
+      } catch (err) {
+        composerUploadError.value = err.message || "Lỗi tải tệp lên R2.";
+        isUploadingComposerMedia.value = false;
+        showToast("Lỗi: " + (err.message || 'Mạng không ổn định'), "error");
+      }
+    }
+
+    function removeComposerMedia() {
+      composerForm.value.video_path = '';
+      composerForm.value.media_id = '';
+      composerForm.value.object_key = '';
+      composerForm.value.media_filename = '';
+      composerForm.value.media_size_mb = 0;
+      composerUploadError.value = '';
+    }
+
+    function openComposerCommentModal() {
+      tempCommentText.value = composerForm.value.comment_text || '';
+      tempCommentDelay.value = composerForm.value.comment_delay_minutes || 0;
+      showComposerCommentModal.value = true;
+    }
+
+    function saveComposerComment() {
+      composerForm.value.comment_text = (tempCommentText.value || '').trim();
+      composerForm.value.comment_delay_minutes = Number(tempCommentDelay.value) || 0;
+      composerForm.value.has_comment = Boolean(composerForm.value.comment_text);
+      showComposerCommentModal.value = false;
+      if (composerForm.value.has_comment) {
+        showToast("Đã lưu bình luận hẹn giờ!", "success");
+      }
+    }
+
+    async function handleComposerSubmit() {
+      if (composerForm.value.selectedPageIds.length === 0) {
+        showToast("Vui lòng chọn ít nhất một Fanpage để đăng bài!", "warning");
+        showComposerChannelModal.value = true;
+        return;
+      }
+      if (isUploadingComposerMedia.value) {
+        showToast("Tệp media đang được tải lên R2, vui lòng đợi hoàn tất...", "warning");
+        return;
+      }
+
+      const defSched = getVnNowParts(15);
+      let targetDate = composerForm.value.schedule_date || defSched.date;
+      let targetTime = composerForm.value.schedule_time || defSched.time;
+
+      if (composerForm.value.publish_mode === 'schedule') {
+        const check = validateVnScheduleClient(targetDate, targetTime);
+        if (!check.valid) {
+          showToast(check.message || "Thời gian lên lịch không hợp lệ!", "error");
+          return;
+        }
+        targetDate = check.normalizedDate;
+        targetTime = check.normalizedTime;
+      } else {
+        const nowSched = getVnNowParts(0);
+        targetDate = nowSched.date;
+        targetTime = nowSched.time;
+      }
+
+      const payloadTasks = composerForm.value.selectedPageIds.map(pid => ({
+        facebook_page_id: pid,
+        video_path: composerForm.value.video_path || (composerForm.value.media_filename ? composerForm.value.media_filename : 'post_media.mp4'),
+        media_id: composerForm.value.media_id || '',
+        object_key: composerForm.value.object_key || '',
+        caption: (composerForm.value.caption || '').trim(),
+        comment_text: composerForm.value.has_comment ? (composerForm.value.comment_text || '').trim() : '',
+        comment_delay_minutes: composerForm.value.comment_delay_minutes || 0,
+        schedule_date: targetDate,
+        schedule_time: targetTime
+      }));
+
+      try {
+        const res = await apiFetch('/api/tasks/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tasks: payloadTasks,
+            allow_unuploaded_video: true
+          })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          const createdCount = data.created_count || payloadTasks.length;
+          showToast(`Đã tạo thành công ${createdCount} công việc đăng bài!`, "success");
+
+          if (composerForm.value.publish_mode === 'now' && Array.isArray(data.created_ids) && data.created_ids.length > 0) {
+            try {
+              await apiFetch('/api/tasks/bulk-publish-now', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_ids: data.created_ids })
+              });
+              showToast("Đã đưa bài viết vào hàng đợi Đăng ngay!", "info");
+            } catch (e) {}
+          }
+
+          composerForm.value.caption = '';
+          removeComposerMedia();
+          composerForm.value.comment_text = '';
+          composerForm.value.has_comment = false;
+          composerForm.value.comment_delay_minutes = 0;
+          initComposerForm();
+
+          setMainView('schedule');
+          await Promise.allSettled([loadTasks(), loadStats(), loadPages()]);
+        } else {
+          showToast(data.detail || "Không thể tạo công việc đăng bài.", "error");
+        }
+      } catch (err) {
+        showToast("Lỗi kết nối: " + (err.message || 'Mạng không ổn định'), "error");
+      }
+    }
+
     async function onPageShow(event) {
       if (event && event.persisted) {
         const authed = await checkAuth();
@@ -4116,8 +4377,14 @@ async function handleDeleteTask(taskId) {
     }
 
     onMounted(async () => {
-      // Luôn cố định giao diện 1 tab duy nhất: Quản lý Fanpage & Task đăng bài
-      mainView.value = 'schedule';
+      const currentPath = window.location.pathname;
+      if (currentPath === '/analytics' || currentPath === '/insights' || currentPath === '/posts' || currentPath === '/comments') {
+        mainView.value = 'analytics';
+      } else if (currentPath === '/schedule' || currentPath === '/pages' || currentPath === '/tasks') {
+        mainView.value = 'schedule';
+      } else {
+        mainView.value = 'composer';
+      }
 
       window.addEventListener('popstate', onPopState);
       window.addEventListener('pageshow', onPageShow);
@@ -4130,10 +4397,9 @@ async function handleDeleteTask(taskId) {
 
       // 2. Tải dữ liệu thiết yếu của hệ thống (Pages & Accounts), dữ liệu phụ chạy ngầm không chặn UI
       await loadAll();
+      initComposerForm();
       if (mainView.value === 'analytics') {
         await loadAnalyticsDashboard();
-      } else if (mainView.value === 'pages') {
-        // Danh sách Fanpage đã được load trong loadAll()
       } else {
         await loadTasks();
       }
@@ -4473,7 +4739,6 @@ async function handleDeleteTask(taskId) {
       deselectAllBulkModalPages,
       bulkGeneratedTasks,
       totalBulkTasksCount,
-      validBulkRowCount,
       missingBulkRowCount,
       singleRowUploadTarget,
       triggerSingleRowUpload,
@@ -4489,7 +4754,30 @@ async function handleDeleteTask(taskId) {
       isLoadingPagePosts,
       viewPagePosts,
       openPostOnFacebook,
-      handleDeletePublishedPost
+      handleDeletePublishedPost,
+
+      // Composer State & Methods
+      composerForm,
+      isUploadingComposerMedia,
+      composerUploadProgress,
+      composerUploadError,
+      showComposerChannelModal,
+      showComposerCommentModal,
+      composerChannelSearch,
+      tempCommentText,
+      tempCommentDelay,
+      filteredComposerPages,
+      selectedComposerPagesList,
+      initComposerForm,
+      toggleComposerPage,
+      isComposerPageSelected,
+      selectAllComposerPages,
+      deselectAllComposerPages,
+      handleComposerMediaUpload,
+      removeComposerMedia,
+      openComposerCommentModal,
+      saveComposerComment,
+      handleComposerSubmit
     };
   }
 });
