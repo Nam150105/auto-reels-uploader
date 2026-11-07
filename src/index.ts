@@ -74,6 +74,16 @@ import {
   deleteFacebookReelOrPost,
   syncRecentPageVideos
 } from "./services/metaGraphService.ts";
+import {
+  syncFacebookPagePosts,
+  getFacebookPostsList,
+  getFacebookPostDetail,
+  editFacebookPostMessage,
+  deleteFacebookPostComplete,
+  syncPostComments,
+  createFacebookCommentOrReply,
+  deleteOrHideFacebookComment
+} from "./services/facebookPostsService.ts";
 import { deleteUserVideo, getR2Bucket, cleanupExpiredR2Media } from "./services/r2MediaService.ts";
 import {
   makeSessionCookie,
@@ -229,6 +239,8 @@ export async function handleWorkerRequest(
   if (
     (pathname === "/page" ||
       pathname === "/pages" ||
+      pathname === "/posts" ||
+      pathname === "/comments" ||
       pathname === "/schedules" ||
       pathname === "/reels" ||
       pathname === "/insights") &&
@@ -1675,22 +1687,189 @@ export async function handleWorkerRequest(
     }
 
     // ------------------------------------------
-    // 6.4F. ĐỒNG BỘ BÀI VIẾT CŨ TỪ FANPAGE VỀ HỆ THỐNG (/api/pages/:id/sync-posts)
+    // 6.4F. QUẢN LÝ BÀI VIẾT FACEBOOK (POSTS MANAGER)
+    // ------------------------------------------
+    if (pathname === "/api/posts" && method === "GET") {
+      const pageId = url.searchParams.get("page_id") || undefined;
+      const postType = url.searchParams.get("post_type") || undefined;
+      const source = url.searchParams.get("source") || undefined;
+      const search = url.searchParams.get("search") || undefined;
+      const startDate = url.searchParams.get("start_date") || undefined;
+      const endDate = url.searchParams.get("end_date") || undefined;
+      const page = Number(url.searchParams.get("page")) || 1;
+      const limit = Number(url.searchParams.get("limit")) || 20;
+
+      const result = await getFacebookPostsList(db, ownerUserId, {
+        page_id: pageId,
+        post_type: postType,
+        source: source,
+        search,
+        start_date: startDate,
+        end_date: endDate,
+        page,
+        limit
+      });
+      return jsonResponse({ success: true, ...result });
+    }
+
+    const postCommentsMatch = /^\/api\/posts\/([^\/]+)\/comments$/.exec(pathname);
+    if (postCommentsMatch && method === "GET") {
+      const pId = decodeURIComponent(postCommentsMatch[1]);
+      const res = await syncPostComments(db, env, { postId: pId, ownerUserId });
+      if (res.success) {
+        return jsonResponse({ success: true, comments: res.comments, count: res.count });
+      }
+      return jsonResponse({ success: false, detail: res.error || "Lỗi tải bình luận" }, 400);
+    }
+
+    if (postCommentsMatch && method === "POST") {
+      const pId = decodeURIComponent(postCommentsMatch[1]);
+      const body = (await request.json().catch(() => ({}))) as {
+        message?: string;
+        parent_comment_id?: string;
+      };
+      const res = await createFacebookCommentOrReply(db, env, {
+        postId: pId,
+        parentCommentId: body.parent_comment_id,
+        message: body.message || "",
+        ownerUserId
+      });
+      if (res.success) {
+        return jsonResponse({ success: true, comment_id: res.comment_id });
+      }
+      return jsonResponse({ success: false, detail: res.error || "Lỗi đăng bình luận" }, 400);
+    }
+
+    const postDetailMatch = /^\/api\/posts\/([^\/]+)$/.exec(pathname);
+    if (postDetailMatch && method === "GET") {
+      const pId = decodeURIComponent(postDetailMatch[1]);
+      const detail = await getFacebookPostDetail(db, ownerUserId, pId);
+      if (!detail.post) {
+        return jsonResponse({ detail: "Không tìm thấy bài viết." }, 404);
+      }
+      return jsonResponse({ success: true, ...detail });
+    }
+
+    if (postDetailMatch && method === "PUT") {
+      const pId = decodeURIComponent(postDetailMatch[1]);
+      const body = (await request.json().catch(() => ({}))) as { message?: string };
+      const newMsg = body.message || "";
+      const editRes = await editFacebookPostMessage(db, env, {
+        postId: pId,
+        newCaption: newMsg,
+        ownerUserId
+      });
+      if (editRes.success) {
+        return jsonResponse({
+          success: true,
+          updated_post: editRes.updated_post,
+          message: "Đã cập nhật nội dung bài viết thành công trên Facebook."
+        });
+      } else {
+        return jsonResponse({
+          success: false,
+          detail: editRes.error || "Không thể cập nhật bài viết."
+        }, 400);
+      }
+    }
+
+    if (postDetailMatch && method === "DELETE") {
+      const pId = decodeURIComponent(postDetailMatch[1]);
+      const delFb = url.searchParams.get("delete_facebook") === "true";
+      const delRes = await deleteFacebookPostComplete(db, env, {
+        postId: pId,
+        deleteFacebook: delFb,
+        ownerUserId
+      });
+      if (delRes.success) {
+        return jsonResponse({
+          success: true,
+          deleted_id: pId,
+          deleted_facebook: delFb,
+          message: delFb ? "Đã xóa bài viết trên Facebook và hệ thống thành công." : "Đã xóa bài viết khỏi hệ thống."
+        });
+      } else {
+        return jsonResponse({
+          success: false,
+          detail: delRes.error || "Không thể xóa bài viết."
+        }, 400);
+      }
+    }
+
+    const commentReplyMatch = /^\/api\/comments\/([^\/]+)\/reply$/.exec(pathname);
+    if (commentReplyMatch && method === "POST") {
+      const commentId = decodeURIComponent(commentReplyMatch[1]);
+      const body = (await request.json().catch(() => ({}))) as {
+        message?: string;
+        post_id?: string;
+      };
+      const res = await createFacebookCommentOrReply(db, env, {
+        postId: body.post_id || "",
+        parentCommentId: commentId,
+        message: body.message || "",
+        ownerUserId
+      });
+      if (res.success) {
+        return jsonResponse({ success: true, comment_id: res.comment_id });
+      }
+      return jsonResponse({ success: false, detail: res.error || "Lỗi trả lời bình luận" }, 400);
+    }
+
+    const commentHideMatch = /^\/api\/comments\/([^\/]+)\/hide$/.exec(pathname);
+    if (commentHideMatch && method === "POST") {
+      const commentId = decodeURIComponent(commentHideMatch[1]);
+      const body = (await request.json().catch(() => ({}))) as { hide?: boolean };
+      const res = await deleteOrHideFacebookComment(db, env, {
+        commentId,
+        action: body.hide !== false ? "hide" : "unhide",
+        ownerUserId
+      });
+      if (res.success) {
+        return jsonResponse({ success: true });
+      }
+      return jsonResponse({ success: false, detail: res.error || "Lỗi thao tác bình luận" }, 400);
+    }
+
+    const commentItemMatch = /^\/api\/comments\/([^\/]+)$/.exec(pathname);
+    if (commentItemMatch && method === "DELETE") {
+      const commentId = decodeURIComponent(commentItemMatch[1]);
+      const res = await deleteOrHideFacebookComment(db, env, {
+        commentId,
+        action: "delete",
+        ownerUserId
+      });
+      if (res.success) {
+        return jsonResponse({ success: true });
+      }
+      return jsonResponse({ success: false, detail: res.error || "Lỗi xóa bình luận" }, 400);
+    }
+
+    // ------------------------------------------
+    // 6.4G. ĐỒNG BỘ BÀI VIẾT TỪ FANPAGE VỀ HỆ THỐNG (/api/pages/:id/sync-posts)
     // ------------------------------------------
     const pageSyncPostsMatch = /^\/api\/pages\/([^\/]+)\/sync-posts$/.exec(pathname);
     if (pageSyncPostsMatch && method === "POST") {
       const pageId = decodeURIComponent(pageSyncPostsMatch[1]);
-      const syncRes = await syncRecentPageVideos(db, env, {
+      const body = (await request.json().catch(() => ({}))) as {
+        cursor?: string;
+        limit?: number;
+        force_reset?: boolean;
+      };
+      const syncRes = await syncFacebookPagePosts(db, env, {
         pageId,
         ownerUserId,
-        limit: 30
+        cursor: body.cursor || url.searchParams.get("cursor") || undefined,
+        limit: body.limit || Number(url.searchParams.get("limit")) || 30,
+        forceResetCursor: Boolean(body.force_reset)
       });
       if (syncRes.success) {
         return jsonResponse({
           success: true,
-          synced_count: syncRes.synced_count,
-          total_remote: syncRes.total_remote,
-          message: `Đã đồng bộ thành công ${syncRes.synced_count} bài viết từ Fanpage.`
+          synced_count: syncRes.count,
+          next_cursor: syncRes.next_cursor,
+          has_more: syncRes.has_more,
+          total_synced: syncRes.total_synced,
+          message: `Đã đồng bộ thành công ${syncRes.count} bài viết từ Fanpage.`
         });
       } else {
         return jsonResponse({

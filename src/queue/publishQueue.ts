@@ -427,6 +427,43 @@ export async function consumeSingleTaskMessage(
       }
     });
 
+    // Tự động tạo bản ghi bài viết trong danh mục Facebook Posts tập trung
+    try {
+      const nowIso = new Date().toISOString();
+      const fbPostId = rawPostId || pubRes.video_id || `reel_${claimedTask.id}`;
+      const permalink = pubRes.video_url || `https://www.facebook.com/${fbPostId}`;
+      await db
+        .prepare(
+          `INSERT INTO facebook_posts (
+            owner_user_id, page_id, post_id, video_id, message, post_type,
+            permalink_url, thumbnail_url, media_url, attachments_json, source, task_id,
+            created_time, synced_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 'reel', ?, '', ?, '[]', 'app_published', ?, ?, ?, ?, ?)
+          ON CONFLICT(page_id, post_id) DO UPDATE SET
+            task_id = excluded.task_id,
+            source = 'app_published',
+            video_id = excluded.video_id,
+            permalink_url = excluded.permalink_url,
+            media_url = excluded.media_url,
+            updated_at = excluded.updated_at`
+        )
+        .bind(
+          msg.owner_user_id,
+          page.facebook_page_id || claimedTask.facebook_page_id,
+          fbPostId,
+          pubRes.video_id || "",
+          claimedTask.caption || "",
+          permalink,
+          claimedTask.video_url || "",
+          claimedTask.id,
+          nowIso,
+          nowIso,
+          nowIso,
+          nowIso
+        )
+        .run();
+    } catch {}
+
     // BƯỚC 5, 6, 7: XỬ LÝ ĐĂNG BÌNH LUẬN RIÊNG BIỆT (TÁCH BIỆT VỚI REELS)
     const cleanComment = (claimedTask.comment_text || "").trim();
     if (!cleanComment) {

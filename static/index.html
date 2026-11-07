@@ -69,19 +69,30 @@
         </div>
         <div>
           <div class="flex items-center gap-2">
-            <h1 class="font-extrabold text-sm tracking-tight text-white">FB Reels Auto Scheduler</h1>
+            <h1 class="font-extrabold text-sm tracking-tight text-white">Facebook Page Manager</h1>
             <!-- Main View Navigation Pills -->
             <div class="flex items-center gap-1 bg-slate-950/90 p-0.5 rounded-lg border border-slate-800 ml-1">
+              <button @click="setMainView('posts')"
+                      class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
+                      :class="mainView === 'posts' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+                <span>📱 Bài Viết</span>
+                <span v-if="totalPosts > 0" class="px-1.5 py-0.2 rounded-full text-[9px] bg-white/20 text-white font-mono">{{ totalPosts }}</span>
+              </button>
               <button @click="setMainView('workspace')"
                       class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
-                      :class="mainView === 'workspace' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
-                <span>📢 Quản Lý Fanpage &amp; Bài Viết</span>
+                      :class="mainView === 'workspace' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+                <span>⏰ Lên Lịch &amp; Đăng Bài</span>
+                <span v-if="tasks.length > 0" class="px-1.5 py-0.2 rounded-full text-[9px] bg-white/20 text-white font-mono">{{ tasks.length }}</span>
+              </button>
+              <button @click="setMainView('comments')"
+                      class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
+                      :class="mainView === 'comments' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+                <span>💬 Bình Luận</span>
               </button>
               <button @click="setMainView('insights')"
                       class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
-                      :class="mainView === 'insights' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+                      :class="mainView === 'insights' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
                 <span>📊 Thống kê Reels</span>
-                <span v-if="systemStats.success_tasks > 0" class="px-1.5 py-0.2 rounded-full text-[9px] bg-white/15 text-white font-mono">{{ systemStats.success_tasks }}</span>
               </button>
             </div>
           </div>
@@ -209,6 +220,300 @@
 
     <!-- ================= MAIN WORKSPACE ================= -->
     <main class="flex-1 flex overflow-hidden p-3 gap-2">
+
+      <!-- ================= VIEW: QUẢN LÝ BÀI VIẾT (POSTS MANAGER) ================= -->
+      <section
+        v-if="mainView === 'posts'"
+        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
+
+        <!-- 1. Thanh công cụ & Bộ lọc bài viết -->
+        <div class="p-3.5 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-lg">📱</span>
+            <h2 class="font-bold text-white text-sm">Kho Bài Viết Facebook</h2>
+            <span class="text-xs text-slate-400 font-mono">({{ totalPosts }} bài)</span>
+
+            <!-- Chọn Fanpage -->
+            <select v-model="postsFilter.page_id" @change="loadFacebookPosts"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 max-w-[190px]">
+              <option value="">Tất cả Fanpage</option>
+              <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">
+                {{ p.name }}
+              </option>
+            </select>
+
+            <!-- Chọn Loại bài -->
+            <select v-model="postsFilter.post_type" @change="loadFacebookPosts"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+              <option value="all">Tất cả loại bài</option>
+              <option value="reel">🎬 Reels</option>
+              <option value="video">📹 Video</option>
+              <option value="photo">🖼️ Ảnh đơn</option>
+              <option value="album">📚 Album</option>
+              <option value="status">📝 Bài viết văn bản</option>
+              <option value="link">🔗 Liên kết</option>
+            </select>
+
+            <!-- Chọn Nguồn -->
+            <select v-model="postsFilter.source" @change="loadFacebookPosts"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+              <option value="all">Tất cả nguồn</option>
+              <option value="app_published">🚀 Đăng từ App</option>
+              <option value="facebook_external">🌐 Đăng từ Facebook</option>
+            </select>
+
+            <!-- Tìm kiếm -->
+            <div class="relative">
+              <input v-model="postsFilter.search" @input="loadFacebookPosts" type="text"
+                     placeholder="Tìm kiếm caption bài viết..."
+                     class="bg-slate-950 border border-slate-700 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 w-44 focus:w-56 transition-all">
+              <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            </div>
+          </div>
+
+          <!-- Nhóm nút hành động bên phải -->
+          <div class="flex items-center gap-2">
+            <!-- Chuyển chế độ xem -->
+            <div class="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+              <button @click="postsViewMode = 'grid'"
+                      class="px-2.5 py-1 rounded text-xs font-bold transition flex items-center gap-1"
+                      :class="postsViewMode === 'grid' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'"
+                      title="Chế độ xem thẻ Media trực quan">
+                <span>⊞ Lưới</span>
+              </button>
+              <button @click="postsViewMode = 'list'"
+                      class="px-2.5 py-1 rounded text-xs font-bold transition flex items-center gap-1"
+                      :class="postsViewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'"
+                      title="Chế độ xem danh sách gọn">
+                <span>☰ Danh sách</span>
+              </button>
+            </div>
+
+            <!-- Nút Đồng Bộ Từ Facebook -->
+            <button @click="handleSyncPagePosts()" :disabled="isSyncingPagePosts"
+                    class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow transition"
+                    title="Đồng bộ bài viết mới nhất từ Fanpage qua Meta Graph API">
+              <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              <span>{{ isSyncingPagePosts ? 'Đang đồng bộ...' : '📥 Đồng bộ từ Facebook' }}</span>
+            </button>
+
+            <!-- Nút Thêm bài viết mới -->
+            <button @click="openCreateTaskModal"
+                    class="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow transition">
+              <span>+ Đăng bài mới</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 2. Thân danh sách bài viết -->
+        <div class="flex-1 overflow-y-auto min-h-0 bg-slate-950/40">
+          <!-- Đang tải -->
+          <div v-if="isLoadingPosts" class="h-64 flex flex-col items-center justify-center text-slate-400 text-xs gap-2">
+            <svg class="animate-spin h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+            <span>Đang tải danh sách bài viết...</span>
+          </div>
+
+          <!-- Danh sách rỗng -->
+          <div v-else-if="posts.length === 0" class="h-64 flex flex-col items-center justify-center text-slate-400 text-xs text-center p-6">
+            <div class="text-4xl mb-3">📭</div>
+            <p class="font-bold text-white text-sm mb-1">Chưa có bài viết nào trong danh mục</p>
+            <p class="text-slate-400 max-w-sm mb-4">Nhấn nút bên dưới để đồng bộ tất cả bài viết cũ từ Fanpage hoặc lên lịch đăng bài viết mới.</p>
+            <div class="flex items-center gap-2">
+              <button @click="handleSyncPagePosts()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs shadow">
+                📥 Đồng bộ bài viết từ Facebook
+              </button>
+              <button @click="openCreateTaskModal" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg text-xs border border-slate-700">
+                + Tạo bài viết mới
+              </button>
+            </div>
+          </div>
+
+          <!-- Chế độ 1: DẠNG LƯỚI THẺ MEDIA (GRID VIEW) -->
+          <div v-else-if="postsViewMode === 'grid'" class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div v-for="p in posts" :key="p.post_id"
+                 class="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col transition hover:-translate-y-0.5 group">
+              
+              <!-- Media Thumbnail -->
+              <div class="relative bg-slate-950 aspect-video overflow-hidden cursor-pointer" @click="openPostDetail(p)">
+                <img v-if="p.thumbnail_url" :src="p.thumbnail_url" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" alt="Thumbnail">
+                <div v-else class="w-full h-full flex flex-col items-center justify-center text-slate-600">
+                  <span class="text-3xl">{{ p.post_type === 'reel' ? '🎬' : (p.post_type === 'video' ? '📹' : (p.post_type === 'photo' ? '🖼️' : '📝')) }}</span>
+                </div>
+
+                <!-- Badges -->
+                <div class="absolute top-2 left-2 flex items-center gap-1 z-10">
+                  <span class="px-2 py-0.5 rounded text-[10px] font-bold shadow"
+                        :class="p.post_type === 'reel' ? 'bg-pink-600 text-white' : (p.post_type === 'video' ? 'bg-blue-600 text-white' : (p.post_type === 'photo' ? 'bg-amber-600 text-white' : (p.post_type === 'album' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200')))">
+                    {{ p.post_type === 'reel' ? '🎬 Reel' : (p.post_type === 'video' ? '📹 Video' : (p.post_type === 'photo' ? '🖼️ Ảnh' : (p.post_type === 'album' ? '📚 Album' : (p.post_type === 'link' ? '🔗 Link' : '📝 Status')))) }}
+                  </span>
+                  <span class="px-1.5 py-0.5 rounded text-[9px] font-bold shadow"
+                        :class="p.source === 'app_published' ? 'bg-emerald-600 text-white' : 'bg-slate-950/80 text-slate-300 border border-slate-700'">
+                    {{ p.source === 'app_published' ? '🚀 Đăng từ App' : '🌐 Facebook' }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Content Body -->
+              <div class="p-3 flex-1 flex flex-col justify-between">
+                <div>
+                  <div class="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+                    <span class="font-bold text-slate-300 truncate max-w-[130px]" :title="p.page_name">📢 {{ p.page_name || 'Fanpage' }}</span>
+                    <span class="text-[10px] text-slate-500 shrink-0">{{ formatVnDateTime(p.created_time) }}</span>
+                  </div>
+                  <p class="text-xs text-slate-200 line-clamp-2 leading-relaxed mb-3 cursor-pointer hover:text-white"
+                     @click="openPostDetail(p)" :title="p.message">
+                    {{ p.message || '(Bài viết không có nội dung văn bản)' }}
+                  </p>
+                </div>
+
+                <!-- Social Stats & Quick Actions -->
+                <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                  <div class="flex items-center gap-2.5 text-[11px]">
+                    <span title="Lượt thích">👍 {{ p.likes_count || 0 }}</span>
+                    <span title="Bình luận">💬 {{ p.comments_count || 0 }}</span>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <button @click="openPostDetail(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] transition" title="Xem chi tiết & bình luận">👁️</button>
+                    <a v-if="p.permalink_url" :href="p.permalink_url" target="_blank" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[11px] transition" title="Mở trên Facebook">🔗</a>
+                    <button @click="openEditPostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 text-[11px] transition" title="Sửa nội dung">✏️</button>
+                    <button @click="openDeletePostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-rose-400 text-[11px] transition" title="Xóa bài viết">🗑️</button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Chế độ 2: DẠNG DANH SÁCH (LIST VIEW) -->
+          <div v-else class="p-3">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr class="border-b border-slate-800 text-slate-400 text-[11px] uppercase">
+                  <th class="py-2.5 px-3 w-14">Media</th>
+                  <th class="py-2.5 px-3 w-36">Fanpage</th>
+                  <th class="py-2.5 px-3 w-28">Loại</th>
+                  <th class="py-2.5 px-3 w-28">Nguồn</th>
+                  <th class="py-2.5 px-3">Nội dung</th>
+                  <th class="py-2.5 px-3 w-36">Thời gian</th>
+                  <th class="py-2.5 px-3 w-32 text-center">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60 font-normal">
+                <tr v-for="p in posts" :key="p.post_id" class="hover:bg-slate-900/60 transition">
+                  <td class="py-2 px-3">
+                    <div class="w-10 h-10 rounded-lg bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer" @click="openPostDetail(p)">
+                      <img v-if="p.thumbnail_url" :src="p.thumbnail_url" class="w-full h-full object-cover">
+                      <span v-else class="text-sm">🎬</span>
+                    </div>
+                  </td>
+                  <td class="py-2 px-3 font-bold text-white max-w-[140px] truncate" :title="p.page_name">
+                    {{ p.page_name || 'Fanpage' }}
+                  </td>
+                  <td class="py-2 px-3">
+                    <span class="px-2 py-0.5 rounded text-[10px] font-bold"
+                          :class="p.post_type === 'reel' ? 'bg-pink-900/60 text-pink-300 border border-pink-700/50' : 'bg-slate-800 text-slate-300'">
+                      {{ p.post_type }}
+                    </span>
+                  </td>
+                  <td class="py-2 px-3">
+                    <span class="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                          :class="p.source === 'app_published' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-slate-800 text-slate-400'">
+                      {{ p.source === 'app_published' ? 'App' : 'Facebook' }}
+                    </span>
+                  </td>
+                  <td class="py-2 px-3 max-w-[280px]">
+                    <div class="truncate text-slate-200 cursor-pointer hover:text-white" @click="openPostDetail(p)" :title="p.message">
+                      {{ p.message || '—' }}
+                    </div>
+                  </td>
+                  <td class="py-2 px-3 text-[11px] text-slate-400 font-mono">
+                    {{ formatVnDateTime(p.created_time) }}
+                  </td>
+                  <td class="py-2 px-3 text-center">
+                    <div class="flex items-center justify-center gap-1">
+                      <button @click="openPostDetail(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px]" title="Xem chi tiết">👁️</button>
+                      <a v-if="p.permalink_url" :href="p.permalink_url" target="_blank" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[11px]" title="Mở Facebook">🔗</a>
+                      <button @click="openEditPostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 text-[11px]" title="Sửa caption">✏️</button>
+                      <button @click="openDeletePostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-rose-400 text-[11px]" title="Xóa bài">🗑️</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 3. Thanh phân trang Footer -->
+        <div class="px-4 py-2.5 border-t border-slate-800 bg-slate-900/90 flex flex-wrap items-center justify-between text-xs text-slate-400 shrink-0 gap-2">
+          <div class="flex items-center gap-3">
+            <span>Tổng số: <b class="text-white">{{ totalPosts }}</b> bài viết</span>
+            <span class="text-slate-600">•</span>
+            <span>Trang <b class="text-white">{{ postsPage }}</b> / <b>{{ postsTotalPages }}</b></span>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <!-- Nút Tải thêm bài viết cũ từ Facebook khi Fanpage có Cursor -->
+            <button v-if="postsFilter.page_id && pageSyncStates[postsFilter.page_id] && pageSyncStates[postsFilter.page_id].next_cursor"
+                    @click="handleLoadMoreOldPosts(postsFilter.page_id)"
+                    :disabled="isSyncingPagePosts"
+                    class="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow">
+              <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+              <span>{{ isSyncingPagePosts ? 'Đang lấy...' : 'Tải thêm bài viết cũ từ Facebook' }}</span>
+            </button>
+
+            <button @click="postsPage > 1 && (postsPage--, loadFacebookPosts())" :disabled="postsPage <= 1"
+                    class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-lg text-xs font-bold transition">
+              &larr; Trang trước
+            </button>
+            <button @click="postsPage < postsTotalPages && (postsPage++, loadFacebookPosts())" :disabled="postsPage >= postsTotalPages"
+                    class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-lg text-xs font-bold transition">
+              Trang sau &rarr;
+            </button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================= VIEW: QUẢN LÝ BÌNH LUẬN (COMMENTS MANAGER) ================= -->
+      <section
+        v-if="mainView === 'comments'"
+        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
+
+        <!-- Header Bình Luận -->
+        <div class="p-3.5 border-b border-slate-800 bg-slate-900 flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">💬</span>
+            <h2 class="font-bold text-white text-sm">Quản Lý Bình Luận Tập Trung</h2>
+          </div>
+          <div class="flex items-center gap-2">
+            <select v-model="postsFilter.page_id" @change="loadFacebookPosts"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+              <option value="">Tất cả Fanpage</option>
+              <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">{{ p.name }}</option>
+            </select>
+            <button @click="loadFacebookPosts" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold transition">
+              Làm mới
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-950/40">
+          <div v-for="post in posts.filter(x => (x.comments_count || 0) > 0 || (x.message && x.message.length > 0))" :key="post.post_id"
+               class="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-blue-400">📢 {{ post.page_name || 'Fanpage' }}</span>
+              <span class="text-slate-500 text-[11px]">{{ formatVnDateTime(post.created_time) }}</span>
+            </div>
+            <p class="text-xs text-slate-200 line-clamp-1 italic">"{{ post.message || 'Không có caption' }}"</p>
+            <div class="flex items-center justify-between pt-1">
+              <span class="text-[11px] text-slate-400">💬 {{ post.comments_count || 0 }} bình luận</span>
+              <button @click="openPostDetail(post)" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold transition">
+                Xem &amp; Trả Lời Bình Luận
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <!-- ================= LEFT: FANPAGE MANAGEMENT ================= -->
       <section 
@@ -1515,7 +1820,7 @@
             <select v-model="singleTaskForm.facebook_page_id" required class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-medium">
               <option value="">-- Chọn Fanpage để đăng Reels --</option>
               <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">
-                {{ p.name }} (ID: {{ p.facebook_page_id }}) {{ p.can_post ? '✓' : '⚠ Thiếu quyền' }}
+                {{ p.name }} {{ p.can_post ? '✓' : '⚠ Thiếu quyền' }}
               </option>
             </select>
           </div>
@@ -1523,43 +1828,43 @@
           <!-- Video Path / URL + Cloud Upload Button + Drag & Drop -->
           <div class="space-y-2">
             <label class="block text-xs font-semibold text-slate-300 mb-1">
-              Video lưu trên Bộ nhớ hoặc URL Video (.mp4): <span class="text-rose-500">*</span>
+              File Video (.mp4): <span class="text-rose-500">*</span>
             </label>
             <div class="flex items-center gap-2" @dragover.prevent @drop.prevent="handleFileDropSingleTask">
-              <input type="text" v-model="singleTaskForm.video_path" required placeholder="r2://med_... hoặc bấm Chọn / Tải Video lên R2" class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              <input type="text" v-model="singleTaskForm.video_path" required placeholder="Đường dẫn video hoặc bấm Chọn Video để tải lên" class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               <input type="file" id="cloud-video-file-input" accept="video/mp4,video/quicktime,video/*" class="hidden" @change="handleCloudVideoFileSelected">
               <button type="button" @click="handleBrowseFileSingleTask" :disabled="isUploadingVideo" class="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition shrink-0 shadow-md">
                 <svg v-if="isUploadingVideo" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
                 <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-                <span>{{ isUploadingVideo ? 'Đang tải lên R2...' : '📁 Chọn / Tải Video' }}</span>
+                <span>{{ isUploadingVideo ? 'Đang tải lên...' : '📁 Chọn Video' }}</span>
               </button>
             </div>
 
-            <!-- Trạng thái tải lên R2 -->
+            <!-- Trạng thái tải lên -->
             <div v-if="isUploadingVideo" class="p-2.5 rounded-xl bg-blue-950/60 border border-blue-800/60 text-xs text-blue-200 flex items-center gap-2">
               <svg class="animate-spin w-4 h-4 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-              <span>Đang tải và xác minh file video trên Bộ nhớ (`auto-reels-media`)... Vui lòng chờ hoàn tất trước khi lưu Task.</span>
+              <span>Đang tải và kiểm tra video... Vui lòng chờ hoàn tất trước khi lưu.</span>
             </div>
 
             <div v-else-if="uploadedMediaInfo" class="p-2.5 rounded-xl bg-emerald-950/50 border border-emerald-800/60 text-xs text-emerald-200 flex items-center justify-between gap-2">
               <div class="truncate">
-                <span class="font-bold">☁️ Đã lưu trên R2:</span>
+                <span class="font-bold">🎬 File Video:</span>
                 <span class="font-mono ml-1">{{ uploadedMediaInfo.filename }}</span>
                 <span class="text-emerald-400 ml-1">({{ uploadedMediaInfo.size_mb }} MB)</span>
               </div>
-              <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] shrink-0">Đã xác minh</span>
+              <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] shrink-0">Đã sẵn sàng</span>
             </div>
 
             <div v-else-if="uploadError" class="p-2.5 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-200 flex items-center justify-between gap-2">
               <span class="truncate">⚠️ {{ uploadError }}</span>
               <button type="button" @click="retryUploadToR2" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] shrink-0 transition">
-                Thử tải lại lên R2
+                Thử tải lại
               </button>
             </div>
 
-            <!-- Chọn nhanh video đã có trên R2 -->
+            <!-- Chọn nhanh video đã có -->
             <div v-if="userMediaFiles && userMediaFiles.filter(m => m.upload_status === 'ready').length > 0" class="flex items-center gap-2 pt-0.5">
-              <span class="text-[11px] text-slate-400 shrink-0">Kho R2 gần đây:</span>
+              <span class="text-[11px] text-slate-400 shrink-0">Video gần đây:</span>
               <div class="flex items-center gap-1.5 overflow-x-auto pb-1">
                 <button type="button"
                         v-for="m in userMediaFiles.filter(x => x.upload_status === 'ready').slice(0, 4)"
@@ -1567,7 +1872,7 @@
                         @click="selectExistingR2Video(m)"
                         class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] text-slate-300 font-mono truncate max-w-[150px] shrink-0 transition"
                         :title="m.original_filename">
-                  ☁️ {{ m.original_filename }}
+                  🎬 {{ m.original_filename }}
                 </button>
               </div>
             </div>
@@ -1733,46 +2038,27 @@
         </div>
 
         <form @submit.prevent="handleBulkSubmit" class="p-5 space-y-4 overflow-y-auto flex-1 flex flex-col">
-          <!-- BƯỚC 1: CHỌN 1 MỐC THỜI GIAN ĐĂNG CHUNG -->
+          <!-- BƯỚC 1: CHỌN MỐC THỜI GIAN ĐĂNG CHUNG -->
           <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
             <div class="flex items-center justify-between flex-wrap gap-2">
               <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                <span>⏰</span> Bước 1: Chọn 1 mốc thời gian đăng chung (Dùng cho toàn bộ task):
+                <span>⏰</span> Bước 1: Thời gian đăng bài:
               </span>
-              <span class="text-[11px] text-cyan-400 font-mono"></span>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <!-- Ngày đăng chung -->
               <div>
-                <div class="flex items-center justify-between mb-1">
-                  <label class="text-xs font-semibold text-slate-300">Ngày đăng chung: *</label>
-                  <div class="flex gap-1 text-[10px]">
-                    <button type="button" @click="setBulkScheduleDatePreset(0)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[Hôm nay]</button>
-                    <button type="button" @click="setBulkScheduleDatePreset(1)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[Ngày mai]</button>
-                    <button type="button" @click="setBulkScheduleDatePreset(2)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[+2 ngày]</button>
-                  </div>
-                </div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày đăng: *</label>
                 <input type="date" v-model="bulkScheduleForm.schedule_date" @change="recalculateBulkExcelSchedules" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               </div>
 
               <!-- Giờ đăng chung (24 tiếng) -->
               <div>
-                <div class="flex items-center justify-between mb-1 flex-wrap gap-1">
-                  <label class="text-xs font-semibold text-slate-300">Giờ đăng chung (24h): *</label>
-                  <div class="flex gap-1 text-[10px] flex-wrap">
-                    <button type="button" @click="setEarliestSchedule('bulk')" class="px-1.5 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 font-bold border border-emerald-700/60" title="Đặt sớm nhất (+25 phút)">[+25p]</button>
-                    <button type="button" @click="setQuickTomorrow0001('bulk')" class="px-1.5 py-0.5 rounded bg-purple-950/80 hover:bg-purple-900 text-purple-300 font-bold border border-purple-700/60" title="00:01 sáng mai">[00:01 Sáng mai]</button>
-                    <button type="button" @click="setBulkScheduleTimePreset('07:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[07:00]</button>
-                    <button type="button" @click="setBulkScheduleTimePreset('11:30')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[11:30]</button>
-                    <button type="button" @click="setBulkScheduleTimePreset('17:30')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[17:30]</button>
-                    <button type="button" @click="setBulkScheduleTimePreset('20:00')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">[20:00]</button>
-                  </div>
-                </div>
-                <input type="text"
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Giờ đăng (24h): *</label>
+                <input type="time"
                        v-model="bulkScheduleForm.schedule_time"
-                       @input="recalculateBulkExcelSchedules"
-                       placeholder="Ví dụ: 00:01, 14:30, 20:00"
+                       @change="recalculateBulkExcelSchedules"
                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               </div>
             </div>
@@ -1781,9 +2067,6 @@
             <div v-if="bulkSchedulePastWarning || isTimeInPastToday(bulkScheduleForm.schedule_time, bulkScheduleForm.schedule_date)"
                  class="p-2.5 rounded-lg bg-amber-950/80 border border-amber-600/60 flex items-center justify-between gap-2 text-xs text-amber-200">
               <span>⚠️ Mốc thời gian này đã trôi qua. Vui lòng chọn thời điểm trong tương lai!</span>
-              <button type="button" @click="shiftToTomorrow('bulk')" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-[11px] shrink-0 transition">
-                👉 Chuyển sang Ngày mai ({{ getVnDateString(1) }})
-              </button>
             </div>
           </div>
 
@@ -1837,44 +2120,29 @@
             </div>
           </div>
 
-          <!-- BƯỚC 4: TẢI VIDEO LÊN CLOUDFLARE R2 (NẾU CẦN) -->
-          <div class="p-3 bg-slate-950/70 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-                <span>📁</span>
-                <span>Bước 4: Nạp video từ máy tính lên Bộ nhớ:</span>
-              </div>
-              <p class="text-[11px] text-slate-400 mt-0.5">
-                Nếu đường dẫn ở Cột 1 là file từ máy tính (ví dụ video01.mp4), bấm nút bên cạnh chọn các file đó để nạp lên R2. Hệ thống sẽ tự động so khớp theo tên file!
-              </p>
-            </div>
-            <div class="flex items-center gap-2">
-              <input type="file"
-                     multiple
-                     accept="video/mp4,video/*"
-                     @change="handleBulkExcelFilesSelected"
-                     id="bulk-excel-files-input"
-                     class="hidden">
-              <button type="button"
-                     @click="triggerBulkExcelFilePicker"
-                     :disabled="isUploadingBulkExcelVideos"
-                     class="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition">
-                <span v-if="isUploadingBulkExcelVideos">⏳ Đang tải {{ bulkExcelUploadProgress.current }}/{{ bulkExcelUploadProgress.total }} ({{ bulkExcelUploadProgress.filename }})...</span>
-                <span v-else>📁 Chọn Các File Video Từ Máy Để Nạp Lên R2</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- BƯỚC 5: BẢNG LIVE PREVIEW (XEM TRƯỚC PHÂN BỔ) -->
+          <!-- BẢNG LIVE PREVIEW (XEM TRƯỚC PHÂN BỔ) -->
           <div class="flex-1 flex flex-col min-h-[180px]">
             <div class="flex items-center justify-between mb-1.5 flex-wrap gap-2">
               <span class="text-xs font-bold text-slate-300 flex items-center gap-2">
-                <span>Bảng Live Preview (Xem trước phân bổ):</span>
+                <span>Xem trước phân bổ:</span>
                 <span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-mono">{{ bulkParsedList.length }} dòng</span>
               </span>
               <div class="flex items-center gap-2 text-[11px]">
+                <input type="file"
+                       multiple
+                       accept="video/mp4,video/*"
+                       @change="handleBulkExcelFilesSelected"
+                       id="bulk-excel-files-input"
+                       class="hidden">
+                <button type="button"
+                        @click="triggerBulkExcelFilePicker"
+                        :disabled="isUploadingBulkExcelVideos"
+                        class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700 flex items-center gap-1 transition">
+                  <span v-if="isUploadingBulkExcelVideos">⏳ Đang tải ({{ bulkExcelUploadProgress.current }}/{{ bulkExcelUploadProgress.total }})...</span>
+                  <span v-else>📁 Nạp file video từ máy (nếu cần)</span>
+                </button>
                 <span class="text-emerald-400 font-bold">✓ {{ validBulkRowCount }} hợp lệ</span>
-                <span v-if="errorBulkRowCount > 0" class="text-rose-400 font-bold">⚠️ {{ errorBulkRowCount }} lỗi/thiếu video</span>
+                <span v-if="errorBulkRowCount > 0" class="text-rose-400 font-bold">⚠️ {{ errorBulkRowCount }} dòng cần video</span>
               </div>
             </div>
 
@@ -2588,6 +2856,312 @@
 
         <div class="px-5 py-3 border-t border-slate-800 bg-slate-900 flex justify-end">
           <button @click="showReelInsightModal = false" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: CHI TIẾT BÀI VIẾT (POST DETAIL & COMMENTS) ================= -->
+    <div v-if="isPostDetailOpen && selectedPost" class="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fadeIn" @click.self="closePostDetail">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+        <!-- Modal Header -->
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider"
+                  :class="{
+                    'bg-pink-500/15 text-pink-400 border border-pink-500/30': selectedPost.post_type === 'reel',
+                    'bg-blue-500/15 text-blue-400 border border-blue-500/30': selectedPost.post_type === 'video',
+                    'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30': selectedPost.post_type === 'photo',
+                    'bg-purple-500/15 text-purple-400 border border-purple-500/30': selectedPost.post_type === 'album',
+                    'bg-slate-700/40 text-slate-300 border border-slate-600/30': !['reel','video','photo','album'].includes(selectedPost.post_type)
+                  }">
+              {{ selectedPost.post_type }}
+            </span>
+            <span class="text-sm font-bold text-white truncate">{{ selectedPost.page_name || 'Fanpage' }}</span>
+            <span class="text-slate-600">•</span>
+            <span class="text-xs text-slate-400 font-mono">{{ formatVnDateTime(selectedPost.published_at || selectedPost.created_at) }}</span>
+            <span v-if="selectedPost.source === 'app_published'" class="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">
+              Đã đăng qua App
+            </span>
+            <span v-else class="px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 text-[10px] font-bold">
+              Facebook
+            </span>
+          </div>
+          <button @click="closePostDetail" class="text-slate-400 hover:text-white text-xl font-bold p-1">&times;</button>
+        </div>
+
+        <!-- Modal Body (2 Columns) -->
+        <div class="flex-1 overflow-y-auto p-5 grid grid-cols-1 md:grid-cols-2 gap-5">
+          <!-- Cột trái: Media Preview & Actions -->
+          <div class="space-y-4 flex flex-col">
+            <!-- Media Container -->
+            <div class="bg-black rounded-xl overflow-hidden aspect-video flex items-center justify-center border border-slate-800 relative">
+              <video v-if="selectedPost.post_type === 'reel' || selectedPost.post_type === 'video' || selectedPost.video_url"
+                     :src="selectedPost.video_url || (selectedPost.media_urls && selectedPost.media_urls[0]) || selectedPost.thumbnail_url"
+                     controls
+                     class="w-full h-full object-contain">
+              </video>
+              <img v-else-if="selectedPost.media_urls && selectedPost.media_urls.length > 0"
+                   :src="selectedPost.media_urls[0]"
+                   class="w-full h-full object-contain"
+                   alt="Post Media">
+              <img v-else-if="selectedPost.thumbnail_url"
+                   :src="selectedPost.thumbnail_url"
+                   class="w-full h-full object-contain"
+                   alt="Post Thumbnail">
+              <div v-else class="text-slate-600 flex flex-col items-center">
+                <span class="text-4xl">📝</span>
+                <span class="text-xs mt-1">Bài viết văn bản</span>
+              </div>
+            </div>
+
+            <!-- Thống kê tương tác Meta -->
+            <div class="grid grid-cols-4 gap-2 bg-slate-950/70 p-3 rounded-xl border border-slate-800 text-center font-mono">
+              <div class="p-1">
+                <div class="text-[10px] text-slate-500 uppercase">Lượt xem</div>
+                <div class="text-xs font-bold text-blue-400">{{ formatMetricValue(selectedPost.views_count) }}</div>
+              </div>
+              <div class="p-1">
+                <div class="text-[10px] text-slate-500 uppercase">Thích</div>
+                <div class="text-xs font-bold text-pink-400">{{ formatMetricValue(selectedPost.like_count) }}</div>
+              </div>
+              <div class="p-1">
+                <div class="text-[10px] text-slate-500 uppercase">Bình luận</div>
+                <div class="text-xs font-bold text-emerald-400">{{ formatMetricValue(selectedPost.comment_count) }}</div>
+              </div>
+              <div class="p-1">
+                <div class="text-[10px] text-slate-500 uppercase">Chia sẻ</div>
+                <div class="text-xs font-bold text-amber-400">{{ formatMetricValue(selectedPost.share_count) }}</div>
+              </div>
+            </div>
+
+            <!-- External link & Quick Actions -->
+            <div class="flex items-center gap-2 pt-2">
+              <a v-if="selectedPost.permalink_url"
+                 :href="selectedPost.permalink_url"
+                 target="_blank"
+                 rel="noopener"
+                 class="flex-1 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-blue-400 text-xs font-bold flex items-center justify-center gap-1.5 transition border border-slate-700">
+                <span>Xem trên Facebook</span>
+                <span>↗</span>
+              </a>
+              <button @click="openEditPostModal(selectedPost)"
+                      class="px-3.5 py-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 text-xs font-bold flex items-center gap-1 border border-indigo-500/30 transition">
+                <span>✏️ Sửa</span>
+              </button>
+              <button @click="openDeletePostModal(selectedPost)"
+                      class="px-3.5 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 text-xs font-bold flex items-center gap-1 border border-rose-500/30 transition">
+                <span>🗑️ Xóa</span>
+              </button>
+            </div>
+
+            <!-- Audit Logs (Lịch sử thao tác) -->
+            <div v-if="postAuditLogs && postAuditLogs.length > 0" class="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 space-y-1.5">
+              <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Lịch sử thao tác</div>
+              <div class="space-y-1 max-h-32 overflow-y-auto font-mono text-[11px] text-slate-400 divide-y divide-slate-800/50">
+                <div v-for="log in postAuditLogs" :key="log.id" class="pt-1 flex items-center justify-between">
+                  <span class="text-slate-300">{{ log.action }}</span>
+                  <span class="text-slate-500">{{ formatVnDateTime(log.created_at) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cột phải: Caption & Bình Luận Facebook -->
+          <div class="space-y-4 flex flex-col min-h-0">
+            <!-- Full Caption -->
+            <div class="p-3.5 bg-slate-950/70 rounded-xl border border-slate-800 space-y-1 max-h-48 overflow-y-auto">
+              <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Nội dung bài viết</div>
+              <div class="text-xs text-white leading-relaxed whitespace-pre-wrap select-text">
+                {{ selectedPost.message || '— (Không có nội dung văn bản) —' }}
+              </div>
+            </div>
+
+            <!-- Quản lý Bình Luận (Interactive Comments) -->
+            <div class="flex-1 flex flex-col bg-slate-950/50 rounded-xl border border-slate-800 p-3.5 min-h-[260px]">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                  <span>💬</span> Bình luận trên Facebook ({{ postComments.length }}):
+                </span>
+                <span class="text-[10px] text-slate-500 font-mono">Meta Graph API</span>
+              </div>
+
+              <!-- Input Viết Bình Luận Mới -->
+              <div class="flex items-center gap-2 mb-3">
+                <input type="text"
+                       v-model="postNewComment"
+                       @keydown.enter.prevent="handleSendPostComment"
+                       placeholder="Viết bình luận mới với tư cách Trang..."
+                       class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+                <button @click="handleSendPostComment"
+                        :disabled="isSendingPostComment || !postNewComment.trim()"
+                        class="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white font-bold text-xs shrink-0 transition">
+                  <span v-if="isSendingPostComment">⏳</span>
+                  <span v-else>Gửi</span>
+                </button>
+              </div>
+
+              <!-- Danh sách bình luận -->
+              <div class="flex-1 overflow-y-auto space-y-2.5 max-h-64 pr-1">
+                <div v-if="postComments.length === 0" class="text-center py-8 text-xs text-slate-500 italic">
+                  Chưa có bình luận nào cho bài viết này. Hãy gửi bình luận đầu tiên!
+                </div>
+
+                <div v-for="c in postComments" :key="c.comment_id" class="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800/80 space-y-1.5">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <div class="w-5 h-5 rounded-full bg-blue-600/30 text-blue-300 text-[10px] font-bold flex items-center justify-center shrink-0">
+                        {{ (c.from_name || 'U').charAt(0).toUpperCase() }}
+                      </div>
+                      <span class="text-xs font-bold text-slate-200 truncate">{{ c.from_name || 'Người dùng' }}</span>
+                      <span v-if="c.is_hidden" class="px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-300 text-[9px] font-bold">Đã ẩn</span>
+                    </div>
+                    <span class="text-[10px] text-slate-500 font-mono shrink-0">{{ formatVnDateTime(c.created_time) }}</span>
+                  </div>
+
+                  <div class="text-xs text-slate-300 whitespace-pre-wrap pl-7 leading-relaxed select-text">
+                    {{ c.message }}
+                  </div>
+
+                  <!-- Thao tác bình luận -->
+                  <div class="flex items-center justify-end gap-2 pl-7 pt-1 text-[11px]">
+                    <button @click="postReplyTargetId = (postReplyTargetId === c.comment_id ? null : c.comment_id)"
+                            class="text-blue-400 hover:text-blue-300 transition">
+                      Trả lời
+                    </button>
+                    <span class="text-slate-700">•</span>
+                    <button @click="handleHideComment(c.comment_id, !c.is_hidden)"
+                            class="text-amber-400 hover:text-amber-300 transition">
+                      {{ c.is_hidden ? 'Bỏ ẩn' : 'Ẩn' }}
+                    </button>
+                    <span class="text-slate-700">•</span>
+                    <button @click="handleDeleteComment(c.comment_id)"
+                            class="text-rose-400 hover:text-rose-300 transition">
+                      Xóa
+                    </button>
+                  </div>
+
+                  <!-- Khung trả lời comment inline -->
+                  <div v-if="postReplyTargetId === c.comment_id" class="mt-2 pl-7 flex items-center gap-2">
+                    <input type="text"
+                           v-model="postReplyText"
+                           @keydown.enter.prevent="handleSendPostReply(c.comment_id)"
+                           placeholder="Nhập câu trả lời..."
+                           class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+                    <button @click="handleSendPostReply(c.comment_id)"
+                            :disabled="isSendingPostReply || !postReplyText.trim()"
+                            class="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-bold transition">
+                      Gửi
+                    </button>
+                    <button @click="postReplyTargetId = null; postReplyText = ''"
+                            class="px-2 py-1 rounded-lg bg-slate-800 text-slate-400 text-xs transition">
+                      Hủy
+                    </button>
+                  </div>
+
+                  <!-- Nested replies (con) -->
+                  <div v-if="c.replies && c.replies.length > 0" class="pl-7 pt-2 space-y-1.5 border-t border-slate-800/40 mt-1">
+                    <div v-for="reply in c.replies" :key="reply.comment_id" class="p-2 rounded-lg bg-slate-950/60 border border-slate-800/60 text-xs">
+                      <div class="flex items-center justify-between">
+                        <span class="font-bold text-slate-300 text-[11px]">{{ reply.from_name || 'Trang' }}</span>
+                        <span class="text-[9px] text-slate-500 font-mono">{{ formatVnDateTime(reply.created_time) }}</span>
+                      </div>
+                      <div class="text-slate-300 mt-0.5 select-text">{{ reply.message }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="px-5 py-3 border-t border-slate-800 bg-slate-950 flex justify-end">
+          <button @click="closePostDetail" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">
+            Đóng
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: SỬA NỘI DUNG BÀI VIẾT ================= -->
+    <div v-if="isEditPostModalOpen && selectedPost" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn" @click.self="isEditPostModalOpen = false">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+          <h3 class="font-bold text-white text-sm flex items-center gap-2">
+            <span>✏️ Chỉnh sửa nội dung bài viết</span>
+          </h3>
+          <button @click="isEditPostModalOpen = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <div class="p-5 space-y-3">
+          <div class="p-3 rounded-xl bg-blue-950/40 border border-blue-800/40 text-xs text-blue-200">
+            💡 Meta Graph API cho phép chỉnh sửa nội dung văn bản (Caption). Không thể thay đổi video hoặc hình ảnh đã đăng.
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Nội dung Caption mới:</label>
+            <textarea v-model="editPostCaptionText"
+                      rows="6"
+                      placeholder="Nhập nội dung mới..."
+                      class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-blue-500 leading-relaxed font-sans"></textarea>
+          </div>
+        </div>
+
+        <div class="px-5 py-3 border-t border-slate-800 bg-slate-950 flex justify-end gap-2">
+          <button @click="isEditPostModalOpen = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">
+            Hủy
+          </button>
+          <button @click="handleSavePostEdit"
+                  :disabled="isSavingPostEdit"
+                  class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md">
+            <span v-if="isSavingPostEdit">⏳ Đang lưu...</span>
+            <span v-else>Lưu thay đổi</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: XÁC NHẬN XÓA BÀI VIẾT ================= -->
+    <div v-if="isDeletePostModalOpen && selectedPost" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn" @click.self="isDeletePostModalOpen = false">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+          <h3 class="font-bold text-white text-sm flex items-center gap-2">
+            <span>🗑️ Xác nhận xóa bài viết</span>
+          </h3>
+          <button @click="isDeletePostModalOpen = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <div class="p-5 space-y-4">
+          <p class="text-xs text-slate-300 leading-relaxed">
+            Bạn có chắc chắn muốn xóa bài viết này không?
+          </p>
+
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
+            <div class="text-slate-400 font-semibold">{{ selectedPost.page_name }}</div>
+            <div class="text-slate-200 line-clamp-2 italic">{{ selectedPost.message || '—' }}</div>
+          </div>
+
+          <label class="flex items-start gap-2.5 cursor-pointer select-none p-3 rounded-xl bg-rose-950/30 border border-rose-900/40">
+            <input type="checkbox"
+                   v-model="deletePostOnFacebook"
+                   class="w-4 h-4 mt-0.5 rounded bg-slate-900 border-slate-700 text-rose-600 focus:ring-0 focus:ring-offset-0 cursor-pointer">
+            <div class="text-xs">
+              <span class="font-bold text-rose-300">Đồng thời xóa trực tiếp bài viết trên Facebook Page</span>
+              <p class="text-[11px] text-slate-400 mt-0.5">Nếu bỏ chọn, bài viết chỉ bị xóa khỏi danh sách quản lý của ứng dụng.</p>
+            </div>
+          </label>
+        </div>
+
+        <div class="px-5 py-3 border-t border-slate-800 bg-slate-950 flex justify-end gap-2">
+          <button @click="isDeletePostModalOpen = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">
+            Hủy
+          </button>
+          <button @click="handleConfirmDeletePost"
+                  :disabled="isDeletingPost"
+                  class="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-rose-950/50">
+            <span v-if="isDeletingPost">⏳ Đang xóa...</span>
+            <span v-else>Xác nhận xóa</span>
+          </button>
         </div>
       </div>
     </div>

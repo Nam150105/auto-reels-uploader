@@ -2428,13 +2428,12 @@ export async function deleteFacebookReelOrPost(
   const { pageId, videoId, postId, ownerUserId } = options;
   if (!pageId) return { success: false, error: "Thiếu Page ID." };
 
-  const pages = await getFacebookPages(db, cfg.encryptionKey, ownerUserId);
-  const page = pages.find((p) => p.facebook_page_id === pageId);
-  if (!page || !page.access_token) {
+  const page = await getFacebookPageByFbId(db, cfg.encryptionKey, pageId, true, ownerUserId);
+  if (!page || !page.page_access_token) {
     return { success: false, error: "Không tìm thấy token hợp lệ của Fanpage." };
   }
 
-  const token = page.access_token;
+  const token = page.page_access_token;
   const targetIds = [videoId, postId].filter((id): id is string => Boolean(id && id.trim().length > 0));
   if (targetIds.length === 0) {
     return { success: true };
@@ -2483,7 +2482,10 @@ export async function syncRecentPageVideos(
   const cfg = getMetaConfig(env);
   const { pageId, ownerUserId, limit = 25 } = options;
 
-  const pages = await getFacebookPages(db, cfg.encryptionKey, ownerUserId);
+  const pages = await getFacebookPages(db, cfg.encryptionKey, {
+    ownerUserId,
+    includeToken: true
+  });
   const page = pages.find((p) => p.facebook_page_id === pageId);
   if (!page || !page.access_token) {
     return { success: false, synced_count: 0, total_remote: 0, error: "Không tìm thấy token Fanpage." };

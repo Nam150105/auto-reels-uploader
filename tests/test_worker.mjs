@@ -238,7 +238,8 @@ async function runAll30Tests() {
     "migrations/0004_task_comment_columns.sql",
     "migrations/0005_r2_and_task_lifecycle.sql",
     "migrations/0006_task_lock_and_reels_insights.sql",
-    "migrations/0007_task_schedule_audit_and_api_optimization.sql"
+    "migrations/0007_task_schedule_audit_and_api_optimization.sql",
+    "migrations/0008_facebook_page_manager_posts.sql"
   ];
   for (let pass = 1; pass <= 2; pass++) {
     for (const mf of migFiles) {
@@ -273,7 +274,11 @@ async function runAll30Tests() {
     "reel_insight_snapshots",
     "reel_insight_metric_items",
     "task_audit_logs",
-    "meta_api_telemetry"
+    "meta_api_telemetry",
+    "facebook_posts",
+    "facebook_page_sync_states",
+    "facebook_post_comments",
+    "facebook_post_audit_logs"
   ]) {
     assert.ok(tableNames.has(required), `Thiếu bảng/view ${required} trong D1`);
   }
@@ -3240,10 +3245,237 @@ async function runAll30Tests() {
 
   console.log("  ✓ [Test 44] Thêm nhanh hàng loạt Task từ Excel: Phân tích 3 cột TAB, Phân bổ lịch cách đều, So khớp R2 & Chống lỗi 100%");
 
+  // --------------------------------------------------------------------------
+  // [TEST 45] Facebook Page Manager: Posts CRUD, Cursor Pagination Sync, Comments & Multi-user isolation
+  // --------------------------------------------------------------------------
+  console.log("\n  --- BẮT ĐẦU KIỂM THỬ FACEBOOK PAGE MANAGER (POSTS & COMMENTS) ---");
+
+  // 1. Kiểm tra GET /api/posts ban đầu trả về 200 OK và danh sách rỗng
+  const getPostsResp1 = await callWorker("/api/posts", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(getPostsResp1.status, 200);
+  const postsJson1 = await getPostsResp1.json();
+  assert.equal(postsJson1.success, true);
+  assert.ok(Array.isArray(postsJson1.posts));
+
+  // 2. Mock Meta API cho endpoint published_posts và sync bài viết
+  const originalFetchForTest45 = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const urlStr = typeof input === "string" ? input : input.url;
+    if (urlStr.includes("/published_posts")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "page_exp_1_post_reel_1",
+              message: "Video Reel số 1 từ Facebook Page",
+              created_time: "2026-11-05T10:00:00Z",
+              permalink_url: "https://www.facebook.com/reel/111222333",
+              attachments: {
+                data: [
+                  {
+                    media_type: "video",
+                    type: "video_inline",
+                    media: { image: { src: "https://example.com/thumb1.jpg" } }
+                  }
+                ]
+              }
+            },
+            {
+              id: "page_exp_1_post_photo_2",
+              message: "Hình ảnh số 2 từ Facebook Page",
+              created_time: "2026-11-06T14:30:00Z",
+              permalink_url: "https://www.facebook.com/photo/444555666",
+              full_picture: "https://example.com/photo2.jpg",
+              attachments: {
+                data: [
+                  {
+                    media_type: "photo",
+                    media: { image: { src: "https://example.com/photo2.jpg" } }
+                  }
+                ]
+              }
+            }
+          ],
+          paging: {
+            cursors: {
+              after: "cursor_after_test_abc123",
+              before: "cursor_before_test_xyz789"
+            }
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (urlStr.includes("/comments") && init.method === "GET") {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "cmt_test_001",
+              from: { id: "user_fb_01", name: "Nguyễn Văn A" },
+              message: "Bài viết hay quá shop ơi!",
+              created_time: "2026-11-06T15:00:00Z",
+              can_comment: true,
+              can_remove: true,
+              like_count: 5,
+              comment_count: 1
+            }
+          ]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (urlStr.includes("/comments") && init.method === "POST") {
+      return new Response(
+        JSON.stringify({ id: "cmt_created_new_999" }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (init.method === "POST" && (urlStr.includes("page_exp_1_post_reel_1") || urlStr.match(/\/[a-zA-Z0-9_]+$/))) {
+      // Edit post message
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (init.method === "DELETE") {
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    return originalFetchForTest45(input, init);
+  };
+
+  // 3. Đồng bộ bài viết từ Fanpage
+  const syncPostsResp = await callWorker("/api/pages/page_exp_1/sync-posts", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ limit: 10 })
+  });
+  if (syncPostsResp.status !== 200) {
+    const errBody = await syncPostsResp.json();
+    console.error("DEBUG syncPostsResp failed:", errBody);
+  }
+  assert.equal(syncPostsResp.status, 200);
+  const syncPostsJson = await syncPostsResp.json();
+  assert.equal(syncPostsJson.success, true);
+  assert.equal(syncPostsJson.synced_count, 2);
+  assert.equal(syncPostsJson.next_cursor, "cursor_after_test_abc123");
+  assert.equal(syncPostsJson.has_more, true);
+
+  // 4. Lọc bài viết theo post_type='reel'
+  const filterReelResp = await callWorker("/api/posts?post_type=reel", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(filterReelResp.status, 200);
+  const filterReelJson = await filterReelResp.json();
+  assert.ok(filterReelJson.total >= 2, "Có các bài viết Reel trong hệ thống");
+  const foundSyncReel = filterReelJson.posts.find((p) => p.post_id === "page_exp_1_post_reel_1");
+  assert.ok(foundSyncReel, "Tìm thấy Reel vừa đồng bộ");
+  assert.equal(foundSyncReel.post_type, "reel");
+  assert.equal(foundSyncReel.source, "facebook_external");
+
+  // 5. Thêm một bài viết đăng từ App (source = 'app_published') để kiểm tra phân loại nguồn
+  const meRespA = await callWorker("/api/auth/me", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  const meJsonA = await meRespA.json();
+  const userAId = meJsonA.user.id;
+
+  await d1.prepare(`
+    INSERT INTO facebook_posts (
+      owner_user_id, page_id, post_id, message, post_type, permalink_url, source, created_time, synced_at, created_at, updated_at
+    ) VALUES (?, 'page_exp_1', 'page_exp_1_app_published_post', 'Đăng từ ứng dụng tự động', 'reel', 'https://fb.com/reel/999', 'app_published', '2026-11-07T08:00:00Z', '2026-11-07T08:00:00Z', '2026-11-07T08:00:00Z', '2026-11-07T08:00:00Z')
+  `).bind(userAId).run();
+
+  const filterAppResp = await callWorker("/api/posts?source=app_published", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  const filterAppJson = await filterAppResp.json();
+  assert.ok(filterAppJson.total >= 1, "Có bài viết đăng từ App");
+  assert.ok(filterAppJson.posts.every((p) => p.source === "app_published"), "Tất cả bài viết lọc theo source=app_published đều có source app_published");
+
+  // 6. Kiểm tra bảo vệ Multi-user isolation (Chống IDOR): User B không xem được bài viết của User A
+  const userBPostsResp = await callWorker("/api/posts", {
+    headers: { Cookie: `session_token=${tokenB}` }
+  });
+  const userBPostsJson = await userBPostsResp.json();
+  assert.equal(userBPostsJson.total, 0, "Cô lập dữ liệu multi-user: User B không thấy bài viết của User A");
+
+  // 7. Xem chi tiết bài viết GET /api/posts/:id
+  const postDetailResp = await callWorker("/api/posts/page_exp_1_post_reel_1", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(postDetailResp.status, 200);
+  const postDetailJson = await postDetailResp.json();
+  assert.equal(postDetailJson.success, true);
+  assert.equal(postDetailJson.post.post_id, "page_exp_1_post_reel_1");
+
+  // 8. Chỉnh sửa nội dung bài viết PUT /api/posts/:id
+  const editPostResp = await callWorker("/api/posts/page_exp_1_post_reel_1", {
+    method: "PUT",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "Caption đã được chỉnh sửa mới qua Facebook Page Manager" })
+  });
+  assert.equal(editPostResp.status, 200);
+  const editPostJson = await editPostResp.json();
+  assert.equal(editPostJson.success, true);
+  assert.equal(editPostJson.updated_post.message, "Caption đã được chỉnh sửa mới qua Facebook Page Manager");
+
+  // 9. Đồng bộ và gửi bình luận bài viết
+  const syncCommentsResp = await callWorker("/api/posts/page_exp_1_post_reel_1/comments", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(syncCommentsResp.status, 200);
+  const syncCommentsJson = await syncCommentsResp.json();
+  assert.equal(syncCommentsJson.success, true);
+  assert.ok(syncCommentsJson.count >= 1, "Đồng bộ bình luận thành công");
+
+  const newCommentResp = await callWorker("/api/posts/page_exp_1_post_reel_1/comments", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "Cảm ơn bạn đã quan tâm sản phẩm!" })
+  });
+  assert.equal(newCommentResp.status, 200);
+  const newCommentJson = await newCommentResp.json();
+  assert.equal(newCommentJson.success, true);
+  assert.equal(newCommentJson.comment_id, "cmt_created_new_999");
+
+  // 10. Xóa bài viết DELETE /api/posts/:id
+  const deletePostResp = await callWorker("/api/posts/page_exp_1_post_reel_1?delete_facebook=true", {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  if (deletePostResp.status !== 200) {
+    const err = await deletePostResp.json();
+    console.error("DEBUG deletePostResp error:", err);
+  }
+  assert.equal(deletePostResp.status, 200);
+  const deletePostJson = await deletePostResp.json();
+  assert.equal(deletePostJson.success, true);
+
+  // Xác nhận bài viết đã được đánh dấu xóa và không còn xuất hiện trong danh sách hoạt động
+  const checkAfterDeleteResp = await callWorker("/api/posts?search=page_exp_1_post_reel_1", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  const checkAfterDeleteJson = await checkAfterDeleteResp.json();
+  assert.equal(checkAfterDeleteJson.total, 0, "Bài viết đã xóa không còn xuất hiện trong danh sách");
+
+  globalThis.fetch = originalFetchForTest45;
+  console.log("  ✓ [Test 45] Facebook Page Manager: Posts CRUD, Cursor Pagination Sync, Comments & Multi-user isolation đạt 100%");
+
   globalThis.fetch = originalFetch;
 
   console.log("\n==================================================================");
-  console.log(" TẤT CẢ 44/44 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
+  console.log(" TẤT CẢ 45/45 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
   console.log("==================================================================");
 }
 

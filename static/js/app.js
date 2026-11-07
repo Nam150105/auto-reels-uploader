@@ -63,6 +63,53 @@
       general: ''
     });
 
+    // ==========================================
+    // FACEBOOK POSTS & COMMENTS MANAGER STATE
+    // ==========================================
+    const posts = ref([]);
+    const totalPosts = ref(0);
+    const postsPage = ref(1);
+    const postsLimit = ref(12);
+    const postsTotalPages = ref(1);
+    const postsFilter = ref({
+      page_id: '',
+      post_type: 'all',
+      source: 'all',
+      search: '',
+      start_date: '',
+      end_date: ''
+    });
+    const postsViewMode = ref('grid'); // 'grid' | 'list'
+    const isLoadingPosts = ref(false);
+    const pageSyncStates = ref({});
+
+    // Post Detail & Modals
+    const selectedPost = ref(null);
+    const isPostDetailOpen = ref(false);
+    const isLoadingPostDetail = ref(false);
+    const postComments = ref([]);
+    const postAuditLogs = ref([]);
+    const postNewComment = ref('');
+    const isSendingPostComment = ref(false);
+    const postReplyTargetId = ref(null);
+    const postReplyText = ref('');
+    const isSendingPostReply = ref(false);
+
+    // Edit Post
+    const isEditPostModalOpen = ref(false);
+    const editPostCaptionText = ref('');
+    const isSavingPostEdit = ref(false);
+
+    // Delete Post
+    const isDeletePostModalOpen = ref(false);
+    const isDeletingPost = ref(false);
+    const deletePostOnFacebook = ref(true);
+
+    // Comments View State
+    const commentsFilterPageId = ref('');
+    const commentsList = ref([]);
+    const isLoadingComments = ref(false);
+
     // Meta Connection State
     const metaStatus = ref({
       is_connected: false,
@@ -755,13 +802,29 @@ const selectedPageCount = computed(() => {
     }
 
     function setMainView(view) {
-      mainView.value = view === 'insights' ? 'insights' : 'workspace';
-      const targetPath = mainView.value === 'insights' ? '/insights' : '/page';
-      if (window.location.pathname !== targetPath) {
-        history.pushState(null, '', targetPath);
-      }
-      if (mainView.value === 'insights') {
+      if (view === 'insights') {
+        mainView.value = 'insights';
+        const targetPath = '/insights';
+        if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
         loadReelsInsights();
+      } else if (view === 'workspace' || view === 'schedules') {
+        mainView.value = 'workspace';
+        currentTab.value = 'schedules';
+        const targetPath = '/schedules';
+        if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
+        loadTasks();
+      } else if (view === 'comments') {
+        mainView.value = 'comments';
+        const targetPath = '/comments';
+        if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
+        loadCommentsView();
+      } else {
+        mainView.value = 'posts';
+        const targetPath = '/posts';
+        if (window.location.pathname !== targetPath && window.location.pathname !== '/page') {
+          history.pushState(null, '', targetPath);
+        }
+        loadFacebookPosts();
       }
     }
 
@@ -2208,11 +2271,11 @@ function setDatePreset(offsetDays) {
       }
 
       const validRows = bulkParsedList.value.filter(item =>
-        item.is_valid && (item.video_status === 'ready' || item.video_status === 'remote_url')
+        item.is_valid && item.video_path
       );
 
       if (validRows.length === 0) {
-        showToast("Không có dòng nào hợp lệ và đã có video trên R2 để tạo task. Vui lòng kiểm tra dữ liệu và tải video lên R2!", "warning");
+        showToast("Vui lòng kiểm tra lại dữ liệu, mỗi dòng cần có đường dẫn video!", "warning");
         return;
       }
 
@@ -2254,11 +2317,11 @@ function setDatePreset(offsetDays) {
             showBulkTaskModal.value = false;
           } else {
             const remainingLines = bulkParsedList.value
-              .filter(item => !item.is_valid || (item.video_status !== 'ready' && item.video_status !== 'remote_url'))
+              .filter(item => !item.is_valid || !item.video_path)
               .map(item => item.raw_line);
             bulkDataRaw.value = remainingLines.join('\n');
             handleBulkInputChanged();
-            showToast(`Đã tạo ${createdCount} task hợp lệ. Giữ lại ${remainingLines.length} dòng lỗi/thiếu video để bạn sửa tiếp.`, "info");
+            showToast(`Đã tạo ${createdCount} task hợp lệ. Giữ lại ${remainingLines.length} dòng lỗi để bạn kiểm tra.`, "info");
           }
           await loadAll();
         } else {
@@ -3329,6 +3392,279 @@ async function handleDeleteTask(taskId) {
     }
 
     // ==========================================
+    // 10B. QUẢN LÝ BÀI VIẾT FACEBOOK & BÌNH LUẬN (POSTS & COMMENTS MANAGER)
+    // ==========================================
+    async function loadFacebookPosts() {
+      isLoadingPosts.value = true;
+      try {
+        const params = new URLSearchParams();
+        if (postsFilter.value.page_id) params.append('page_id', postsFilter.value.page_id);
+        if (postsFilter.value.post_type && postsFilter.value.post_type !== 'all') params.append('post_type', postsFilter.value.post_type);
+        if (postsFilter.value.source && postsFilter.value.source !== 'all') params.append('source', postsFilter.value.source);
+        if ((postsFilter.value.search || '').trim()) params.append('search', postsFilter.value.search.trim());
+        if (postsFilter.value.start_date) params.append('start_date', postsFilter.value.start_date);
+        if (postsFilter.value.end_date) params.append('end_date', postsFilter.value.end_date);
+        params.append('page', String(postsPage.value));
+        params.append('limit', String(postsLimit.value));
+
+        const res = await apiFetch(`/api/posts?${params.toString()}`);
+        if (res && res.success) {
+          posts.value = res.posts || [];
+          totalPosts.value = res.total || 0;
+          postsTotalPages.value = res.total_pages || 1;
+          pageSyncStates.value = res.sync_states || {};
+        }
+      } catch (err) {
+        console.error("Lỗi tải bài viết:", err);
+      } finally {
+        isLoadingPosts.value = false;
+      }
+    }
+
+    async function handleSyncPagePosts(targetPageId = null) {
+      const pageId = targetPageId || postsFilter.value.page_id || (pages.value[0] && pages.value[0].facebook_page_id);
+      if (!pageId) {
+        showToast("Vui lòng chọn Fanpage cần đồng bộ bài viết.", "warning");
+        return;
+      }
+      isSyncingPagePosts.value = true;
+      showToast("Đang đồng bộ bài viết từ Fanpage qua Meta Graph API...", "info");
+      try {
+        const res = await apiFetch(`/api/pages/${encodeURIComponent(pageId)}/sync-posts`, {
+          method: 'POST',
+          body: JSON.stringify({ limit: 30 })
+        });
+        if (res && res.success) {
+          showToast(`Đồng bộ thành công ${res.synced_count} bài viết!`, "success");
+          await loadFacebookPosts();
+        } else {
+          showToast(res.detail || "Không thể đồng bộ bài viết từ Fanpage.", "error");
+        }
+      } catch (err) {
+        showToast(err?.message || "Lỗi đồng bộ bài viết.", "error");
+      } finally {
+        isSyncingPagePosts.value = false;
+      }
+    }
+
+    async function handleLoadMoreOldPosts(targetPageId = null) {
+      const pageId = targetPageId || postsFilter.value.page_id || (pages.value[0] && pages.value[0].facebook_page_id);
+      if (!pageId) return;
+      const st = pageSyncStates.value[pageId];
+      if (!st || !st.next_cursor) {
+        showToast("Đã lấy hết toàn bộ bài viết trên Facebook của Fanpage này.", "info");
+        return;
+      }
+      isSyncingPagePosts.value = true;
+      showToast("Đang tải thêm trang bài viết cũ tiếp theo...", "info");
+      try {
+        const res = await apiFetch(`/api/pages/${encodeURIComponent(pageId)}/sync-posts`, {
+          method: 'POST',
+          body: JSON.stringify({ cursor: st.next_cursor, limit: 30 })
+        });
+        if (res && res.success) {
+          showToast(`Đã lấy thêm ${res.synced_count} bài viết cũ!`, "success");
+          await loadFacebookPosts();
+        } else {
+          showToast(res.detail || "Lỗi tải bài viết cũ.", "error");
+        }
+      } catch (e) {
+        showToast(e?.message || "Lỗi tải bài viết cũ.", "error");
+      } finally {
+        isSyncingPagePosts.value = false;
+      }
+    }
+
+    async function openPostDetail(post) {
+      selectedPost.value = post;
+      isPostDetailOpen.value = true;
+      isLoadingPostDetail.value = true;
+      postComments.value = [];
+      postAuditLogs.value = [];
+      try {
+        const res = await apiFetch(`/api/posts/${encodeURIComponent(post.post_id)}`);
+        if (res && res.success) {
+          selectedPost.value = res.post || post;
+          postComments.value = res.comments || [];
+          postAuditLogs.value = res.audit_logs || [];
+        }
+      } catch (e) {
+        console.error("Lỗi lấy chi tiết bài viết:", e);
+      } finally {
+        isLoadingPostDetail.value = false;
+      }
+    }
+
+    function closePostDetail() {
+      isPostDetailOpen.value = false;
+      selectedPost.value = null;
+      postComments.value = [];
+      postAuditLogs.value = [];
+    }
+
+    function openEditPostModal(post) {
+      selectedPost.value = post;
+      editPostCaptionText.value = post.message || '';
+      isEditPostModalOpen.value = true;
+    }
+
+    async function handleSavePostEdit() {
+      if (!selectedPost.value) return;
+      isSavingPostEdit.value = true;
+      try {
+        const res = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ message: editPostCaptionText.value })
+        });
+        if (res && res.success) {
+          showToast("Đã cập nhật bài viết thành công!", "success");
+          isEditPostModalOpen.value = false;
+          await loadFacebookPosts();
+          if (isPostDetailOpen.value) {
+            await openPostDetail(selectedPost.value);
+          }
+        } else {
+          showToast(res.detail || "Không thể cập nhật bài viết.", "error");
+        }
+      } catch (e) {
+        showToast(e?.message || "Lỗi cập nhật bài viết.", "error");
+      } finally {
+        isSavingPostEdit.value = false;
+      }
+    }
+
+    function openDeletePostModal(post) {
+      selectedPost.value = post;
+      deletePostOnFacebook.value = true;
+      isDeletePostModalOpen.value = true;
+    }
+
+    async function handleConfirmDeletePost() {
+      if (!selectedPost.value) return;
+      isDeletingPost.value = true;
+      try {
+        const res = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}?delete_facebook=${deletePostOnFacebook.value}`, {
+          method: 'DELETE'
+        });
+        if (res && res.success) {
+          showToast(res.message || "Đã xóa bài viết thành công!", "success");
+          isDeletePostModalOpen.value = false;
+          isPostDetailOpen.value = false;
+          await loadFacebookPosts();
+        } else {
+          showToast(res.detail || "Không thể xóa bài viết.", "error");
+        }
+      } catch (e) {
+        showToast(e?.message || "Lỗi xóa bài viết.", "error");
+      } finally {
+        isDeletingPost.value = false;
+      }
+    }
+
+    async function handleSendPostComment() {
+      if (!selectedPost.value || !postNewComment.value.trim()) return;
+      isSendingPostComment.value = true;
+      try {
+        const res = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`, {
+          method: 'POST',
+          body: JSON.stringify({ message: postNewComment.value.trim() })
+        });
+        if (res && res.success) {
+          showToast("Đã gửi bình luận thành công!", "success");
+          postNewComment.value = '';
+          const cRes = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`);
+          if (cRes && cRes.success) {
+            postComments.value = cRes.comments || [];
+          }
+        } else {
+          showToast(res.detail || "Không thể gửi bình luận.", "error");
+        }
+      } catch (e) {
+        showToast(e?.message || "Lỗi gửi bình luận.", "error");
+      } finally {
+        isSendingPostComment.value = false;
+      }
+    }
+
+    async function handleSendPostReply(parentCommentId) {
+      if (!selectedPost.value || !postReplyText.value.trim() || !parentCommentId) return;
+      isSendingPostReply.value = true;
+      try {
+        const res = await apiFetch(`/api/comments/${encodeURIComponent(parentCommentId)}/reply`, {
+          method: 'POST',
+          body: JSON.stringify({ message: postReplyText.value.trim(), post_id: selectedPost.value.post_id })
+        });
+        if (res && res.success) {
+          showToast("Đã trả lời bình luận thành công!", "success");
+          postReplyText.value = '';
+          postReplyTargetId.value = null;
+          const cRes = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`);
+          if (cRes && cRes.success) {
+            postComments.value = cRes.comments || [];
+          }
+        } else {
+          showToast(res.detail || "Không thể gửi câu trả lời.", "error");
+        }
+      } catch (e) {
+        showToast(e?.message || "Lỗi gửi trả lời.", "error");
+      } finally {
+        isSendingPostReply.value = false;
+      }
+    }
+
+    async function handleDeleteComment(commentId) {
+      if (!confirm("Bạn có chắc chắn muốn xóa bình luận này trên Facebook?")) return;
+      try {
+        const res = await apiFetch(`/api/comments/${encodeURIComponent(commentId)}`, { method: 'DELETE' });
+        if (res && res.success) {
+          showToast("Đã xóa bình luận thành công!", "success");
+          if (selectedPost.value) {
+            const cRes = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`);
+            if (cRes && cRes.success) {
+              postComments.value = cRes.comments || [];
+            }
+          }
+        } else {
+          showToast(res.detail || "Không thể xóa bình luận.", "error");
+        }
+      } catch (e) {
+        showToast(e?.message || "Lỗi xóa bình luận.", "error");
+      }
+    }
+
+    async function handleHideComment(commentId, hide) {
+      try {
+        const res = await apiFetch(`/api/comments/${encodeURIComponent(commentId)}/hide`, {
+          method: 'POST',
+          body: JSON.stringify({ hide })
+        });
+        if (res && res.success) {
+          showToast(hide ? "Đã ẩn bình luận!" : "Đã hiện lại bình luận!", "success");
+          if (selectedPost.value) {
+            const cRes = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`);
+            if (cRes && cRes.success) {
+              postComments.value = cRes.comments || [];
+            }
+          }
+        } else {
+          showToast(res.detail || "Không thể đổi trạng thái ẩn.", "error");
+        }
+      } catch (e) {
+        showToast(e?.message || "Lỗi thao tác bình luận.", "error");
+      }
+    }
+
+    async function loadCommentsView() {
+      isLoadingComments.value = true;
+      try {
+        // Tải danh sách bài viết gần đây để lấy bình luận
+        await loadFacebookPosts();
+      } finally {
+        isLoadingComments.value = false;
+      }
+    }
+
+    // ==========================================
     // 11. LIFECYCLE, MULTI-TAB SYNC & POLLING
     // ==========================================
     let pollTimer = null;
@@ -3377,9 +3713,13 @@ async function handleDeleteTask(taskId) {
       } else if (p === '/schedules' || p === '/reels') {
         mainView.value = 'workspace';
         currentTab.value = 'schedules';
+        loadTasks();
+      } else if (p === '/comments') {
+        mainView.value = 'comments';
+        loadCommentsView();
       } else {
-        mainView.value = 'workspace';
-        currentTab.value = 'pages';
+        mainView.value = 'posts';
+        loadFacebookPosts();
       }
     }
 
@@ -3414,19 +3754,19 @@ async function handleDeleteTask(taskId) {
     }
 
     onMounted(async () => {
-      // Chuẩn hóa đường dẫn mặc định về /page hoặc /insights
+      // Chuẩn hóa đường dẫn mặc định về /posts, /page hoặc /insights
       const path = window.location.pathname;
       if (path === '/insights') {
         mainView.value = 'insights';
       } else if (path === '/schedules' || path === '/reels') {
         mainView.value = 'workspace';
         currentTab.value = 'schedules';
+      } else if (path === '/comments') {
+        mainView.value = 'comments';
+      } else if (path === '/posts') {
+        mainView.value = 'posts';
       } else {
-        mainView.value = 'workspace';
-        currentTab.value = 'pages';
-        if (path === '/' || path === '/pages') {
-          history.replaceState(null, '', '/page' + window.location.search);
-        }
+        mainView.value = 'posts';
       }
 
       window.addEventListener('popstate', onPopState);
@@ -3442,6 +3782,8 @@ async function handleDeleteTask(taskId) {
       await loadAll();
       if (mainView.value === 'insights') {
         await loadReelsInsights();
+      } else if (mainView.value === 'posts') {
+        await loadFacebookPosts();
       }
 
       // 3. Xử lý kết quả OAuth nếu quay lại từ chế độ redirect toàn trang
@@ -3480,6 +3822,49 @@ async function handleDeleteTask(taskId) {
     });
 
     return {
+      posts,
+      totalPosts,
+      postsPage,
+      postsLimit,
+      postsTotalPages,
+      postsFilter,
+      postsViewMode,
+      isLoadingPosts,
+      pageSyncStates,
+      selectedPost,
+      isPostDetailOpen,
+      isLoadingPostDetail,
+      postComments,
+      postAuditLogs,
+      postNewComment,
+      isSendingPostComment,
+      postReplyTargetId,
+      postReplyText,
+      isSendingPostReply,
+      isEditPostModalOpen,
+      editPostCaptionText,
+      isSavingPostEdit,
+      isDeletePostModalOpen,
+      isDeletingPost,
+      deletePostOnFacebook,
+      commentsFilterPageId,
+      commentsList,
+      isLoadingComments,
+      loadFacebookPosts,
+      handleSyncPagePosts,
+      handleLoadMoreOldPosts,
+      openPostDetail,
+      closePostDetail,
+      openEditPostModal,
+      handleSavePostEdit,
+      openDeletePostModal,
+      handleConfirmDeletePost,
+      handleSendPostComment,
+      handleSendPostReply,
+      handleDeleteComment,
+      handleHideComment,
+      loadCommentsView,
+
       syncPagePosts,
       isSyncingPagePosts,
       newCommentInput,
