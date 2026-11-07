@@ -622,46 +622,16 @@ export async function validateVideoSource(
     };
   }
 
-  // Case 1: Video trên Cloudflare R2 (r2://<media_id>, object_key users/..., d1://video/<media_id>, hoặc media_id trực tiếp)
-  if (
-    clean.startsWith("r2://") ||
-    clean.startsWith("users/") ||
-    clean.startsWith("d1://video/") ||
-    clean.startsWith("med_") ||
-    clean.startsWith("vid_")
-  ) {
-    const cleanId = clean.replace(/^r2:\/\//, "").replace(/^d1:\/\/video\//, "");
-    const media = await getMediaFileById(db, cleanId, ownerUserId);
-    if (!media) {
-      return {
-        video_path: clean,
-        exists: false,
-        valid_format: false,
-        size_mb: 0,
-        storage_type: "r2",
-        message: "Không tìm thấy video trên Cloudflare R2 hoặc bạn không có quyền sở hữu video này."
-      };
-    }
-
-    const check = validateVideoMetadata(
-      media.original_filename,
-      media.size_bytes || 1,
-      media.mime_type,
-      env
-    );
-    const sizeMb = Math.round((media.size_bytes / (1024 * 1024)) * 100) / 100;
-    const isReady = media.upload_status === "ready";
-
+  // Case 1: Đường dẫn ổ đĩa Windows cũ (C:\, D:\, E:\) -> Cảnh báo rõ ràng trên Cloudflare
+  if (/^[a-zA-Z]:\\/.test(clean) || clean.startsWith("\\\\")) {
     return {
       video_path: clean,
-      exists: isReady,
-      valid_format: check.valid,
-      size_mb: sizeMb,
-      storage_type: media.storage_backend,
-      media_id: media.id,
-      message: isReady
-        ? `Video R2 hợp lệ: ${media.original_filename} (${sizeMb} MB)`
-        : `Video '${media.original_filename}' chưa hoàn tất tải lên R2.`
+      exists: false,
+      valid_format: false,
+      size_mb: 0,
+      storage_type: "legacy_windows_path",
+      message:
+        "Đường dẫn ổ đĩa Windows cục bộ không được hỗ trợ trên Cloudflare Workers. Vui lòng nhấn 'Tải Video Lên R2' từ trình duyệt."
     };
   }
 
@@ -677,16 +647,47 @@ export async function validateVideoSource(
     };
   }
 
-  // Case 3: Đường dẫn ổ đĩa Windows cũ (C:\, D:\, E:\) -> Cảnh báo rõ ràng trên Cloudflare
-  if (/^[a-zA-Z]:\\/.test(clean) || clean.startsWith("\\\\")) {
+  // Case 3: Video trên Cloudflare R2 (r2://<media_id>, object_key users/..., d1://video/<media_id>, media_id hoặc tên file gốc đã tải lên)
+  const cleanId = clean.replace(/^r2:\/\//, "").replace(/^d1:\/\/video\//, "");
+  const media = await getMediaFileById(db, cleanId, ownerUserId);
+  if (media) {
+    const check = validateVideoMetadata(
+      media.original_filename,
+      media.size_bytes || 1,
+      media.mime_type,
+      env
+    );
+    const sizeMb = Math.round((media.size_bytes / (1024 * 1024)) * 100) / 100;
+    const isReady = media.upload_status === "ready";
+
+    return {
+      video_path: `r2://${media.id}`,
+      exists: isReady,
+      valid_format: check.valid,
+      size_mb: sizeMb,
+      storage_type: media.storage_backend,
+      media_id: media.id,
+      object_key: media.object_key,
+      message: isReady
+        ? `Video R2 hợp lệ: ${media.original_filename} (${sizeMb} MB)`
+        : `Video '${media.original_filename}' chưa hoàn tất tải lên R2 (status=${media.upload_status}).`
+    };
+  }
+
+  if (
+    clean.startsWith("r2://") ||
+    clean.startsWith("users/") ||
+    clean.startsWith("d1://video/") ||
+    clean.startsWith("med_") ||
+    clean.startsWith("vid_")
+  ) {
     return {
       video_path: clean,
       exists: false,
       valid_format: false,
       size_mb: 0,
-      storage_type: "legacy_windows_path",
-      message:
-        "Đường dẫn ổ đĩa Windows cục bộ không được hỗ trợ trên Cloudflare Workers. Vui lòng nhấn 'Tải Video Lên R2' từ trình duyệt."
+      storage_type: "r2",
+      message: "Không tìm thấy video trên Cloudflare R2 hoặc bạn không có quyền sở hữu video này."
     };
   }
 
@@ -697,7 +698,7 @@ export async function validateVideoSource(
     size_mb: 0,
     storage_type: "unknown",
     message:
-      "Tham chiếu video không hợp lệ. Vui lòng tải file video lên Cloudflare R2 hoặc nhập URL HTTPS hợp lệ."
+      "Video chưa được tải lên Cloudflare R2. Vui lòng chọn video và chờ tải lên R2 hoàn tất trước khi tạo hoặc chạy Task."
   };
 }
 
@@ -857,6 +858,211 @@ export async function runDiagnosticTest(
 // 3. OFFICIAL META REELS PUBLISHING API
 // ==========================================
 
+export type MetaPermissionErrorCode =
+  | "MISSING_APP_PERMISSION"
+  | "MISSING_PAGE_TASK"
+  | "INVALID_PAGE_TOKEN"
+  | "TOKEN_EXPIRED"
+  | "PAGE_TOKEN_MISMATCH"
+  | "POST_NOT_FOUND"
+  | "POST_ID_INVALID"
+  | "COMMENT_PERMISSION_DENIED"
+  | "META_API_ERROR";
+
+export interface PagePermissionVerificationResult {
+  valid: boolean;
+  effectivePageToken: string;
+  resolvedPageId: string;
+  resolvedPageName: string;
+  grantedScopes: string[];
+  pageTasks: string[];
+  errorType?: MetaPermissionErrorCode;
+  errorCode?: number;
+  message?: string;
+}
+
+/**
+ * Hàm kiểm tra thống nhất Token và Quyền của Fanpage (dùng chung cho cả Publish và Retry-Comment):
+ * - Tách bạch hoàn toàn App Permissions (scopes của User Access Token) và Page Tasks (tasks trên /me/accounts)
+ * - Không bao giờ kiểm tra MODERATE hoặc CREATE_CONTENT trong danh sách scopes của User Token
+ * - Tự động xác minh Page Access Token khớp với facebookPageId hoặc làm mới từ Admin User Access Token
+ */
+export async function verifyPageTokenAndPermissions(
+  db: D1Database,
+  env: Env,
+  params: {
+    facebookPageId: string;
+    pageAccessToken: string;
+    ownerUserId: string;
+    mode: "publish" | "comment";
+  }
+): Promise<PagePermissionVerificationResult> {
+  const cfg = getMetaConfig(env);
+  const pageId = (params.facebookPageId || "").trim();
+  const ownerUserId = (params.ownerUserId || "").trim();
+  let effectiveToken = (params.pageAccessToken || "").trim();
+
+  const pageRec = pageId
+    ? await getFacebookPageByFbId(db, cfg.encryptionKey, pageId, true, ownerUserId)
+    : null;
+  if (!effectiveToken && pageRec?.page_access_token) {
+    effectiveToken = pageRec.page_access_token.trim();
+  }
+
+  const resolvedPageId = pageRec?.facebook_page_id || pageId;
+  let resolvedPageName = pageRec?.page_name || pageId;
+  let pageTasks: string[] = Array.isArray(pageRec?.tasks) ? [...pageRec.tasks] : [];
+  let grantedScopes: string[] = [];
+
+  if (!effectiveToken) {
+    return {
+      valid: false,
+      effectivePageToken: "",
+      resolvedPageId,
+      resolvedPageName,
+      grantedScopes,
+      pageTasks,
+      errorType: "INVALID_PAGE_TOKEN",
+      errorCode: 190,
+      message: "Thiếu Page Access Token hợp lệ. Vui lòng đồng bộ hoặc liên kết lại Facebook."
+    };
+  }
+
+  let tokenPageId = "";
+  let tokenExpired = false;
+  let tokenInvalid = false;
+
+  try {
+    const meResp = await fetch(
+      `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(effectiveToken)}`
+    );
+    if (meResp.ok) {
+      const meData = (await meResp.json()) as { id?: string; name?: string };
+      tokenPageId = String(meData.id || "").trim();
+      if (meData.name) resolvedPageName = String(meData.name).trim();
+    } else if (meResp.status === 400 || meResp.status === 401) {
+      const errBody = (await meResp.json().catch(() => ({}))) as {
+        error?: { code?: number; message?: string };
+      };
+      const code = Number(errBody.error?.code || 0);
+      const msg = String(errBody.error?.message || "").toLowerCase();
+      if (code === 190 || code === 102) {
+        if (msg.includes("expired") || msg.includes("session")) {
+          tokenExpired = true;
+        } else {
+          tokenInvalid = true;
+        }
+      }
+    }
+  } catch {
+    // Ignore transient network check errors
+  }
+
+  const isTokenMismatched = Boolean(tokenPageId && resolvedPageId && tokenPageId !== resolvedPageId);
+
+  // Tự động khôi phục Page Access Token chuẩn từ User Access Token của Admin nếu lệch hoặc hết hạn
+  if ((tokenExpired || tokenInvalid || isTokenMismatched) && ownerUserId && resolvedPageId) {
+    try {
+      const userAccounts = await getFacebookAccounts(db, cfg.encryptionKey, true, ownerUserId);
+      for (const acc of userAccounts) {
+        if (Array.isArray(acc.scopes)) {
+          for (const s of acc.scopes) {
+            if (!grantedScopes.includes(s)) grantedScopes.push(s);
+          }
+        }
+        if (!acc.access_token) continue;
+        const pageResp = await fetch(
+          `${cfg.graphBase}/${resolvedPageId}?fields=access_token,name,tasks&access_token=${encodeURIComponent(acc.access_token)}`
+        );
+        if (pageResp.ok) {
+          const pageData = (await pageResp.json()) as {
+            access_token?: string;
+            name?: string;
+            tasks?: string[];
+          };
+          if (pageData.access_token) {
+            effectiveToken = String(pageData.access_token).trim();
+            tokenPageId = resolvedPageId;
+            if (pageData.name) resolvedPageName = String(pageData.name);
+            if (Array.isArray(pageData.tasks)) {
+              pageTasks = pageData.tasks.map((t) => String(t).toUpperCase());
+            }
+            tokenExpired = false;
+            tokenInvalid = false;
+
+            const encToken = await encryptToken(effectiveToken, cfg.encryptionKey, "v2");
+            const now = new Date().toISOString();
+            await db.batch([
+              db
+                .prepare(
+                  "UPDATE facebook_pages SET page_access_token = ?, token_status = 'valid', status = 'active', updated_at = ? WHERE (facebook_page_id = ? OR id = ?) AND owner_user_id = ?"
+                )
+                .bind(encToken, now, resolvedPageId, resolvedPageId, ownerUserId),
+              db
+                .prepare(
+                  "UPDATE facebook_account_pages SET page_access_token = ?, token_status = 'valid', last_synced_at = ? WHERE facebook_page_id = ? AND owner_user_id = ?"
+                )
+                .bind(encToken, now, resolvedPageId, ownerUserId)
+            ]);
+            break;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (tokenPageId && resolvedPageId && tokenPageId !== resolvedPageId) {
+    return {
+      valid: false,
+      effectivePageToken: effectiveToken,
+      resolvedPageId,
+      resolvedPageName,
+      grantedScopes,
+      pageTasks,
+      errorType: "PAGE_TOKEN_MISMATCH",
+      errorCode: 400,
+      message: `Page ID không khớp: Token đang thuộc về "${resolvedPageName}" (${tokenPageId}), không khớp với Fanpage của tác vụ (${resolvedPageId}).`
+    };
+  }
+
+  if (tokenExpired) {
+    return {
+      valid: false,
+      effectivePageToken: effectiveToken,
+      resolvedPageId,
+      resolvedPageName,
+      grantedScopes,
+      pageTasks,
+      errorType: "TOKEN_EXPIRED",
+      errorCode: 190,
+      message: "Page Access Token đã hết hạn. Vui lòng liên kết lại tài khoản Facebook."
+    };
+  }
+
+  if (tokenInvalid) {
+    return {
+      valid: false,
+      effectivePageToken: effectiveToken,
+      resolvedPageId,
+      resolvedPageName,
+      grantedScopes,
+      pageTasks,
+      errorType: "INVALID_PAGE_TOKEN",
+      errorCode: 190,
+      message: "Page Access Token không hợp lệ. Vui lòng liên kết lại tài khoản Facebook."
+    };
+  }
+
+  return {
+    valid: true,
+    effectivePageToken: effectiveToken,
+    resolvedPageId,
+    resolvedPageName,
+    grantedScopes,
+    pageTasks
+  };
+}
+
 export interface PublishReelResult {
   success: boolean;
   video_id?: string;
@@ -865,6 +1071,7 @@ export interface PublishReelResult {
   comment_id?: string | null;
   error_code?: number | null;
   error_subcode?: number | null;
+  error_type?: MetaPermissionErrorCode;
   retryable?: boolean;
   ambiguous_publish?: boolean;
   stage?: string;
@@ -891,17 +1098,26 @@ export async function publishReelViaGraphApi(
   }
 ): Promise<PublishReelResult> {
   const cfg = getMetaConfig(env);
-  const { facebookPageId, pageAccessToken, videoRef, caption, commentText, ownerUserId, onStageLog } =
+  const { facebookPageId, pageAccessToken, videoRef, caption, ownerUserId, onStageLog } =
     params;
 
-  if (!pageAccessToken) {
+  const permCheck = await verifyPageTokenAndPermissions(db, env, {
+    facebookPageId,
+    pageAccessToken,
+    ownerUserId,
+    mode: "publish"
+  });
+  if (!permCheck.valid || !permCheck.effectivePageToken) {
     return {
       success: false,
       retryable: false,
+      error_code: permCheck.errorCode || 190,
+      error_type: permCheck.errorType || "INVALID_PAGE_TOKEN",
       stage: "auth_check",
-      message: "Thiếu Page Access Token hợp lệ."
+      message: permCheck.message || "Thiếu Page Access Token hợp lệ."
     };
   }
+  const effectivePageToken = permCheck.effectivePageToken;
 
   let videoStream: ReadableStream<Uint8Array> | null = null;
   let videoBytes: Uint8Array | null = null;
@@ -909,20 +1125,26 @@ export async function publishReelViaGraphApi(
   let remoteVideoUrl: string | null = null;
 
   const cleanRef = (videoRef || "").trim();
-  if (
-    cleanRef.startsWith("r2://") ||
-    cleanRef.startsWith("users/") ||
-    cleanRef.startsWith("d1://video/") ||
-    cleanRef.startsWith("med_") ||
-    cleanRef.startsWith("vid_")
-  ) {
+  if (/^[a-zA-Z]:\\/.test(cleanRef) || cleanRef.startsWith("\\\\")) {
+    return {
+      success: false,
+      retryable: false,
+      stage: "validate_video",
+      message:
+        "Đường dẫn ổ đĩa cục bộ không hợp lệ trên Cloudflare Workers. Vui lòng tải video lên R2 trước khi đăng."
+    };
+  } else if (cleanRef.startsWith("https://") || cleanRef.startsWith("http://")) {
+    remoteVideoUrl = cleanRef;
+  } else {
     const r2Res = await openVideoFromStorage(db, env, cleanRef, ownerUserId);
     if (!r2Res.found) {
       return {
         success: false,
         retryable: false,
         stage: "r2_read",
-        message: r2Res.error || "Không tìm thấy video trên Cloudflare R2."
+        message:
+          r2Res.error ||
+          "Nguồn video chưa tồn tại trên Cloudflare R2. Vui lòng tải video lên R2 trước khi đăng."
       };
     }
     videoStream = r2Res.stream || null;
@@ -931,22 +1153,18 @@ export async function publishReelViaGraphApi(
       videoBytes = await r2Res.getBytes();
       videoSizeBytes = videoBytes.byteLength;
     }
-  } else if (cleanRef.startsWith("https://") || cleanRef.startsWith("http://")) {
-    remoteVideoUrl = cleanRef;
-  } else {
-    return {
-      success: false,
-      retryable: false,
-      stage: "validate_video",
-      message:
-        "Nguồn video không hợp lệ trên Cloudflare Workers. Vui lòng tải video lên R2 trước khi đăng."
-    };
+    if (onStageLog) {
+      await onStageLog(
+        "r2_verified",
+        `Đã xác minh video trên R2 (${r2Res.media?.original_filename || cleanRef}, ${(videoSizeBytes / 1048576).toFixed(2)} MB).`
+      );
+    }
   }
 
   try {
     // GIAI ĐOẠN 1: Khởi tạo phiên upload Reels (upload_phase=start)
     if (onStageLog) {
-      await onStageLog("start_session", "Đang chuẩn bị video...");
+      await onStageLog("start_session", "Đang chuẩn bị phiên tải video lên Facebook...");
     }
 
     const startResp = await fetch(`${cfg.graphBase}/${facebookPageId}/video_reels`, {
@@ -954,7 +1172,7 @@ export async function publishReelViaGraphApi(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         upload_phase: "start",
-        access_token: pageAccessToken
+        access_token: effectivePageToken
       })
     });
     const startData = (await startResp.json()) as Record<string, unknown>;
@@ -999,7 +1217,7 @@ export async function publishReelViaGraphApi(
       uploadResp = await fetch(uploadUrl, {
         method: "POST",
         headers: {
-          Authorization: `OAuth ${pageAccessToken}`,
+          Authorization: `OAuth ${effectivePageToken}`,
           file_url: remoteVideoUrl
         }
       });
@@ -1007,7 +1225,7 @@ export async function publishReelViaGraphApi(
       uploadResp = await fetch(uploadUrl, {
         method: "POST",
         headers: {
-          Authorization: `OAuth ${pageAccessToken}`,
+          Authorization: `OAuth ${effectivePageToken}`,
           offset: "0",
           file_size: String(videoBytes.byteLength),
           "Content-Type": "application/octet-stream"
@@ -1018,7 +1236,7 @@ export async function publishReelViaGraphApi(
       uploadResp = await fetch(uploadUrl, {
         method: "POST",
         headers: {
-          Authorization: `OAuth ${pageAccessToken}`,
+          Authorization: `OAuth ${effectivePageToken}`,
           offset: "0",
           file_size: String(videoSizeBytes),
           "Content-Type": "application/octet-stream"
@@ -1060,7 +1278,7 @@ export async function publishReelViaGraphApi(
     }
 
     const finishParams = new URLSearchParams({
-      access_token: pageAccessToken,
+      access_token: effectivePageToken,
       video_id: videoId,
       upload_phase: "finish",
       video_state: "PUBLISHED",
@@ -1111,7 +1329,7 @@ export async function publishReelViaGraphApi(
     // Lấy chính xác Post ID của Reels (không nhầm Video ID với Post ID)
     const postId = await resolveReelPostId(
       cfg,
-      pageAccessToken,
+      effectivePageToken,
       facebookPageId,
       videoId,
       finishData.post_id ? String(finishData.post_id) : null
@@ -1122,7 +1340,7 @@ export async function publishReelViaGraphApi(
     // Kiểm tra permalink & trạng thái xử lý video
     try {
       const infoResp = await fetch(
-        `${cfg.graphBase}/${videoId}?fields=id,permalink_url,status&access_token=${encodeURIComponent(pageAccessToken)}`
+        `${cfg.graphBase}/${videoId}?fields=id,permalink_url,status&access_token=${encodeURIComponent(effectivePageToken)}`
       );
       if (infoResp.ok) {
         const infoData = (await infoResp.json()) as { permalink_url?: string };
@@ -1256,6 +1474,7 @@ export interface PostReelCommentResult {
   comment_status: "success" | "failed";
   error_code?: number | null;
   error_subcode?: number | null;
+  error_type?: MetaPermissionErrorCode;
   message: string;
   already_posted?: boolean;
 }
@@ -1264,8 +1483,7 @@ export interface PostReelCommentResult {
  * 5. TỰ ĐỘNG ĐĂNG BÌNH LUẬN LÊN BÀI VIẾT REELS (POST /{POST_ID}/comments HOẶC /{VIDEO_ID}/comments)
  * - Đảm bảo token có quyền pages_manage_engagement và tài khoản có quyền MODERATE
  * - Kiểm tra chống đăng trùng (Idempotency Guard)
- * - Tự động chọn đúng endpoint: Facebook Reels là đối tượng Video nên /{video_id}/comments là chuẩn nhất
- * - Tự động fallback sang {PAGE_ID}_{POST_ID} nếu ID ban đầu bị từ chối
+ * - Tự động chọn đúng endpoint: Facebook Reels là đối tượng Video nên /{video_id}/comments hoặc /{page_id}_{post_id}/comments là chuẩn nhất
  * - Triệt tiêu hoàn toàn lỗi: "(#12) singular statuses API is deprecated for versions v2.4 and higher"
  */
 export async function postReelCommentViaGraphApi(
@@ -1290,10 +1508,10 @@ export async function postReelCommentViaGraphApi(
 
   // Xây dựng danh sách target ID theo thứ tự ưu tiên:
   // 1. Nếu rawPostId có dạng chuẩn {PAGE_ID}_{POST_ID}
-  // 2. Ghép {PAGE_ID}_{POST_ID} nếu rawPostId là số thuần khác pageId và khác videoId (POST /{POST_ID}/comments)
+  // 2. Ghép {PAGE_ID}_{POST_ID} nếu rawPostId là số thuần khác pageId và khác videoId
   // 3. rawVideoId: Node Video của bài Reels nhận comment trực tiếp qua /{video_id}/comments
   // 4. Ghép {PAGE_ID}_{VIDEO_ID}
-  // 5. rawPostId đơn lẻ cuối cùng
+  // 5. Chỉ dùng rawPostId đơn lẻ nếu không có bất kỳ ID nào ở trên (tránh gọi bare numeric post_id gây lỗi #12 singular statuses API is deprecated)
   const candidateIds: string[] = [];
 
   if (rawPostId && rawPostId.includes("_") && !candidateIds.includes(rawPostId)) {
@@ -1318,7 +1536,7 @@ export async function postReelCommentViaGraphApi(
     }
   }
 
-  if (rawPostId && !candidateIds.includes(rawPostId)) {
+  if (candidateIds.length === 0 && rawPostId) {
     candidateIds.push(rawPostId);
   }
 
@@ -1327,82 +1545,31 @@ export async function postReelCommentViaGraphApi(
       success: false,
       post_id: "",
       comment_status: "failed",
+      error_type: "POST_ID_INVALID",
       message: "Không tìm thấy Video ID hoặc Post ID hợp lệ để đăng bình luận."
     };
   }
 
-  let effectiveToken = options.pageAccessToken;
-  let tokenPageId = "";
-  let tokenPageName = "";
-  let tokenDebugFailed = false;
+  // Sử dụng hàm kiểm tra thống nhất Token & Quyền Fanpage
+  const permCheck = await verifyPageTokenAndPermissions(db, env, {
+    facebookPageId: pageId,
+    pageAccessToken: options.pageAccessToken,
+    ownerUserId: options.ownerUserId,
+    mode: "comment"
+  });
 
-  // 1. Xác minh Page Access Token thực tế với Meta (/me) để phát hiện lệch Page ID hoặc token sai
-  try {
-    const meResp = await fetch(
-      `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(effectiveToken)}`
-    );
-    if (meResp.ok) {
-      const meData = (await meResp.json()) as { id?: string; name?: string };
-      tokenPageId = String(meData.id || "").trim();
-      tokenPageName = String(meData.name || "").trim();
-    } else {
-      tokenDebugFailed = true;
-    }
-  } catch {
-    tokenDebugFailed = true;
-  }
-
-  // 2. Nếu Token không khớp với Page ID của tác vụ hoặc token không hợp lệ:
-  // Tự động truy vấn Page Access Token chuẩn từ Facebook thông qua User Access Token của Admin
-  const isTokenMismatched = tokenPageId && pageId && tokenPageId !== pageId;
-  if ((tokenDebugFailed || isTokenMismatched || !tokenPageId) && options.ownerUserId && pageId) {
-    try {
-      const userAccounts = await getFacebookAccounts(db, cfg.encryptionKey, true, options.ownerUserId);
-      for (const acc of userAccounts) {
-        if (!acc.access_token) continue;
-        const pageResp = await fetch(
-          `${cfg.graphBase}/${pageId}?fields=access_token,name,tasks&access_token=${encodeURIComponent(acc.access_token)}`
-        );
-        if (pageResp.ok) {
-          const pageData = (await pageResp.json()) as { access_token?: string; name?: string };
-          if (pageData.access_token) {
-            effectiveToken = String(pageData.access_token).trim();
-            tokenPageId = pageId;
-            tokenPageName = String(pageData.name || tokenPageName);
-            tokenDebugFailed = false;
-
-            // Cập nhật ngay token chuẩn đã xác minh vào D1 để các lần gọi sau không bị lệch
-            const encToken = await encryptToken(effectiveToken, cfg.encryptionKey, "v2");
-            const now = new Date().toISOString();
-            await db.batch([
-              db
-                .prepare(
-                  "UPDATE facebook_pages SET page_access_token = ?, token_status = 'valid', status = 'active', updated_at = ? WHERE (facebook_page_id = ? OR id = ?) AND owner_user_id = ?"
-                )
-                .bind(encToken, now, pageId, pageId, options.ownerUserId),
-              db
-                .prepare(
-                  "UPDATE facebook_account_pages SET page_access_token = ?, token_status = 'valid', last_synced_at = ? WHERE facebook_page_id = ? AND owner_user_id = ?"
-                )
-                .bind(encToken, now, pageId, options.ownerUserId)
-            ]);
-            break;
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // Nếu sau khi thử khôi phục mà token vẫn lệch Page ID:
-  if (tokenPageId && pageId && tokenPageId !== pageId) {
+  if (!permCheck.valid || !permCheck.effectivePageToken) {
     return {
       success: false,
-      post_id: rawPostId || rawVideoId,
+      post_id: candidateIds[0],
       comment_status: "failed",
-      error_code: 400,
-      message: `Page ID không khớp: Token thuộc Fanpage "${tokenPageName}" (${tokenPageId}), không khớp với Fanpage của tác vụ (${pageId}).`
+      error_code: permCheck.errorCode || 400,
+      error_type: permCheck.errorType || "INVALID_PAGE_TOKEN",
+      message: permCheck.message || "Page Access Token không hợp lệ."
     };
   }
+
+  let effectiveToken = permCheck.effectivePageToken;
 
   const attemptPosting = async (token: string): Promise<PostReelCommentResult> => {
     let lastError: PostReelCommentResult | null = null;
@@ -1432,10 +1599,6 @@ export async function postReelCommentViaGraphApi(
       } catch {}
 
       // 2. GỌI API ĐĂNG COMMENT: POST /{targetId}/comments
-      // Đảm bảo tương thích 100% với Meta Graph API:
-      // - Truyền access_token trong query parameter
-      // - Truyền Authorization: Bearer trong headers
-      // - Truyền body dạng application/x-www-form-urlencoded
       let postResp: Response;
       const formBody = new URLSearchParams();
       formBody.set("message", cleanComment);
@@ -1478,6 +1641,7 @@ export async function postReelCommentViaGraphApi(
           success: false,
           post_id: targetId,
           comment_status: "failed",
+          error_type: "META_API_ERROR",
           message: sanitizeSensitiveText(`Lỗi kết nối khi gửi bình luận: ${(netErr as Error).message}`)
         };
         continue;
@@ -1510,8 +1674,11 @@ export async function postReelCommentViaGraphApi(
         const lowerMsg = rawErrMsg.toLowerCase();
 
         let friendlyErrMsg = "";
+        let errType: MetaPermissionErrorCode = "META_API_ERROR";
+
         // 1. Phân biệt lỗi Token hết hạn / không hợp lệ
         if (code === 190 || code === 102 || lowerMsg.includes("session") || lowerMsg.includes("expired")) {
+          errType = lowerMsg.includes("expired") || subcode === 463 ? "TOKEN_EXPIRED" : "INVALID_PAGE_TOKEN";
           friendlyErrMsg = `Token Facebook đã hết hạn hoặc không hợp lệ (OAuthException ${code}: ${rawErrMsg}). Vui lòng kết nối lại tài khoản Facebook.`;
         }
         // 2. Phân biệt lỗi Post ID sai / bài viết không tồn tại / singular statuses deprecated
@@ -1523,15 +1690,22 @@ export async function postReelCommentViaGraphApi(
           lowerMsg.includes("does not exist") ||
           lowerMsg.includes("unsupported post request")
         ) {
+          errType = lowerMsg.includes("does not exist") || code === 803 ? "POST_NOT_FOUND" : "POST_ID_INVALID";
           friendlyErrMsg = `ID bài viết không tồn tại hoặc không hỗ trợ bình luận (Mã lỗi ${code}: ${rawErrMsg}).`;
         }
         // 3. Phân biệt lỗi thiếu quyền (permission / MODERATE)
         else if (code === 200 || code === 10 || lowerMsg.includes("permission")) {
+          if (lowerMsg.includes("pages_manage_engagement") && !lowerMsg.includes("moderate")) {
+            errType = "MISSING_APP_PERMISSION";
+          } else {
+            errType = "COMMENT_PERMISSION_DENIED";
+          }
           friendlyErrMsg = `Facebook từ chối cấp quyền bình luận (#${code}): ${rawErrMsg}. Vui lòng kiểm tra quyền pages_manage_engagement của token và quyền MODERATE trên Fanpage.`;
         }
         // 4. Lỗi khác
         else {
-          friendlyErrMsg = `Lỗi đăng bình luận từ Facebook: ${rawErrMsg} (Mã lỗi: ${code}${subcode ? '.' + subcode : ''})`;
+          errType = "META_API_ERROR";
+          friendlyErrMsg = `Lỗi đăng bình luận từ Facebook: ${rawErrMsg} (Mã lỗi: ${code}${subcode ? "." + subcode : ""})`;
         }
 
         lastError = {
@@ -1540,6 +1714,7 @@ export async function postReelCommentViaGraphApi(
           comment_status: "failed",
           error_code: code,
           error_subcode: subcode || null,
+          error_type: errType,
           message: sanitizeSensitiveText(friendlyErrMsg)
         };
 
@@ -1548,8 +1723,7 @@ export async function postReelCommentViaGraphApi(
           return lastError;
         }
 
-        // Với lỗi 200 (Permissions error do sai đối tượng / composite ID không hợp lệ / không có quyền trên node đó),
-        // tiếp tục thử các candidate IDs khác (ví dụ: Video ID)!
+        // Tiếp tục thử các candidate IDs khác (ví dụ: Video ID)!
         continue;
       }
     }
@@ -1558,6 +1732,7 @@ export async function postReelCommentViaGraphApi(
       success: false,
       post_id: candidateIds[0] || "",
       comment_status: "failed",
+      error_type: "META_API_ERROR",
       message: "Không thể đăng bình luận lên bài viết Reels."
     };
   };

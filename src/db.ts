@@ -45,11 +45,45 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
     if (!existing.has("comment_posted_at")) {
       try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_posted_at TEXT"); } catch {}
     }
+    if (!existing.has("r2_status")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN r2_status TEXT DEFAULT 'ready'"); } catch {}
+    }
+    if (!existing.has("uploaded_at")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN uploaded_at TEXT"); } catch {}
+    }
+    if (!existing.has("published_at")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN published_at TEXT"); } catch {}
+    }
+    if (!existing.has("last_processed_at")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN last_processed_at TEXT"); } catch {}
+    }
   } catch {
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT ''"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none'"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_log TEXT DEFAULT ''"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_posted_at TEXT"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN r2_status TEXT DEFAULT 'ready'"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN uploaded_at TEXT"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN published_at TEXT"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN last_processed_at TEXT"); } catch {}
+  }
+
+  try {
+    const mediaInfo = await db.prepare("PRAGMA table_info(media_files)").all<{ name: string }>();
+    const existingMedia = new Set((mediaInfo.results || []).map((c) => c.name));
+    if (!existingMedia.has("r2_bucket")) {
+      try { await db.exec("ALTER TABLE media_files ADD COLUMN r2_bucket TEXT DEFAULT 'auto-reels-media'"); } catch {}
+    }
+    if (!existingMedia.has("verified_at")) {
+      try { await db.exec("ALTER TABLE media_files ADD COLUMN verified_at TEXT"); } catch {}
+    }
+    if (!existingMedia.has("storage_error")) {
+      try { await db.exec("ALTER TABLE media_files ADD COLUMN storage_error TEXT DEFAULT ''"); } catch {}
+    }
+  } catch {
+    try { await db.exec("ALTER TABLE media_files ADD COLUMN r2_bucket TEXT DEFAULT 'auto-reels-media'"); } catch {}
+    try { await db.exec("ALTER TABLE media_files ADD COLUMN verified_at TEXT"); } catch {}
+    try { await db.exec("ALTER TABLE media_files ADD COLUMN storage_error TEXT DEFAULT ''"); } catch {}
   }
 }
 
@@ -178,6 +212,9 @@ export async function ensureDatabaseInitialized(
       upload_status TEXT NOT NULL DEFAULT 'pending',
       r2_upload_id TEXT,
       storage_backend TEXT NOT NULL DEFAULT 'r2',
+      r2_bucket TEXT DEFAULT 'auto-reels-media',
+      verified_at TEXT,
+      storage_error TEXT DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(owner_user_id, object_key)
@@ -230,6 +267,10 @@ export async function ensureDatabaseInitialized(
       comment_status TEXT DEFAULT 'none',
       comment_log TEXT DEFAULT '',
       comment_posted_at TEXT,
+      r2_status TEXT DEFAULT 'ready',
+      uploaded_at TEXT,
+      published_at TEXT,
+      last_processed_at TEXT,
       created_at TEXT,
       updated_at TEXT
     )`,
@@ -1573,8 +1614,7 @@ export async function getFacebookPages(
     const adminAccounts: AdminAccountLink[] = [];
     const mergedTasksSet = new Set<string>(safeJsonParseArray(r.tasks_json as string));
     let anyCanPost = Boolean(r.can_post);
-    let bestEncryptedToken = String(r.page_access_token || "");
-    let tokenFoundFromLink = false;
+    const candidateEncryptedTokens: string[] = [];
 
     for (const lnk of linkRows) {
       const lTasks = safeJsonParseArray(lnk.tasks_json as string);
@@ -1582,11 +1622,8 @@ export async function getFacebookPages(
       const lCanPost = Boolean(lnk.can_post);
       if (lCanPost && lnk.account_status === "connected") {
         anyCanPost = true;
-        // linkRows được sắp xếp ORDER BY fap.can_post DESC, fap.last_synced_at DESC
-        // nên hàng đầu tiên thỏa mãn là token mới nhất và hợp lệ nhất, không để hàng cũ hơn ghi đè!
-        if (lnk.page_access_token && !tokenFoundFromLink) {
-          bestEncryptedToken = String(lnk.page_access_token);
-          tokenFoundFromLink = true;
+        if (lnk.page_access_token) {
+          candidateEncryptedTokens.push(String(lnk.page_access_token));
         }
       }
       adminAccounts.push({
@@ -1602,6 +1639,21 @@ export async function getFacebookPages(
         is_published: Boolean(lnk.is_published),
         last_synced_at: (lnk.last_synced_at as string) || null
       });
+    }
+
+    for (const lnk of linkRows) {
+      if (lnk.page_access_token) {
+        const tok = String(lnk.page_access_token);
+        if (!candidateEncryptedTokens.includes(tok)) {
+          candidateEncryptedTokens.push(tok);
+        }
+      }
+    }
+    if (r.page_access_token) {
+      const pageTok = String(r.page_access_token);
+      if (!candidateEncryptedTokens.includes(pageTok)) {
+        candidateEncryptedTokens.push(pageTok);
+      }
     }
 
     const pageRecord: FacebookPageRecord & { page_access_token?: string } = {
@@ -1630,7 +1682,15 @@ export async function getFacebookPages(
     };
 
     if (includeToken) {
-      pageRecord.page_access_token = await decryptToken(bestEncryptedToken, encryptionKey);
+      let resolvedPlainToken = "";
+      for (const encTok of candidateEncryptedTokens) {
+        const plain = await decryptToken(encTok, encryptionKey);
+        if (plain && plain.trim().length > 10) {
+          resolvedPlainToken = plain.trim();
+          break;
+        }
+      }
+      pageRecord.page_access_token = resolvedPlainToken;
     }
 
     out.push(pageRecord);
@@ -1762,35 +1822,72 @@ export async function createMediaFileInit(
     r2UploadId?: string | null;
     storageBackend?: string;
     uploadStatus?: string;
+    r2Bucket?: string;
+    verifiedAt?: string | null;
+    storageError?: string;
   }
 ): Promise<MediaFileRecord> {
   const now = new Date().toISOString();
   const status = params.uploadStatus || "pending";
   const backend = params.storageBackend || "r2";
+  const bucketName = params.r2Bucket || "auto-reels-media";
+  const verifiedAt = params.verifiedAt || (status === "ready" ? now : null);
+  const storageError = params.storageError || "";
 
-  await db
-    .prepare(
-      `INSERT INTO media_files (
-         id, owner_user_id, object_key, original_filename, mime_type,
-         size_bytes, sha256_checksum, upload_status, r2_upload_id, storage_backend,
-         created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      params.id,
-      params.ownerUserId,
-      params.objectKey,
-      params.originalFilename,
-      params.mimeType,
-      params.sizeBytes,
-      params.sha256Checksum || null,
-      status,
-      params.r2UploadId || null,
-      backend,
-      now,
-      now
-    )
-    .run();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO media_files (
+           id, owner_user_id, object_key, original_filename, mime_type,
+           size_bytes, sha256_checksum, upload_status, r2_upload_id, storage_backend,
+           r2_bucket, verified_at, storage_error,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        params.id,
+        params.ownerUserId,
+        params.objectKey,
+        params.originalFilename,
+        params.mimeType,
+        params.sizeBytes,
+        params.sha256Checksum || null,
+        status,
+        params.r2UploadId || null,
+        backend,
+        bucketName,
+        verifiedAt,
+        storageError,
+        now,
+        now
+      )
+      .run();
+  } catch (err: any) {
+    await ensureTaskCommentColumns(db);
+    await db
+      .prepare(
+        `INSERT INTO media_files (
+           id, owner_user_id, object_key, original_filename, mime_type,
+           size_bytes, sha256_checksum, upload_status, r2_upload_id, storage_backend,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        params.id,
+        params.ownerUserId,
+        params.objectKey,
+        params.originalFilename,
+        params.mimeType,
+        params.sizeBytes,
+        params.sha256Checksum || null,
+        status,
+        params.r2UploadId || null,
+        backend,
+        now,
+        now
+      )
+      .run();
+  }
 
   return {
     id: params.id,
@@ -1803,6 +1900,9 @@ export async function createMediaFileInit(
     upload_status: status,
     r2_upload_id: params.r2UploadId || null,
     storage_backend: backend,
+    r2_bucket: bucketName,
+    verified_at: verifiedAt,
+    storage_error: storageError,
     created_at: now,
     updated_at: now
   };
@@ -1814,14 +1914,18 @@ export async function getMediaFileById(
   ownerUserId: string
 ): Promise<MediaFileRecord | null> {
   if (!mediaIdOrKey) return null;
-  const cleanKey = mediaIdOrKey.replace(/^r2:\/\//, "");
+  const cleanKey = mediaIdOrKey.trim().replace(/^r2:\/\//, "").replace(/^d1:\/\/video\//, "");
+  if (!cleanKey) return null;
   return db
     .prepare(
       `SELECT * FROM media_files
-       WHERE (id = ? OR object_key = ?) AND owner_user_id = ?
+       WHERE (id = ? OR object_key = ? OR original_filename = ?) AND owner_user_id = ?
+       ORDER BY CASE WHEN id = ? THEN 0 WHEN object_key = ? THEN 1 ELSE 2 END,
+                CASE WHEN upload_status = 'ready' THEN 0 ELSE 1 END,
+                created_at DESC
        LIMIT 1`
     )
-    .bind(cleanKey, cleanKey, ownerUserId)
+    .bind(cleanKey, cleanKey, cleanKey, ownerUserId, cleanKey, cleanKey)
     .first<MediaFileRecord>();
 }
 
@@ -1831,30 +1935,89 @@ export async function completeMediaFileUpload(
   ownerUserId: string,
   sizeBytes?: number,
   sha256Checksum?: string | null,
-  storageBackend?: string
+  storageBackend?: string,
+  r2Bucket?: string
 ): Promise<MediaFileRecord | null> {
   const now = new Date().toISOString();
-  await db
-    .prepare(
-      `UPDATE media_files
-       SET upload_status = 'ready',
-           size_bytes = COALESCE(?, size_bytes),
-           sha256_checksum = COALESCE(?, sha256_checksum),
-           storage_backend = COALESCE(?, storage_backend),
-           updated_at = ?
-       WHERE id = ? AND owner_user_id = ?`
-    )
-    .bind(
-      sizeBytes !== undefined ? sizeBytes : null,
-      sha256Checksum || null,
-      storageBackend || null,
-      now,
-      mediaId,
-      ownerUserId
-    )
-    .run();
+  try {
+    await db
+      .prepare(
+        `UPDATE media_files
+         SET upload_status = 'ready',
+             size_bytes = COALESCE(?, size_bytes),
+             sha256_checksum = COALESCE(?, sha256_checksum),
+             storage_backend = COALESCE(?, storage_backend),
+             r2_bucket = COALESCE(?, r2_bucket),
+             verified_at = ?,
+             storage_error = '',
+             updated_at = ?
+         WHERE id = ? AND owner_user_id = ?`
+      )
+      .bind(
+        sizeBytes !== undefined ? sizeBytes : null,
+        sha256Checksum || null,
+        storageBackend || null,
+        r2Bucket || "auto-reels-media",
+        now,
+        now,
+        mediaId,
+        ownerUserId
+      )
+      .run();
+  } catch {
+    await db
+      .prepare(
+        `UPDATE media_files
+         SET upload_status = 'ready',
+             size_bytes = COALESCE(?, size_bytes),
+             sha256_checksum = COALESCE(?, sha256_checksum),
+             storage_backend = COALESCE(?, storage_backend),
+             updated_at = ?
+         WHERE id = ? AND owner_user_id = ?`
+      )
+      .bind(
+        sizeBytes !== undefined ? sizeBytes : null,
+        sha256Checksum || null,
+        storageBackend || null,
+        now,
+        mediaId,
+        ownerUserId
+      )
+      .run();
+  }
 
   return getMediaFileById(db, mediaId, ownerUserId);
+}
+
+export async function markMediaFileFailed(
+  db: D1Database,
+  mediaId: string,
+  ownerUserId: string,
+  errorMessage: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  try {
+    await db
+      .prepare(
+        `UPDATE media_files
+         SET upload_status = 'failed',
+             storage_error = ?,
+             updated_at = ?
+         WHERE id = ? AND owner_user_id = ?`
+      )
+      .bind(sanitizeSensitiveText(errorMessage), now, mediaId, ownerUserId)
+      .run();
+  } catch {
+    await db
+      .prepare(
+        `UPDATE media_files
+         SET upload_status = 'failed',
+             updated_at = ?
+         WHERE id = ? AND owner_user_id = ?`
+      )
+      .bind(now, mediaId, ownerUserId)
+      .run();
+  }
 }
 
 export async function getUserMediaFiles(
@@ -2133,6 +2296,7 @@ export async function getTasks(
       facebook_page_id: (r.facebook_page_id as string) || (r.profile_id as string) || null,
       media_id: (r.media_id as string) || null,
       object_key: (r.object_key as string) || null,
+      r2_status: (r.r2_status as string) || (r.media_id ? "verified" : "ready"),
       video_path: String(r.video_path || ""),
       caption: String(r.caption || ""),
       comment_text: String(r.comment_text || ""),
@@ -2162,6 +2326,9 @@ export async function getTasks(
       ),
       comment_log: String(r.comment_log || ""),
       comment_posted_at: (r.comment_posted_at as string) || null,
+      uploaded_at: (r.uploaded_at as string) || null,
+      published_at: (r.published_at as string) || null,
+      last_processed_at: (r.last_processed_at as string) || null,
       created_at: (r.created_at as string) || null,
       updated_at: (r.updated_at as string) || null,
       page_name: (r.page_name as string) || null,
@@ -2285,46 +2452,95 @@ export async function updateTaskExecutionState(
     nextRetryAt?: number | null;
     attemptCount?: number;
     clearLease?: boolean;
+    publishedAt?: string | null;
   }
 ): Promise<void> {
   const now = new Date().toISOString();
   const cleanLog = sanitizeSensitiveText(logMsg);
+  const publishedAtVal =
+    extra?.publishedAt !== undefined
+      ? extra.publishedAt
+      : status === "done"
+        ? now
+        : null;
 
-  await db
-    .prepare(
-      `UPDATE tasks
-       SET status = ?,
-           log = ?,
-           video_id = COALESCE(?, video_id),
-           post_id = COALESCE(?, post_id),
-           video_url = COALESCE(?, video_url),
-           error_code = COALESCE(?, error_code),
-           error_subcode = COALESCE(?, error_subcode),
-           retryable = COALESCE(?, retryable),
-           next_retry_at = ?,
-           attempt_count = COALESCE(?, attempt_count),
-           locked_until = CASE WHEN ? = 1 THEN NULL ELSE locked_until END,
-           lease_owner = CASE WHEN ? = 1 THEN NULL ELSE lease_owner END,
-           updated_at = ?
-       WHERE id = ?`
-    )
-    .bind(
-      status,
-      cleanLog,
-      extra?.videoId ?? null,
-      extra?.postId ?? null,
-      extra?.videoUrl ?? null,
-      extra?.errorCode ?? null,
-      extra?.errorSubcode ?? null,
-      extra?.retryable !== undefined ? (extra.retryable ? 1 : 0) : null,
-      extra?.nextRetryAt !== undefined ? extra.nextRetryAt : null,
-      extra?.attemptCount !== undefined ? extra.attemptCount : null,
-      extra?.clearLease ? 1 : 0,
-      extra?.clearLease ? 1 : 0,
-      now,
-      taskId
-    )
-    .run();
+  try {
+    await db
+      .prepare(
+        `UPDATE tasks
+         SET status = ?,
+             log = ?,
+             video_id = COALESCE(?, video_id),
+             post_id = COALESCE(?, post_id),
+             video_url = COALESCE(?, video_url),
+             error_code = COALESCE(?, error_code),
+             error_subcode = COALESCE(?, error_subcode),
+             retryable = COALESCE(?, retryable),
+             next_retry_at = ?,
+             attempt_count = COALESCE(?, attempt_count),
+             locked_until = CASE WHEN ? = 1 THEN NULL ELSE locked_until END,
+             lease_owner = CASE WHEN ? = 1 THEN NULL ELSE lease_owner END,
+             published_at = COALESCE(?, published_at),
+             last_processed_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(
+        status,
+        cleanLog,
+        extra?.videoId ?? null,
+        extra?.postId ?? null,
+        extra?.videoUrl ?? null,
+        extra?.errorCode ?? null,
+        extra?.errorSubcode ?? null,
+        extra?.retryable !== undefined ? (extra.retryable ? 1 : 0) : null,
+        extra?.nextRetryAt !== undefined ? extra.nextRetryAt : null,
+        extra?.attemptCount !== undefined ? extra.attemptCount : null,
+        extra?.clearLease ? 1 : 0,
+        extra?.clearLease ? 1 : 0,
+        publishedAtVal,
+        now,
+        now,
+        taskId
+      )
+      .run();
+  } catch {
+    await db
+      .prepare(
+        `UPDATE tasks
+         SET status = ?,
+             log = ?,
+             video_id = COALESCE(?, video_id),
+             post_id = COALESCE(?, post_id),
+             video_url = COALESCE(?, video_url),
+             error_code = COALESCE(?, error_code),
+             error_subcode = COALESCE(?, error_subcode),
+             retryable = COALESCE(?, retryable),
+             next_retry_at = ?,
+             attempt_count = COALESCE(?, attempt_count),
+             locked_until = CASE WHEN ? = 1 THEN NULL ELSE locked_until END,
+             lease_owner = CASE WHEN ? = 1 THEN NULL ELSE lease_owner END,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(
+        status,
+        cleanLog,
+        extra?.videoId ?? null,
+        extra?.postId ?? null,
+        extra?.videoUrl ?? null,
+        extra?.errorCode ?? null,
+        extra?.errorSubcode ?? null,
+        extra?.retryable !== undefined ? (extra.retryable ? 1 : 0) : null,
+        extra?.nextRetryAt !== undefined ? extra.nextRetryAt : null,
+        extra?.attemptCount !== undefined ? extra.attemptCount : null,
+        extra?.clearLease ? 1 : 0,
+        extra?.clearLease ? 1 : 0,
+        now,
+        taskId
+      )
+      .run();
+  }
 }
 
 export async function updateTaskCommentState(

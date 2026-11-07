@@ -235,7 +235,8 @@ async function runAll30Tests() {
     "migrations/0001_initial_schema.sql",
     "migrations/0002_indexes.sql",
     "migrations/0003_security_and_tokens.sql",
-    "migrations/0004_task_comment_columns.sql"
+    "migrations/0004_task_comment_columns.sql",
+    "migrations/0005_r2_and_task_lifecycle.sql"
   ];
   for (let pass = 1; pass <= 2; pass++) {
     for (const mf of migFiles) {
@@ -272,10 +273,24 @@ async function runAll30Tests() {
   }
   const taskColsCheck = await d1.prepare("PRAGMA table_info(tasks)").all();
   const taskColNames = new Set(taskColsCheck.results.map((c) => c.name));
-  for (const c of ["comment_id", "comment_status", "comment_log", "comment_posted_at"]) {
+  for (const c of [
+    "comment_id",
+    "comment_status",
+    "comment_log",
+    "comment_posted_at",
+    "r2_status",
+    "uploaded_at",
+    "published_at",
+    "last_processed_at"
+  ]) {
     assert.ok(taskColNames.has(c), `Thiếu cột ${c} trong bảng tasks`);
   }
-  console.log("  ✓ [Test 12] D1 Migrations (0001, 0002, 0003, 0004) idempotent & đầy đủ 13 bảng/view kèm comment columns");
+  const mediaColsCheck = await d1.prepare("PRAGMA table_info(media_files)").all();
+  const mediaColNames = new Set(mediaColsCheck.results.map((c) => c.name));
+  for (const c of ["r2_bucket", "verified_at", "storage_error"]) {
+    assert.ok(mediaColNames.has(c), `Thiếu cột ${c} trong bảng media_files`);
+  }
+  console.log("  ✓ [Test 12] D1 Migrations (0001..0005) idempotent & đầy đủ 13 bảng/view kèm R2 & comment columns");
 
   // --------------------------------------------------------------------------
   // [TEST 1] Worker khởi động & export đầy đủ fetch, scheduled, queue
@@ -1932,7 +1947,61 @@ async function runAll30Tests() {
   assert.ok(cols.has("comment_status"));
   assert.ok(cols.has("comment_log"));
   assert.ok(cols.has("comment_posted_at"));
+  assert.ok(cols.has("r2_status"));
   console.log("  ✓ [Test 34] Tự động khắc phục (Self-Healing) schema D1 bảo vệ 100% không bị lỗi missing column");
+
+  // --------------------------------------------------------------------------
+  // [TEST 35] Xác minh cổng bảo vệ R2 trước khi tạo Task, Bảo vệ xóa R2 khi Task đang chờ & Unified Permission Checker
+  // --------------------------------------------------------------------------
+  // 1. Tạo task với tên file chưa từng tải lên R2 -> Phải bị chặn HTTP 400 (ngăn ngừa lỗi Task #7 GenCine)
+  const unuploadedTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: "unuploaded_local_video_gencine.mp4",
+      caption: "Task chưa upload R2"
+    })
+  });
+  assert.equal(unuploadedTaskResp.status, 400, "Không được phép tạo Task khi video chưa tải lên R2");
+  const unuploadedTaskErr = await unuploadedTaskResp.json();
+  assert.ok(unuploadedTaskErr.detail.includes("Cloudflare R2"));
+
+  // 2. Tạo task bằng tên file gốc ĐÃ tải lên R2 ('alice_reel_01.mp4') -> Tự động ánh xạ về r2://<media_id>
+  const byFilenameTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `session_token=${tokenA}` },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: "alice_reel_01.mp4",
+      caption: "Task tự động phân giải từ tên file đã có trên R2"
+    })
+  });
+  assert.equal(byFilenameTaskResp.status, 200);
+  const byFilenameTask = (await byFilenameTaskResp.json()).task;
+  assert.equal(byFilenameTask.media_id, initUploadData.media_id);
+  assert.equal(byFilenameTask.video_path, `r2://${initUploadData.media_id}`);
+
+  // 3. Thử xóa video trên R2 khi đang có task chờ xử lý (byFilenameTask đang pending) -> Phải từ chối xóa để bảo vệ Task
+  const delProtectedMediaResp = await callWorker(`/api/media/${initUploadData.media_id}`, {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(delProtectedMediaResp.status, 404);
+  const delProtectedMediaData = await delProtectedMediaResp.json();
+  assert.ok(delProtectedMediaData.detail.includes("Không thể xóa video"));
+
+  // 4. Kiểm tra hàm thống nhất verifyPageTokenAndPermissions
+  const { verifyPageTokenAndPermissions } = await import("../src/services/metaGraphService.ts");
+  const missingTokRes = await verifyPageTokenAndPermissions(d1, env, {
+    facebookPageId: "non_existent_page",
+    pageAccessToken: "",
+    ownerUserId: "non_existent_user",
+    mode: "comment"
+  });
+  assert.equal(missingTokRes.valid, false);
+  assert.equal(missingTokRes.errorType, "INVALID_PAGE_TOKEN");
+  console.log("  ✓ [Test 35] Cổng xác minh R2 trước khi tạo Task, Bảo vệ Object R2 đang chờ đăng & Unified Permission Checker");
 
   globalThis.fetch = originalFetch;
 

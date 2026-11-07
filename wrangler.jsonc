@@ -47,9 +47,8 @@
 			"bucket_name": "auto-reels-media"
 		},
 		{
-			"bucket_name": "auto-reels-media",
 			"binding": "auto_reels_media",
-			"remote": true
+			"bucket_name": "auto-reels-media"
 		}
 	]
 	// (Tùy chọn khi nâng cấp Workers Paid) Cloudflare Queues cho Background Publishing:

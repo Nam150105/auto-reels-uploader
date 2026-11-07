@@ -145,11 +145,18 @@
     const singleTaskForm = ref({
       facebook_page_id: '',
       video_path: '',
+      media_id: '',
+      object_key: '',
       caption: '',
       comment_text: '',
       schedule_date: '',
       schedule_time: ''
     });
+    const isUploadingVideo = ref(false);
+    const uploadError = ref('');
+    const lastUploadFile = ref(null);
+    const uploadedMediaInfo = ref(null);
+    const userMediaFiles = ref([]);
 
     // Edit Task Form
     const editTaskForm = ref({
@@ -994,20 +1001,55 @@
     // ==========================================
     // 7. TASK CREATION & EDITING
     // ==========================================
+    async function loadUserMediaFiles() {
+      try {
+        const res = await fetch('/api/media');
+        if (res.ok) {
+          const data = await res.json();
+          userMediaFiles.value = Array.isArray(data.items) ? data.items : [];
+        }
+      } catch (e) {}
+    }
+
+    function selectExistingR2Video(mediaItem) {
+      if (!mediaItem || !mediaItem.id) return;
+      singleTaskForm.value.video_path = `r2://${mediaItem.id}`;
+      singleTaskForm.value.media_id = mediaItem.id;
+      singleTaskForm.value.object_key = mediaItem.object_key || '';
+      uploadError.value = '';
+      uploadedMediaInfo.value = {
+        media_id: mediaItem.id,
+        object_key: mediaItem.object_key || '',
+        filename: mediaItem.original_filename || mediaItem.id,
+        size_mb: Math.round(((mediaItem.size_bytes || 0) / 1048576) * 100) / 100
+      };
+    }
+
     function openSingleTaskModal(pageId = '') {
       singleTaskForm.value = {
         facebook_page_id: pageId || (pages.value.length > 0 ? pages.value[0].facebook_page_id : ''),
         video_path: '',
+        media_id: '',
+        object_key: '',
         caption: '',
         comment_text: '',
         schedule_date: '',
         schedule_time: ''
       };
+      isUploadingVideo.value = false;
+      uploadError.value = '';
+      lastUploadFile.value = null;
+      uploadedMediaInfo.value = null;
+      loadUserMediaFiles();
       showSingleTaskModal.value = true;
     }
 
     async function uploadVideoFileToCloud(file) {
       if (!file) return;
+      isUploadingVideo.value = true;
+      uploadError.value = '';
+      lastUploadFile.value = file;
+      uploadedMediaInfo.value = null;
       showToast(`Đang tải video "${file.name}" trực tiếp lên Cloudflare R2...`, "info");
       try {
         // Bước 1: Khởi tạo phiên upload R2 (/api/media/upload-init)
@@ -1022,7 +1064,10 @@
         });
         const initData = await initRes.json();
         if (!initRes.ok || !initData.media_id) {
-          showToast(initData.detail || "Không thể khởi tạo phiên upload R2.", "error");
+          const msg = initData.detail || "Không thể khởi tạo phiên upload R2.";
+          uploadError.value = msg;
+          isUploadingVideo.value = false;
+          showToast(msg, "error");
           return;
         }
 
@@ -1036,7 +1081,10 @@
         });
         const streamData = await streamRes.json();
         if (!streamRes.ok) {
-          showToast(streamData.detail || "Lỗi truyền dữ liệu video lên R2.", "error");
+          const msg = streamData.detail || "Lỗi truyền dữ liệu video lên R2.";
+          uploadError.value = msg;
+          isUploadingVideo.value = false;
+          showToast(msg, "error");
           return;
         }
 
@@ -1049,12 +1097,37 @@
         const compData = await compRes.json();
         if (compRes.ok && compData.video_path) {
           singleTaskForm.value.video_path = compData.video_path;
-          showToast(`Đã tải video "${file.name}" (${compData.size_mb || 0} MB) lên Cloudflare R2!`, "success");
+          singleTaskForm.value.media_id = compData.media_id || initData.media_id;
+          singleTaskForm.value.object_key = compData.object_key || initData.object_key || '';
+          uploadedMediaInfo.value = {
+            media_id: compData.media_id || initData.media_id,
+            object_key: compData.object_key || initData.object_key || '',
+            filename: file.name,
+            size_mb: compData.size_mb || Math.round((file.size / 1048576) * 100) / 100
+          };
+          isUploadingVideo.value = false;
+          uploadError.value = '';
+          loadUserMediaFiles();
+          showToast(`Đã tải & xác minh video "${file.name}" (${uploadedMediaInfo.value.size_mb} MB) trên Cloudflare R2!`, "success");
         } else {
-          showToast(compData.detail || "Không thể xác nhận hoàn tất upload R2.", "error");
+          const msg = compData.detail || "Không thể xác nhận hoàn tất upload R2.";
+          uploadError.value = msg;
+          isUploadingVideo.value = false;
+          showToast(msg, "error");
         }
       } catch (err) {
-        showToast("Lỗi tải video lên Cloudflare R2: " + err.message, "error");
+        const msg = "Lỗi tải video lên Cloudflare R2: " + err.message;
+        uploadError.value = msg;
+        isUploadingVideo.value = false;
+        showToast(msg, "error");
+      }
+    }
+
+    async function retryUploadToR2() {
+      if (lastUploadFile.value) {
+        await uploadVideoFileToCloud(lastUploadFile.value);
+      } else {
+        handleBrowseFileSingleTask();
       }
     }
 
@@ -1143,8 +1216,17 @@
     }
 
     async function handleCreateSingleTaskSubmit() {
-      if (!singleTaskForm.value.video_path.trim()) {
-        showToast("Đường dẫn video không được để trống!", "warning");
+      if (isUploadingVideo.value) {
+        showToast("Video đang được tải lên Cloudflare R2. Vui lòng chờ hoàn tất trước khi lưu Task!", "warning");
+        return;
+      }
+      const cleanPath = (singleTaskForm.value.video_path || '').trim();
+      if (!cleanPath) {
+        showToast("Vui lòng chọn và tải video lên Cloudflare R2 trước khi lưu Task!", "warning");
+        return;
+      }
+      if (uploadError.value && !cleanPath.startsWith('r2://') && !cleanPath.startsWith('http')) {
+        showToast("Video chưa tải lên R2 thành công. Vui lòng nhấn 'Thử tải lại lên R2'!", "error");
         return;
       }
       if (singleTaskForm.value.schedule_date || singleTaskForm.value.schedule_time) {
@@ -1160,7 +1242,9 @@
       try {
         const payload = {
           facebook_page_id: singleTaskForm.value.facebook_page_id,
-          video_path: singleTaskForm.value.video_path.trim(),
+          video_path: cleanPath,
+          media_id: singleTaskForm.value.media_id || undefined,
+          object_key: singleTaskForm.value.object_key || undefined,
           caption: singleTaskForm.value.caption || "",
           comment_text: singleTaskForm.value.comment_text || "",
           schedule_date: singleTaskForm.value.schedule_date || "",
@@ -1826,6 +1910,12 @@
       showEditTaskModal,
       showLogModal,
       singleTaskForm,
+      isUploadingVideo,
+      uploadError,
+      uploadedMediaInfo,
+      userMediaFiles,
+      selectExistingR2Video,
+      retryUploadToR2,
       editTaskForm,
       bulkDataRaw,
       bulkAssignMethod,

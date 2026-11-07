@@ -146,6 +146,7 @@ export interface QueueTaskMessage {
 export interface Env {
   DB?: D1Database;
   MEDIA_BUCKET?: R2Bucket;
+  auto_reels_media?: R2Bucket;
   VIDEOS_BUCKET?: R2Bucket;
   REELS_QUEUE?: Queue<QueueTaskMessage>;
   ASSETS?: Fetcher;
@@ -274,6 +275,9 @@ export interface MediaFileRecord {
   upload_status: string;
   r2_upload_id: string | null;
   storage_backend: string;
+  r2_bucket?: string | null;
+  verified_at?: string | null;
+  storage_error?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -285,6 +289,7 @@ export interface TaskRecord {
   facebook_page_id: string | null;
   media_id?: string | null;
   object_key?: string | null;
+  r2_status?: string | null;
   video_path: string;
   caption: string;
   comment_text: string;
@@ -311,6 +316,9 @@ export interface TaskRecord {
   comment_status?: string | null;
   comment_log?: string | null;
   comment_posted_at?: string | null;
+  uploaded_at?: string | null;
+  published_at?: string | null;
+  last_processed_at?: string | null;
   created_at: string | null;
   updated_at: string | null;
   page_name?: string | null;

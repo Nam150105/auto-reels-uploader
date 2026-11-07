@@ -10,6 +10,7 @@ import {
   createMediaFileInit,
   getMediaFileById,
   completeMediaFileUpload,
+  markMediaFileFailed,
   getUserMediaFiles,
   deleteMediaFileRecord
 } from "../db.ts";
@@ -25,7 +26,7 @@ export const ALLOWED_VIDEO_MIME_TYPES = [
 ];
 
 export function getR2Bucket(env: Env): R2Bucket | null {
-  return env.MEDIA_BUCKET || env.VIDEOS_BUCKET || null;
+  return env.MEDIA_BUCKET || env.auto_reels_media || env.VIDEOS_BUCKET || null;
 }
 
 export function getMaxVideoSizeBytes(env: Env): number {
@@ -190,6 +191,7 @@ export async function streamVideoToStorage(
   const bucket = getR2Bucket(env);
   if (bucket) {
     if (!request.body) {
+      await markMediaFileFailed(db, media.id, ownerUserId, "Request body rỗng khi tải lên R2.");
       return { success: false, status: 400, message: "Request body rỗng." };
     }
     const r2Obj = await bucket.put(media.object_key, request.body, {
@@ -201,14 +203,30 @@ export async function streamVideoToStorage(
       }
     });
 
-    const finalSize = r2Obj?.size ?? (contentLength || media.size_bytes);
+    const headObj = await bucket.head(media.object_key);
+    const finalSize = headObj?.size ?? r2Obj?.size ?? (contentLength || media.size_bytes);
+    if ((!headObj && !r2Obj) || finalSize <= 0) {
+      await markMediaFileFailed(
+        db,
+        media.id,
+        ownerUserId,
+        "Không thể xác minh object tồn tại trên R2 hoặc file có dung lượng 0 bytes."
+      );
+      return {
+        success: false,
+        status: 500,
+        message: "Không thể xác minh file video trên Cloudflare R2 sau khi tải lên."
+      };
+    }
+
     const updated = await completeMediaFileUpload(
       db,
       media.id,
       ownerUserId,
       finalSize,
-      r2Obj?.etag || media.sha256_checksum,
-      "r2"
+      headObj?.etag || r2Obj?.etag || media.sha256_checksum,
+      "r2",
+      "auto-reels-media"
     );
     return { success: true, status: 200, media: updated || media };
   }
@@ -276,7 +294,13 @@ export async function finalizeVideoUpload(
   const bucket = getR2Bucket(env);
   if (bucket && media.storage_backend === "r2") {
     const headObj = await bucket.head(media.object_key);
-    if (!headObj) {
+    if (!headObj || headObj.size <= 0) {
+      await markMediaFileFailed(
+        db,
+        media.id,
+        ownerUserId,
+        "Chưa tìm thấy file video trên Cloudflare R2 hoặc dung lượng bằng 0."
+      );
       return {
         success: false,
         status: 400,
@@ -289,7 +313,8 @@ export async function finalizeVideoUpload(
       ownerUserId,
       headObj.size,
       headObj.etag || media.sha256_checksum,
-      "r2"
+      "r2",
+      "auto-reels-media"
     );
     return {
       success: true,
@@ -329,6 +354,88 @@ export async function finalizeVideoUpload(
 }
 
 /**
+ * Xác minh bắt buộc trước khi cho phép tạo Task hoặc chạy Publish:
+ * - Tìm bản ghi media_files theo media_id, object_key hoặc original_filename
+ * - Nếu upload_status !== 'ready', thử finalizeVideoUpload để xác minh
+ * - Nếu storage_backend === 'r2' và có bucket, kiểm tra bucket.head(object_key) tồn tại & size > 0
+ */
+export async function verifyMediaOnR2BeforeTaskOrPublish(
+  db: D1Database,
+  env: Env,
+  videoRefOrMediaId: string,
+  ownerUserId: string
+): Promise<{
+  verified: boolean;
+  media?: MediaFileRecord;
+  videoPath?: string;
+  mediaId?: string;
+  objectKey?: string;
+  sizeBytes?: number;
+  error?: string;
+}> {
+  const cleanRef = (videoRefOrMediaId || "")
+    .trim()
+    .replace(/^r2:\/\//, "")
+    .replace(/^d1:\/\/video\//, "");
+
+  if (!cleanRef) {
+    return {
+      verified: false,
+      error: "Thiếu thông tin file video. Vui lòng chọn và tải video lên R2 trước."
+    };
+  }
+
+  let media = await getMediaFileById(db, cleanRef, ownerUserId);
+  if (!media) {
+    return {
+      verified: false,
+      error: "Nguồn video chưa được tải lên Cloudflare R2. Vui lòng chờ tải video lên R2 hoàn tất trước khi lưu hoặc đăng Task."
+    };
+  }
+
+  if (media.upload_status !== "ready") {
+    const finalized = await finalizeVideoUpload(db, env, media.id, ownerUserId);
+    if (!finalized.success || !finalized.media) {
+      return {
+        verified: false,
+        error:
+          finalized.message ||
+          `Video '${media.original_filename}' chưa hoàn tất tải lên R2 (status=${media.upload_status}). Vui lòng tải lại video.`
+      };
+    }
+    media = finalized.media;
+  }
+
+  const bucket = getR2Bucket(env);
+  if (bucket && media.storage_backend === "r2") {
+    const headObj = await bucket.head(media.object_key);
+    if (!headObj || headObj.size <= 0) {
+      return {
+        verified: false,
+        error: `Object '${media.object_key}' không tồn tại hoặc có dung lượng 0 bytes trên Cloudflare R2. Vui lòng tải lại video.`
+      };
+    }
+    return {
+      verified: true,
+      media,
+      videoPath: `r2://${media.id}`,
+      mediaId: media.id,
+      objectKey: media.object_key,
+      sizeBytes: headObj.size || media.size_bytes
+    };
+  }
+
+  return {
+    verified: true,
+    media,
+    videoPath: `r2://${media.id}`,
+    mediaId: media.id,
+    objectKey: media.object_key,
+    sizeBytes: media.size_bytes
+  };
+}
+
+/**
  * Đọc dữ liệu video từ R2 (ưu tiên ReadableStream / chunks) gắn với kiểm tra quyền sở hữu ownerUserId
  */
 export async function openVideoFromStorage(
@@ -350,7 +457,7 @@ export async function openVideoFromStorage(
     .replace(/^d1:\/\/video\//, "")
     .trim();
 
-  const media = await getMediaFileById(db, cleanId, ownerUserId);
+  let media = await getMediaFileById(db, cleanId, ownerUserId);
   if (!media) {
     return {
       found: false,
@@ -359,29 +466,42 @@ export async function openVideoFromStorage(
   }
 
   if (media.upload_status !== "ready") {
-    return {
-      found: false,
-      error: `Video '${media.original_filename}' chưa hoàn tất quá trình tải lên (status=${media.upload_status}).`
-    };
+    const finalized = await finalizeVideoUpload(db, env, media.id, ownerUserId);
+    if (finalized.success && finalized.media) {
+      media = finalized.media;
+    } else {
+      return {
+        found: false,
+        error: `Video '${media.original_filename}' chưa hoàn tất quá trình tải lên (status=${media.upload_status}).`
+      };
+    }
   }
 
   const bucket = getR2Bucket(env);
-  if (bucket && media.storage_backend === "r2") {
+  if (bucket) {
     const obj = await bucket.get(media.object_key);
-    if (!obj) {
+    if (obj) {
+      if ((obj.size || media.size_bytes) <= 0) {
+        return {
+          found: false,
+          error: `Object '${media.object_key}' trên Cloudflare R2 bị rỗng (0 bytes).`
+        };
+      }
+      return {
+        found: true,
+        media,
+        stream: obj.body,
+        sizeBytes: obj.size || media.size_bytes,
+        mimeType: media.mime_type,
+        getBytes: async () => new Uint8Array(await obj.arrayBuffer())
+      };
+    }
+    if (media.storage_backend === "r2") {
       return {
         found: false,
         error: `Object '${media.object_key}' không còn tồn tại trong Cloudflare R2.`
       };
     }
-    return {
-      found: true,
-      media,
-      stream: obj.body,
-      sizeBytes: obj.size || media.size_bytes,
-      mimeType: media.mime_type,
-      getBytes: async () => new Uint8Array(await obj.arrayBuffer())
-    };
   }
 
   const fallbackRow = await db
@@ -422,7 +542,33 @@ export async function deleteUserVideo(
   mediaId: string,
   ownerUserId: string
 ): Promise<{ deleted: boolean; message?: string }> {
-  const deletedRecord = await deleteMediaFileRecord(db, mediaId, ownerUserId);
+  const existing = await getMediaFileById(db, mediaId, ownerUserId);
+  if (!existing) {
+    return {
+      deleted: false,
+      message: "Không tìm thấy file video hoặc bạn không có quyền xóa file này."
+    };
+  }
+
+  // Bảo vệ object R2 đang được sử dụng bởi task chờ lịch / đang xử lý
+  const activeRef = await db
+    .prepare(
+      `SELECT COUNT(*) AS cnt FROM tasks
+       WHERE owner_user_id = ?
+         AND (media_id = ? OR object_key = ? OR video_path = ?)
+         AND status IN ('pending', 'queued', 'processing', 'running')`
+    )
+    .bind(ownerUserId, existing.id, existing.object_key, `r2://${existing.id}`)
+    .first<{ cnt: number }>();
+
+  if (activeRef && Number(activeRef.cnt) > 0) {
+    return {
+      deleted: false,
+      message: `Không thể xóa video '${existing.original_filename}' vì đang có ${Number(activeRef.cnt)} tác vụ chờ đăng hoặc đang xử lý sử dụng video này.`
+    };
+  }
+
+  const deletedRecord = await deleteMediaFileRecord(db, existing.id, ownerUserId);
   if (!deletedRecord) {
     return {
       deleted: false,
@@ -451,6 +597,7 @@ export async function listUserVideos(
 
 /**
  * Tự động dọn dẹp các video lưu trữ trên R2 cũ hơn 30 ngày (1 tháng)
+ * - Không bao giờ xóa video của các task đang pending / queued / processing / running
  * - Xóa object khỏi Cloudflare R2
  * - Xóa fallback blob nếu có
  * - Cập nhật trạng thái media_files thành 'expired'
@@ -470,10 +617,20 @@ export async function cleanupExpiredR2Media(
 
   const { results: expiredMedia } = await db
     .prepare(
-      `SELECT id, owner_user_id, object_key, original_filename, created_at
-       FROM media_files
-       WHERE created_at < ? AND upload_status != 'expired'
-       ORDER BY created_at ASC
+      `SELECT m.id, m.owner_user_id, m.object_key, m.original_filename, m.created_at
+       FROM media_files m
+       WHERE m.created_at < ?
+         AND m.upload_status != 'expired'
+         AND NOT EXISTS (
+           SELECT 1 FROM tasks t
+           WHERE t.owner_user_id = m.owner_user_id
+             AND (t.media_id = m.id OR t.object_key = m.object_key OR t.video_path = ('r2://' || m.id))
+             AND (
+               t.status IN ('queued', 'processing', 'running')
+               OR (t.status = 'pending' AND t.scheduled_at IS NOT NULL)
+             )
+         )
+       ORDER BY m.created_at ASC
        LIMIT ?`
     )
     .bind(cutoffTime, limit)

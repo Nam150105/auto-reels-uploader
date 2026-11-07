@@ -157,12 +157,8 @@ async function main() {
       delete config.d1_databases;
     }
 
-    if (!resolved.r2Ready && config.r2_buckets) {
-      console.log(
-        "[CI Prepare] R2 Bucket 'auto-reels-media' chưa được kích hoạt -> Tạm gỡ r2_buckets để deploy Worker thành công."
-      );
-      delete config.r2_buckets;
-    }
+    // Giữ nguyên config.r2_buckets để Cloudflare Workers luôn gắn kết R2 Bucket 'auto-reels-media'
+    // (không xóa r2_buckets khi CI không có CLOUDFLARE_API_TOKEN).
 
     fs.writeFileSync(WRANGLER_PATH, JSON.stringify(config, null, 2) + "\n", "utf8");
   }

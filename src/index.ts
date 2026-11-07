@@ -801,26 +801,64 @@ export async function handleWorkerRequest(
         }
       }
 
-      // Tự động phân giải media_id & object_key nếu video_path là r2://<media_id>
+      // Tự động phân giải & xác minh media_id, object_key trên R2 trước khi cho phép tạo Task
       let mediaId = body.media_id || null;
       let objectKey = body.object_key || null;
-      if (vPath.startsWith("r2://") || vPath.startsWith("d1://video/") || vPath.startsWith("med_")) {
-        const cleanMediaId = vPath.replace(/^r2:\/\//, "").replace(/^d1:\/\/video\//, "");
-        const mediaRecord = await getMediaFileById(db, cleanMediaId, ownerUserId);
+      let effectiveVideoPath = vPath;
+
+      const isExplicitR2Ref =
+        vPath.startsWith("r2://") ||
+        vPath.startsWith("d1://video/") ||
+        vPath.startsWith("med_") ||
+        Boolean(body.media_id) ||
+        Boolean(body.object_key);
+
+      if (isExplicitR2Ref) {
+        const lookupKey = body.media_id || body.object_key || vPath;
+        const mediaRecord = await getMediaFileById(db, lookupKey, ownerUserId);
         if (!mediaRecord) {
           return jsonResponse(
             { detail: "Video R2 không tồn tại hoặc không thuộc quyền sở hữu của bạn." },
             403
           );
         }
+        if (mediaRecord.upload_status === "failed") {
+          return jsonResponse(
+            {
+              detail:
+                mediaRecord.storage_error ||
+                `Video '${mediaRecord.original_filename}' tải lên R2 bị lỗi. Vui lòng tải lại video.`
+            },
+            400
+          );
+        }
         mediaId = mediaRecord.id;
         objectKey = mediaRecord.object_key;
+        effectiveVideoPath = `r2://${mediaRecord.id}`;
+      } else if (vPath.startsWith("https://") || vPath.startsWith("http://")) {
+        effectiveVideoPath = vPath;
+      } else {
+        // Thử tìm kiếm theo tên file gốc trong kho R2 của người dùng
+        const matchedMedia = await getMediaFileById(db, vPath, ownerUserId);
+        if (matchedMedia && matchedMedia.upload_status !== "failed") {
+          mediaId = matchedMedia.id;
+          objectKey = matchedMedia.object_key;
+          effectiveVideoPath = `r2://${matchedMedia.id}`;
+        } else {
+          return jsonResponse(
+            {
+              detail:
+                "Video chưa được tải lên Cloudflare R2 thành công. Vui lòng chọn file video và chờ tải lên R2 hoàn tất trước khi tạo Task."
+            },
+            400
+          );
+        }
       }
 
       let taskId: number;
       try {
         taskId = await addTask(db, {
-          videoPath: vPath,
+          videoPath: effectiveVideoPath,
           caption: body.caption || "",
           commentText: body.comment_text || "",
           scheduleDate: body.schedule_date || "",
@@ -952,9 +990,12 @@ export async function handleWorkerRequest(
         ownerUserId
       );
 
-      if (!page || !page.page_access_token) {
+      if (!page) {
         return jsonResponse(
-          { detail: `Không tìm thấy Page Access Token hợp lệ cho Fanpage ${task.facebook_page_id}.` },
+          {
+            detail: `Không tìm thấy Fanpage ${task.facebook_page_id} trong danh sách quản lý của bạn.`,
+            error_type: "INVALID_PAGE_TOKEN"
+          },
           400
         );
       }
@@ -971,7 +1012,7 @@ export async function handleWorkerRequest(
 
       const cmtRes = await postReelCommentViaGraphApi(db, env, {
         facebookPageId: page.facebook_page_id || task.facebook_page_id,
-        pageAccessToken: page.page_access_token,
+        pageAccessToken: page.page_access_token || "",
         postId: task.post_id,
         videoId: task.video_id,
         commentText: cleanComment,
@@ -1010,6 +1051,8 @@ export async function handleWorkerRequest(
           {
             success: false,
             comment_status: "failed",
+            error_type: cmtRes.error_type || "META_API_ERROR",
+            error_code: cmtRes.error_code || 400,
             detail: cmtRes.message,
             message: cmtRes.message
           },

@@ -568,9 +568,16 @@
                   <div v-else class="text-slate-500">Đăng ngay</div>
                 </td>
 
-                <!-- Trạng thái (Tách biệt rõ ràng giữa Đăng Reels & Đăng Bình luận) -->
+                <!-- Trạng thái (Tách biệt rõ ràng giữa R2 Storage, Đăng Reels & Đăng Bình luận) -->
                 <td class="py-2.5 px-3 text-center whitespace-nowrap">
                   <div class="flex flex-col gap-1 items-center">
+                    <!-- Trạng thái R2 -->
+                    <div v-if="t.media_id || (t.video_path && t.video_path.startsWith('r2://'))">
+                      <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/20" title="Video đã được lưu và xác minh trên Cloudflare R2">
+                        ☁️ R2: Đã lưu
+                      </span>
+                    </div>
+
                     <!-- Trạng thái Reels -->
                     <div>
                       <span v-if="t.status === 'scheduled'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">🕒 Chờ lịch</span>
@@ -981,19 +988,58 @@
           </div>
 
           <!-- Video Path / URL + Cloud Upload Button + Drag & Drop -->
-          <div>
+          <div class="space-y-2">
             <label class="block text-xs font-semibold text-slate-300 mb-1">
-              URL Video (.mp4) hoặc Tải File Lên Cloud: <span class="text-rose-500">*</span>
+              Video lưu trên Cloudflare R2 hoặc URL Video (.mp4): <span class="text-rose-500">*</span>
             </label>
             <div class="flex items-center gap-2" @dragover.prevent @drop.prevent="handleFileDropSingleTask">
-              <input type="text" v-model="singleTaskForm.video_path" required placeholder="https://.../video.mp4 hoặc bấm Chọn Video để tải từ máy" class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              <input type="text" v-model="singleTaskForm.video_path" required placeholder="r2://med_... hoặc bấm Chọn / Tải Video lên R2" class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               <input type="file" id="cloud-video-file-input" accept="video/mp4,video/quicktime,video/*" class="hidden" @change="handleCloudVideoFileSelected">
-              <button type="button" @click="handleBrowseFileSingleTask" class="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition shrink-0 shadow-md">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-                <span>📁 Chọn / Tải Video</span>
+              <button type="button" @click="handleBrowseFileSingleTask" :disabled="isUploadingVideo" class="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition shrink-0 shadow-md">
+                <svg v-if="isUploadingVideo" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                <span>{{ isUploadingVideo ? 'Đang tải lên R2...' : '📁 Chọn / Tải Video' }}</span>
               </button>
             </div>
-            <p class="text-[11px] text-slate-500 mt-1">Bấm nút để chọn file video từ máy tính/điện thoại tải lên Cloudflare, kéo thả file vào ô, hoặc dán link URL video trực tiếp (https://...mp4).</p>
+
+            <!-- Trạng thái tải lên R2 -->
+            <div v-if="isUploadingVideo" class="p-2.5 rounded-xl bg-blue-950/60 border border-blue-800/60 text-xs text-blue-200 flex items-center gap-2">
+              <svg class="animate-spin w-4 h-4 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+              <span>Đang tải và xác minh file video trên Cloudflare R2 (`auto-reels-media`)... Vui lòng chờ hoàn tất trước khi lưu Task.</span>
+            </div>
+
+            <div v-else-if="uploadedMediaInfo" class="p-2.5 rounded-xl bg-emerald-950/50 border border-emerald-800/60 text-xs text-emerald-200 flex items-center justify-between gap-2">
+              <div class="truncate">
+                <span class="font-bold">☁️ Đã lưu trên R2:</span>
+                <span class="font-mono ml-1">{{ uploadedMediaInfo.filename }}</span>
+                <span class="text-emerald-400 ml-1">({{ uploadedMediaInfo.size_mb }} MB)</span>
+              </div>
+              <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] shrink-0">Đã xác minh</span>
+            </div>
+
+            <div v-else-if="uploadError" class="p-2.5 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-200 flex items-center justify-between gap-2">
+              <span class="truncate">⚠️ {{ uploadError }}</span>
+              <button type="button" @click="retryUploadToR2" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] shrink-0 transition">
+                Thử tải lại lên R2
+              </button>
+            </div>
+
+            <!-- Chọn nhanh video đã có trên R2 -->
+            <div v-if="userMediaFiles && userMediaFiles.filter(m => m.upload_status === 'ready').length > 0" class="flex items-center gap-2 pt-0.5">
+              <span class="text-[11px] text-slate-400 shrink-0">Kho R2 gần đây:</span>
+              <div class="flex items-center gap-1.5 overflow-x-auto pb-1">
+                <button type="button"
+                        v-for="m in userMediaFiles.filter(x => x.upload_status === 'ready').slice(0, 4)"
+                        :key="m.id"
+                        @click="selectExistingR2Video(m)"
+                        class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] text-slate-300 font-mono truncate max-w-[150px] shrink-0 transition"
+                        :title="m.original_filename">
+                  ☁️ {{ m.original_filename }}
+                </button>
+              </div>
+            </div>
+
+            <p class="text-[11px] text-slate-500">Video sẽ được tải lên và xác minh trên Cloudflare R2 trước khi tạo Task hoặc đăng lên Facebook.</p>
           </div>
 
           <!-- Caption -->
@@ -1039,7 +1085,9 @@
 
           <div class="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
             <button type="button" @click="showSingleTaskModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Hủy</button>
-            <button type="submit" class="px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-900/40">Lưu Task</button>
+            <button type="submit" :disabled="isUploadingVideo" class="px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-lg shadow-blue-900/40">
+              {{ isUploadingVideo ? 'Đang tải video lên R2...' : 'Lưu Task' }}
+            </button>
           </div>
         </form>
       </div>
