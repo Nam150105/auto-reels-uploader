@@ -24,7 +24,8 @@ export const REQUIRED_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_posts",
-  "pages_manage_engagement"
+  "pages_manage_engagement",
+  "read_insights"
 ];
 
 export const ESSENTIAL_PAGE_SCOPES = [
@@ -403,6 +404,7 @@ export async function exchangeCodeForToken(
     }
 
     const missingScopes = REQUIRED_SCOPES.filter((s) => !grantedScopes.includes(s));
+    const hasReadInsights = grantedScopes.includes("read_insights");
     const expiresAtIso =
       expiresIn > 0
         ? new Date(Date.now() + expiresIn * 1000).toISOString()
@@ -418,6 +420,7 @@ export async function exchangeCodeForToken(
         tokenType: "long_lived_user",
         scopes: grantedScopes,
         missingScopes,
+        hasReadInsights,
         tokenExpiresAt: expiresAtIso,
         status: "connected",
         tokenStatus: "valid",
@@ -459,7 +462,16 @@ export async function getConnectionStatus(
 ): Promise<Record<string, unknown>> {
   const cfg = getMetaConfig(env);
   const accounts = await getFacebookAccounts(db, cfg.encryptionKey, false, ownerUserId);
-  const connectedAccounts = accounts.filter((a) => a.status === "connected");
+  const connectedAccounts = accounts.filter((a) => a.status === "connected" && a.token_status !== "expired" && a.token_status !== "revoked" && a.token_status !== "invalid");
+  const expiredAccounts = accounts.filter(
+    (a) =>
+      a.status === "expired" ||
+      a.status === "invalid" ||
+      a.token_status === "expired" ||
+      a.token_status === "revoked" ||
+      a.token_status === "invalid" ||
+      Boolean(a.is_expired)
+  );
 
   if (accounts.length === 0) {
     return {
@@ -467,6 +479,8 @@ export async function getConnectionStatus(
       status: "disconnected",
       total_accounts: 0,
       connected_accounts: 0,
+      expired_accounts_count: 0,
+      has_read_insights: false,
       user_id: null,
       user_name: null,
       token_expires_at: null,
@@ -478,11 +492,14 @@ export async function getConnectionStatus(
   }
 
   const primary: FacebookAccountRecord = connectedAccounts[0] || accounts[0];
+  const anyReadInsights = accounts.some((a) => Boolean(a.has_read_insights));
   return {
     is_connected: connectedAccounts.length > 0,
     status: connectedAccounts.length > 0 ? "connected" : primary.status,
     total_accounts: accounts.length,
     connected_accounts: connectedAccounts.length,
+    expired_accounts_count: expiredAccounts.length,
+    has_read_insights: anyReadInsights,
     user_id: primary.facebook_user_id,
     user_name: primary.facebook_user_name,
     token_expires_at: primary.token_expires_at,

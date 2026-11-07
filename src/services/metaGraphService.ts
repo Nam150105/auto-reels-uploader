@@ -31,6 +31,205 @@ import { encryptToken } from "../utils/crypto.ts";
 // 1. SYNC FANPAGES (/me/accounts PAGINATION)
 // ==========================================
 
+export type MetaErrorCategory =
+  | "TOKEN_EXPIRED"
+  | "TOKEN_REVOKED"
+  | "INVALID_TOKEN"
+  | "MISSING_PERMISSION"
+  | "MISSING_PAGE_ROLE"
+  | "PAGE_TOKEN_MISMATCH"
+  | "RATE_LIMIT_OR_TEMPORARY"
+  | "OTHER_API_ERROR";
+
+export interface ClassifiedMetaError {
+  category: MetaErrorCategory;
+  code: number;
+  subcode: number;
+  isTokenDead: boolean;
+  isPermissionError: boolean;
+  retryable: boolean;
+  tokenStatus: "expired" | "revoked" | "invalid" | "missing_permission" | "valid";
+  userMessage: string;
+}
+
+/**
+ * Phân loại chính xác 8 nhóm lỗi Meta Graph API theo Mục 5.1:
+ * 1. TOKEN_EXPIRED (190 / subcode 463)
+ * 2. TOKEN_REVOKED (190 / subcode 458, 460, 467, 490)
+ * 3. INVALID_TOKEN (190, 102)
+ * 4. MISSING_PERMISSION (10, 200 thiếu scope OAuth)
+ * 5. MISSING_PAGE_ROLE (10, 200 thiếu quyền task trên Page: MODERATE, CREATE_CONTENT, ANALYZE)
+ * 6. PAGE_TOKEN_MISMATCH (Page Access Token không khớp Page ID)
+ * 7. RATE_LIMIT_OR_TEMPORARY (1, 2, 4, 17, 32, 341, 613, HTTP 429/5xx)
+ * 8. OTHER_API_ERROR (Lỗi API khác: #100 metric không hỗ trợ, #803 post không tồn tại...)
+ */
+export function classifyMetaApiError(
+  errObjOrCode: Record<string, unknown> | number | null | undefined,
+  httpStatusOrSubcode?: number,
+  maybeMessage?: string
+): ClassifiedMetaError {
+  const isLegacyTuple = typeof errObjOrCode === "number" || typeof maybeMessage === "string";
+  const err: Record<string, unknown> = isLegacyTuple
+    ? {
+        code: Number(errObjOrCode || 0),
+        error_subcode: Number(httpStatusOrSubcode || 0),
+        message: maybeMessage || ""
+      }
+    : (errObjOrCode as Record<string, unknown>) || {};
+  const httpStatus = isLegacyTuple ? 400 : Number(httpStatusOrSubcode || 400);
+  const code = Number(err.code || 0);
+  const subcode = Number(err.error_subcode || 0);
+  const rawMessage = sanitizeSensitiveText(String(err.message || ""));
+  const lower = rawMessage.toLowerCase();
+
+  if (code === 190 || code === 102) {
+    if (
+      subcode === 458 ||
+      subcode === 460 ||
+      subcode === 467 ||
+      subcode === 490 ||
+      lower.includes("revoked") ||
+      lower.includes("not authorized") ||
+      lower.includes("deauthorized") ||
+      lower.includes("changed the password") ||
+      lower.includes("logged out")
+    ) {
+      return {
+        category: "TOKEN_REVOKED",
+        code: code || 190,
+        subcode,
+        isTokenDead: true,
+        isPermissionError: false,
+        retryable: false,
+        tokenStatus: "revoked",
+        userMessage: `Access Token Facebook đã bị thu hồi hoặc đăng xuất khỏi phiên (${code}${subcode ? "." + subcode : ""}). Vui lòng cập nhật Access Token mới.`
+      };
+    }
+
+    if (
+      subcode === 463 ||
+      lower.includes("expired") ||
+      lower.includes("session has expired") ||
+      lower.includes("validating access token")
+    ) {
+      return {
+        category: "TOKEN_EXPIRED",
+        code: code || 190,
+        subcode,
+        isTokenDead: true,
+        isPermissionError: false,
+        retryable: false,
+        tokenStatus: "expired",
+        userMessage: `Access Token Facebook đã hết hạn (${code}${subcode ? "." + subcode : ""}). Vui lòng cập nhật Access Token mới để tiếp tục.`
+      };
+    }
+
+    return {
+      category: "INVALID_TOKEN",
+      code: code || 190,
+      subcode,
+      isTokenDead: true,
+      isPermissionError: false,
+      retryable: false,
+      tokenStatus: "invalid",
+      userMessage: `Access Token Facebook không hợp lệ (${code}${subcode ? "." + subcode : ""}: ${rawMessage || "Invalid OAuth access token"}). Vui lòng kiểm tra và cập nhật lại token.`
+    };
+  }
+
+  if (code === 10 || code === 200 || httpStatus === 403) {
+    const mentionsPageRole =
+      lower.includes("moderate") ||
+      lower.includes("create_content") ||
+      lower.includes("analyze") ||
+      lower.includes("page role") ||
+      lower.includes("admin") ||
+      lower.includes("task");
+    const mentionsOAuthScope =
+      lower.includes("pages_manage_posts") ||
+      lower.includes("pages_read_engagement") ||
+      lower.includes("pages_show_list") ||
+      lower.includes("pages_manage_engagement") ||
+      lower.includes("read_insights");
+
+    if (mentionsPageRole && !mentionsOAuthScope) {
+      return {
+        category: "MISSING_PAGE_ROLE",
+        code: code || 200,
+        subcode,
+        isTokenDead: false,
+        isPermissionError: true,
+        retryable: false,
+        tokenStatus: "missing_permission",
+        userMessage: `Tài khoản hiện không có đủ quyền quản trị (MODERATE / CREATE_CONTENT / ANALYZE) trên Fanpage này (#${code}: ${rawMessage}).`
+      };
+    }
+
+    return {
+      category: "MISSING_PERMISSION",
+      code: code || 200,
+      subcode,
+      isTokenDead: false,
+      isPermissionError: true,
+      retryable: false,
+      tokenStatus: "missing_permission",
+      userMessage: `Access Token thiếu quyền OAuth cần thiết (#${code}: ${rawMessage}). Vui lòng cấp đủ quyền trên Graph API Explorer và cập nhật lại token.`
+    };
+  }
+
+  if (
+    code === 1 ||
+    code === 2 ||
+    code === 4 ||
+    code === 17 ||
+    code === 32 ||
+    code === 341 ||
+    code === 613 ||
+    httpStatus === 429 ||
+    httpStatus >= 500
+  ) {
+    return {
+      category: "RATE_LIMIT_OR_TEMPORARY",
+      code: code || httpStatus,
+      subcode,
+      isTokenDead: false,
+      isPermissionError: false,
+      retryable: true,
+      tokenStatus: "valid",
+      userMessage: `Facebook Graph API đang giới hạn tần suất hoặc gặp lỗi tạm thời (#${code || httpStatus}: ${rawMessage || "Temporary error"}). Vui lòng thử lại sau ít phút.`
+    };
+  }
+
+  if (
+    lower.includes("mismatch") ||
+    (lower.includes("page token") && lower.includes("page_id")) ||
+    lower.includes("does not match target page")
+  ) {
+    return {
+      category: "PAGE_TOKEN_MISMATCH",
+      code: code || 100,
+      subcode,
+      isTokenDead: false,
+      isPermissionError: true,
+      retryable: false,
+      tokenStatus: "missing_permission",
+      userMessage: `Page Access Token không khớp với Fanpage đích (#${code || 100}: ${rawMessage}). Hệ thống cần làm mới Page Token từ Admin.`
+    };
+  }
+
+  return {
+    category: "OTHER_API_ERROR",
+    code: code || httpStatus,
+    subcode,
+    isTokenDead: false,
+    isPermissionError: false,
+    retryable: false,
+    tokenStatus: "valid",
+    userMessage: rawMessage
+      ? `Lỗi từ Facebook Graph API (#${code || httpStatus}): ${rawMessage}`
+      : `Lỗi phản hồi từ Facebook Graph API (HTTP ${httpStatus}).`
+  };
+}
+
 export function extractAccessToken(raw: string): string {
   if (!raw || typeof raw !== "string") return "";
   let text = raw.trim();
@@ -60,31 +259,40 @@ export async function connectFacebookWithAccessToken(
   db: D1Database,
   env: Env,
   rawTokenInput: string,
-  ownerUserId: string
+  ownerUserId: string,
+  targetAccountId: string | null = null
 ): Promise<{
   success: boolean;
   message: string;
+  error_type?: MetaErrorCategory;
   account_id?: string;
   user_id?: string;
   user_name?: string;
   synced_count?: number;
   no_pages?: boolean;
   is_long_lived?: boolean;
+  has_read_insights?: boolean;
+  insights_warning?: string | null;
+  analyze_warning?: string | null;
+  missing_permission_page_ids?: string[];
+  missing_pages_warning?: string | null;
   accounts?: unknown[];
   pages?: unknown[];
+  scopes?: string[];
   missing_scopes?: string[];
 }> {
   const token = extractAccessToken(rawTokenInput);
   if (!token) {
     return {
       success: false,
+      error_type: "INVALID_TOKEN",
       message: "Vui lòng nhập Access Token từ Graph API Explorer."
     };
   }
 
   const cfg = getMetaConfig(env);
 
-  // 1. Xác thực Access Token với Meta Graph API (/me?fields=id,name)
+  // 1. Xác thực Access Token với Meta Graph API (/me?fields=id,name) TRƯỚC KHI ghi đè token cũ (Mục 5.4)
   let fbUserId = "";
   let fbUserName = "Facebook User";
   try {
@@ -94,16 +302,18 @@ export async function connectFacebookWithAccessToken(
     const meData = (await meResp.json()) as Record<string, unknown>;
     if (!meResp.ok || !meData.id) {
       const err = (meData.error || {}) as Record<string, unknown>;
-      const code = Number(err.code || 0);
-      const subcode = Number(err.error_subcode || 0);
-      if (code === 190 || subcode === 463 || subcode === 467) {
+      const classified = classifyMetaApiError(err, meResp.status);
+      if (classified.isTokenDead) {
         return {
           success: false,
-          message: "Access Token đã hết hạn hoặc không hợp lệ. Vui lòng bấm 'Generate Access Token' trên Graph API Explorer để lấy mã mới."
+          error_type: classified.category,
+          message:
+            "Access Token đã hết hạn hoặc không hợp lệ. Vui lòng bấm 'Generate Access Token' trên Graph API Explorer để lấy mã mới."
         };
       }
       return {
         success: false,
+        error_type: classified.category,
         message: "Không thể xác thực Access Token với Facebook. Vui lòng kiểm tra lại token vừa dán."
       };
     }
@@ -112,6 +322,7 @@ export async function connectFacebookWithAccessToken(
   } catch {
     return {
       success: false,
+      error_type: "RATE_LIMIT_OR_TEMPORARY",
       message: "Lỗi kết nối tới Facebook Graph API. Vui lòng kiểm tra mạng và thử lại."
     };
   }
@@ -142,10 +353,20 @@ export async function connectFacebookWithAccessToken(
   if (missingEssential.length > 0) {
     return {
       success: false,
+      error_type: "MISSING_PERMISSION",
       missing_scopes: missingEssential,
       message: `Token thiếu quyền bắt buộc để quản lý Fanpage (${missingEssential.join(", ")}). Vui lòng thêm các quyền này tại Bước 3 trên Graph API Explorer rồi tạo lại token.`
     };
   }
+
+  // Kiểm tra quyền read_insights (Mục 2.3): Nếu thiếu read_insights, vẫn cho phép liên kết & đăng Reels nhưng trả về cảnh báo rõ ràng
+  const hasReadInsights = grantedScopes.includes("read_insights");
+  const allMissingScopes = REQUIRED_SCOPES.filter(
+    (s) => declinedScopes.includes(s) || (grantedScopes.length > 0 && !grantedScopes.includes(s))
+  );
+  const insightsWarning = !hasReadInsights
+    ? "Access Token hiện tại chưa có quyền read_insights. Chức năng đăng Reels vẫn hoạt động, nhưng không thể lấy đầy đủ dữ liệu thống kê Reels."
+    : null;
 
   // 3. Tự động nâng cấp sang Long-Lived User Access Token (~60 ngày) nếu có App Secret
   let finalToken = token;
@@ -176,7 +397,7 @@ export async function connectFacebookWithAccessToken(
 
   const expiresAtIso = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-  // 4. Lưu tài khoản an toàn vào D1 (Token được mã hóa AES-256-GCM, chống trùng lặp)
+  // 4. Lưu tài khoản an toàn vào D1 (Token được mã hóa AES-256-GCM, chống trùng lặp, không lộ token)
   let accountId: string;
   try {
     accountId = await saveFacebookAccount(db, cfg.encryptionKey, {
@@ -186,10 +407,12 @@ export async function connectFacebookWithAccessToken(
       accessToken: finalToken,
       tokenType: isLongLived ? "long_lived_user" : "user_explorer",
       scopes: grantedScopes,
-      missingScopes: [],
+      missingScopes: allMissingScopes,
+      hasReadInsights,
       tokenExpiresAt: expiresAtIso,
       status: "connected",
       tokenStatus: "valid",
+      accountId: targetAccountId,
       ownerUserId
     });
   } catch {
@@ -210,9 +433,13 @@ export async function connectFacebookWithAccessToken(
   });
 
   const syncedCount = syncRes.synced_count || 0;
-  const successMsg = syncRes.no_pages
+  let successMsg = syncRes.no_pages
     ? `Đã liên kết tài khoản Facebook "${fbUserName}", nhưng tài khoản này chưa quản lý Fanpage nào.`
     : `Đã liên kết tài khoản "${fbUserName}" và đồng bộ thành công ${syncedCount} Fanpage!`;
+
+  if (insightsWarning) {
+    successMsg += ` (${insightsWarning})`;
+  }
 
   return {
     success: true,
@@ -223,6 +450,13 @@ export async function connectFacebookWithAccessToken(
     synced_count: syncedCount,
     no_pages: syncRes.no_pages || false,
     is_long_lived: isLongLived,
+    has_read_insights: hasReadInsights,
+    insights_warning: insightsWarning,
+    analyze_warning: syncRes.analyze_warning || null,
+    missing_permission_page_ids: syncRes.missing_permission_page_ids || [],
+    missing_pages_warning: syncRes.missing_pages_warning || null,
+    scopes: grantedScopes,
+    missing_scopes: allMissingScopes,
     accounts: updatedAccounts,
     pages: updatedPages
   };
@@ -236,10 +470,14 @@ export async function syncPagesForAccount(
 ): Promise<{
   success: boolean;
   error_code?: string;
+  error_type?: MetaErrorCategory;
   no_pages?: boolean;
   account_id?: string;
   facebook_user_name?: string | null;
   synced_count?: number;
+  missing_permission_page_ids?: string[];
+  missing_pages_warning?: string | null;
+  analyze_warning?: string | null;
   pages?: unknown[];
   message?: string;
 }> {
@@ -273,6 +511,7 @@ export async function syncPagesForAccount(
     return {
       success: false,
       error_code: "invalid_token",
+      error_type: "INVALID_TOKEN",
       account_id: accountId,
       message: "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại"
     };
@@ -284,6 +523,7 @@ export async function syncPagesForAccount(
 
     let syncedCount = 0;
     const syncedPageIds: string[] = [];
+    const pagesMissingAnalyze: string[] = [];
     let pageGuard = 0;
 
     while (nextUrl && pageGuard < 50) {
@@ -308,12 +548,12 @@ export async function syncPagesForAccount(
 
       if (!resp.ok || data.error) {
         const err = (data.error || {}) as Record<string, unknown>;
-        const code = Number(err.code || 0);
-        const rawErrMsg = String(err.message || "Lỗi gọi /me/accounts");
-        const msg = sanitizeSensitiveText(rawErrMsg);
+        const classified = classifyMetaApiError(err, resp.status);
+        const code = classified.code;
+        const msg = sanitizeSensitiveText(String(err.message || "Lỗi gọi /me/accounts"));
 
-        const isTokenErr = code === 190 || code === 102;
-        const isPermErr = code === 10 || code === 200;
+        const isTokenErr = classified.isTokenDead;
+        const isPermErr = classified.isPermissionError;
 
         await updateFacebookAccountStatus(
           db,
@@ -321,7 +561,7 @@ export async function syncPagesForAccount(
           isTokenErr || isPermErr ? "expired" : "error",
           `Meta Error (${code}): ${msg}`,
           null,
-          isTokenErr || isPermErr ? "expired" : "error"
+          classified.tokenStatus === "valid" ? "error" : classified.tokenStatus
         );
 
         return {
@@ -331,6 +571,7 @@ export async function syncPagesForAccount(
             : isPermErr
               ? "missing_permissions"
               : "facebook_error",
+          error_type: classified.category,
           account_id: accountId,
           message: isTokenErr
             ? "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại"
@@ -354,12 +595,12 @@ export async function syncPagesForAccount(
         const tasksList = hasTasksField ? (item.tasks as unknown[]).map(String) : [];
         const upperTasks = hasTasksField
           ? tasksList.map((t) => t.toUpperCase())
-          : ["CREATE_CONTENT", "MANAGE"];
+          : ["CREATE_CONTENT", "MANAGE", "ANALYZE"];
 
         // Không lấy hoặc lưu những Page mà tài khoản không có quyền quản lý phù hợp
         if (hasTasksField) {
           const hasValidManagementTask = upperTasks.some((t) =>
-            ["MANAGE", "CREATE_CONTENT", "MODERATE", "ADVERTISE"].includes(t)
+            ["MANAGE", "CREATE_CONTENT", "MODERATE", "ADVERTISE", "ANALYZE"].includes(t)
           );
           if (!hasValidManagementTask) {
             continue;
@@ -375,6 +616,12 @@ export async function syncPagesForAccount(
           upperTasks.includes("CREATE_CONTENT") ||
           upperTasks.includes("MANAGE") ||
           upperTasks.includes("MODERATE");
+        const canAnalyze =
+          upperTasks.includes("ANALYZE") || upperTasks.includes("MANAGE");
+
+        if (!canAnalyze) {
+          pagesMissingAnalyze.push(pageName);
+        }
 
         await upsertFacebookPage(db, cfg.encryptionKey, {
           facebookPageId: pageId,
@@ -384,6 +631,7 @@ export async function syncPagesForAccount(
           pageAccessToken: pageToken,
           tasks: upperTasks,
           canPost,
+          canAnalyze,
           isPublished,
           connectedAccountId: accountId,
           tokenStatus: "valid",
@@ -398,11 +646,20 @@ export async function syncPagesForAccount(
       nextUrl = paging.next || null;
     }
 
-    // Đồng bộ lại các liên kết Page cũ không còn thuộc quyền quản lý của Admin này
-    await removeStaleAccountPages(db, accountId, ownerUserId, syncedPageIds);
+    // Đồng bộ lại các liên kết Page cũ không còn thuộc quyền quản lý của Admin này (Giữ Page cũ nhưng đánh dấu thiếu quyền theo Mục 5.4)
+    const stalePageIds = await removeStaleAccountPages(db, accountId, ownerUserId, syncedPageIds);
 
     const nowIso = new Date().toISOString();
     await updateFacebookAccountStatus(db, accountId, "connected", null, nowIso, "valid");
+
+    const analyzeWarning =
+      pagesMissingAnalyze.length > 0
+        ? "Tài khoản hiện không có quyền ANALYZE trên Page này để đọc Insights."
+        : null;
+    const missingPagesWarning =
+      stalePageIds.length > 0
+        ? "Page này chưa có trong token mới hoặc thiếu quyền quản lý."
+        : null;
 
     if (syncedCount === 0) {
       return {
@@ -411,6 +668,9 @@ export async function syncPagesForAccount(
         account_id: accountId,
         facebook_user_name: account.facebook_user_name,
         synced_count: 0,
+        missing_permission_page_ids: stalePageIds,
+        missing_pages_warning: missingPagesWarning,
+        analyze_warning: analyzeWarning,
         message: "Tài khoản này chưa quản lý Fanpage nào"
       };
     }
@@ -421,6 +681,9 @@ export async function syncPagesForAccount(
       account_id: accountId,
       facebook_user_name: account.facebook_user_name,
       synced_count: syncedCount,
+      missing_permission_page_ids: stalePageIds,
+      missing_pages_warning: missingPagesWarning,
+      analyze_warning: analyzeWarning,
       message: `Đã kết nối tài khoản Facebook thành công (${syncedCount} Fanpage).`
     };
   } catch (err) {
@@ -429,6 +692,7 @@ export async function syncPagesForAccount(
     return {
       success: false,
       error_code: "facebook_error",
+      error_type: "RATE_LIMIT_OR_TEMPORARY",
       account_id: accountId,
       message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
     };
@@ -876,15 +1140,18 @@ export interface PagePermissionVerificationResult {
   resolvedPageName: string;
   grantedScopes: string[];
   pageTasks: string[];
+  hasReadInsights?: boolean;
+  canAnalyze?: boolean;
   errorType?: MetaPermissionErrorCode;
+  errorCategory?: MetaErrorCategory;
   errorCode?: number;
   message?: string;
 }
 
 /**
- * Hàm kiểm tra thống nhất Token và Quyền của Fanpage (dùng chung cho cả Publish và Retry-Comment):
+ * Hàm kiểm tra thống nhất Token và Quyền của Fanpage (dùng chung cho cả Publish, Retry-Comment & Insights):
  * - Tách bạch hoàn toàn App Permissions (scopes của User Access Token) và Page Tasks (tasks trên /me/accounts)
- * - Không bao giờ kiểm tra MODERATE hoặc CREATE_CONTENT trong danh sách scopes của User Token
+ * - Không bao giờ kiểm tra MODERATE, CREATE_CONTENT hay ANALYZE trong danh sách scopes của User Token
  * - Tự động xác minh Page Access Token khớp với facebookPageId hoặc làm mới từ Admin User Access Token
  */
 export async function verifyPageTokenAndPermissions(
@@ -894,7 +1161,7 @@ export async function verifyPageTokenAndPermissions(
     facebookPageId: string;
     pageAccessToken: string;
     ownerUserId: string;
-    mode: "publish" | "comment";
+    mode: "publish" | "comment" | "insights";
   }
 ): Promise<PagePermissionVerificationResult> {
   const cfg = getMetaConfig(env);
@@ -913,6 +1180,30 @@ export async function verifyPageTokenAndPermissions(
   let resolvedPageName = pageRec?.page_name || pageId;
   let pageTasks: string[] = Array.isArray(pageRec?.tasks) ? [...pageRec.tasks] : [];
   let grantedScopes: string[] = [];
+  let hasReadInsights = false;
+
+  if (ownerUserId) {
+    try {
+      const accs = await getFacebookAccounts(db, cfg.encryptionKey, false, ownerUserId);
+      for (const acc of accs) {
+        if (Array.isArray(acc.scopes)) {
+          for (const s of acc.scopes) {
+            if (!grantedScopes.includes(s)) grantedScopes.push(s);
+          }
+        }
+        if (acc.has_read_insights) hasReadInsights = true;
+      }
+      if (!hasReadInsights && grantedScopes.includes("read_insights")) {
+        hasReadInsights = true;
+      }
+    } catch {}
+  }
+
+  const upperTasksInit = pageTasks.map((t) => String(t).toUpperCase());
+  let canAnalyze =
+    Boolean(pageRec?.can_analyze) ||
+    upperTasksInit.includes("ANALYZE") ||
+    upperTasksInit.includes("MANAGE");
 
   if (!effectiveToken) {
     return {
@@ -922,7 +1213,10 @@ export async function verifyPageTokenAndPermissions(
       resolvedPageName,
       grantedScopes,
       pageTasks,
+      hasReadInsights,
+      canAnalyze,
       errorType: "INVALID_PAGE_TOKEN",
+      errorCategory: "INVALID_TOKEN",
       errorCode: 190,
       message: "Thiếu Page Access Token hợp lệ. Vui lòng đồng bộ hoặc liên kết lại Facebook."
     };
@@ -930,6 +1224,7 @@ export async function verifyPageTokenAndPermissions(
 
   let tokenPageId = "";
   let tokenExpired = false;
+  let tokenRevoked = false;
   let tokenInvalid = false;
 
   try {
@@ -942,17 +1237,12 @@ export async function verifyPageTokenAndPermissions(
       if (meData.name) resolvedPageName = String(meData.name).trim();
     } else if (meResp.status === 400 || meResp.status === 401) {
       const errBody = (await meResp.json().catch(() => ({}))) as {
-        error?: { code?: number; message?: string };
+        error?: Record<string, unknown>;
       };
-      const code = Number(errBody.error?.code || 0);
-      const msg = String(errBody.error?.message || "").toLowerCase();
-      if (code === 190 || code === 102) {
-        if (msg.includes("expired") || msg.includes("session")) {
-          tokenExpired = true;
-        } else {
-          tokenInvalid = true;
-        }
-      }
+      const classified = classifyMetaApiError(errBody.error, meResp.status);
+      if (classified.category === "TOKEN_EXPIRED") tokenExpired = true;
+      else if (classified.category === "TOKEN_REVOKED") tokenRevoked = true;
+      else if (classified.category === "INVALID_TOKEN") tokenInvalid = true;
     }
   } catch {
     // Ignore transient network check errors
@@ -961,7 +1251,7 @@ export async function verifyPageTokenAndPermissions(
   const isTokenMismatched = Boolean(tokenPageId && resolvedPageId && tokenPageId !== resolvedPageId);
 
   // Tự động khôi phục Page Access Token chuẩn từ User Access Token của Admin nếu lệch hoặc hết hạn
-  if ((tokenExpired || tokenInvalid || isTokenMismatched) && ownerUserId && resolvedPageId) {
+  if ((tokenExpired || tokenRevoked || tokenInvalid || isTokenMismatched) && ownerUserId && resolvedPageId) {
     try {
       const userAccounts = await getFacebookAccounts(db, cfg.encryptionKey, true, ownerUserId);
       for (const acc of userAccounts) {
@@ -970,6 +1260,7 @@ export async function verifyPageTokenAndPermissions(
             if (!grantedScopes.includes(s)) grantedScopes.push(s);
           }
         }
+        if (acc.has_read_insights) hasReadInsights = true;
         if (!acc.access_token) continue;
         const pageResp = await fetch(
           `${cfg.graphBase}/${resolvedPageId}?fields=access_token,name,tasks&access_token=${encodeURIComponent(acc.access_token)}`
@@ -986,8 +1277,10 @@ export async function verifyPageTokenAndPermissions(
             if (pageData.name) resolvedPageName = String(pageData.name);
             if (Array.isArray(pageData.tasks)) {
               pageTasks = pageData.tasks.map((t) => String(t).toUpperCase());
+              canAnalyze = pageTasks.includes("ANALYZE") || pageTasks.includes("MANAGE");
             }
             tokenExpired = false;
+            tokenRevoked = false;
             tokenInvalid = false;
 
             const encToken = await encryptToken(effectiveToken, cfg.encryptionKey, "v2");
@@ -1019,7 +1312,10 @@ export async function verifyPageTokenAndPermissions(
       resolvedPageName,
       grantedScopes,
       pageTasks,
+      hasReadInsights,
+      canAnalyze,
       errorType: "PAGE_TOKEN_MISMATCH",
+      errorCategory: "PAGE_TOKEN_MISMATCH",
       errorCode: 400,
       message: `Page ID không khớp: Token đang thuộc về "${resolvedPageName}" (${tokenPageId}), không khớp với Fanpage của tác vụ (${resolvedPageId}).`
     };
@@ -1033,9 +1329,29 @@ export async function verifyPageTokenAndPermissions(
       resolvedPageName,
       grantedScopes,
       pageTasks,
+      hasReadInsights,
+      canAnalyze,
       errorType: "TOKEN_EXPIRED",
+      errorCategory: "TOKEN_EXPIRED",
       errorCode: 190,
       message: "Page Access Token đã hết hạn. Vui lòng liên kết lại tài khoản Facebook."
+    };
+  }
+
+  if (tokenRevoked) {
+    return {
+      valid: false,
+      effectivePageToken: effectiveToken,
+      resolvedPageId,
+      resolvedPageName,
+      grantedScopes,
+      pageTasks,
+      hasReadInsights,
+      canAnalyze,
+      errorType: "TOKEN_EXPIRED",
+      errorCategory: "TOKEN_REVOKED",
+      errorCode: 190,
+      message: "Access Token Facebook đã bị thu hồi. Vui lòng cập nhật Access Token mới."
     };
   }
 
@@ -1047,7 +1363,10 @@ export async function verifyPageTokenAndPermissions(
       resolvedPageName,
       grantedScopes,
       pageTasks,
+      hasReadInsights,
+      canAnalyze,
       errorType: "INVALID_PAGE_TOKEN",
+      errorCategory: "INVALID_TOKEN",
       errorCode: 190,
       message: "Page Access Token không hợp lệ. Vui lòng liên kết lại tài khoản Facebook."
     };
@@ -1059,7 +1378,9 @@ export async function verifyPageTokenAndPermissions(
     resolvedPageId,
     resolvedPageName,
     grantedScopes,
-    pageTasks
+    pageTasks,
+    hasReadInsights,
+    canAnalyze
   };
 }
 

@@ -236,7 +236,8 @@ async function runAll30Tests() {
     "migrations/0002_indexes.sql",
     "migrations/0003_security_and_tokens.sql",
     "migrations/0004_task_comment_columns.sql",
-    "migrations/0005_r2_and_task_lifecycle.sql"
+    "migrations/0005_r2_and_task_lifecycle.sql",
+    "migrations/0006_task_lock_and_reels_insights.sql"
   ];
   for (let pass = 1; pass <= 2; pass++) {
     for (const mf of migFiles) {
@@ -267,7 +268,9 @@ async function runAll30Tests() {
     "task_logs",
     "data_deletion_requests",
     "rate_limits",
-    "user_page_permissions"
+    "user_page_permissions",
+    "reel_insight_snapshots",
+    "reel_insight_metric_items"
   ]) {
     assert.ok(tableNames.has(required), `Thiếu bảng/view ${required} trong D1`);
   }
@@ -281,7 +284,12 @@ async function runAll30Tests() {
     "r2_status",
     "uploaded_at",
     "published_at",
-    "last_processed_at"
+    "last_processed_at",
+    "publish_status",
+    "is_locked",
+    "analytics_status",
+    "analytics_last_synced_at",
+    "analytics_error"
   ]) {
     assert.ok(taskColNames.has(c), `Thiếu cột ${c} trong bảng tasks`);
   }
@@ -503,7 +511,7 @@ async function runAll30Tests() {
 
     // 2. /me Profile
     if (u.includes("/me?fields=id,name")) {
-      if (u.includes("EAAB_EXPLORER_TOKEN_VALID")) {
+      if (u.includes("EAAB_EXPLORER_TOKEN_VALID") || u.includes("EAAB_EXPLORER_TOKEN_WITH_INSIGHTS") || u.includes("EAAB_EXPLORER_TOKEN_PARTIAL_PAGES")) {
         return new Response(JSON.stringify({ id: "fb_uid_exp_1", name: "Nam Explorer Admin" }), { status: 200 });
       }
       if (u.includes("EAAB_EXPLORER_TOKEN_INVALID")) {
@@ -542,6 +550,21 @@ async function runAll30Tests() {
           { status: 200 }
         );
       }
+      if (u.includes("EAAB_EXPLORER_TOKEN_WITH_INSIGHTS") || u.includes("EAAB_EXPLORER_TOKEN_PARTIAL_PAGES")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { permission: "public_profile", status: "granted" },
+              { permission: "pages_show_list", status: "granted" },
+              { permission: "pages_read_engagement", status: "granted" },
+              { permission: "pages_manage_posts", status: "granted" },
+              { permission: "pages_manage_engagement", status: "granted" },
+              { permission: "read_insights", status: "granted" }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
       return new Response(
         JSON.stringify({
           data: [
@@ -558,6 +581,44 @@ async function runAll30Tests() {
 
     // 4. /me/accounts (with multi-page cursor pagination for Alice Admin 1, and overlapping Page for Alice Admin 2)
     if (u.includes("/me/accounts")) {
+      if (u.includes("EAAB_EXPLORER_TOKEN_PARTIAL_PAGES")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page_exp_1",
+                name: "Hidden Chapters",
+                access_token: "EAAB_PAGE_TOKEN_EXP_1_NEW",
+                tasks: ["CREATE_CONTENT", "MODERATE", "ANALYZE", "MANAGE"]
+              }
+            ],
+            paging: {}
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes("EAAB_EXPLORER_TOKEN_WITH_INSIGHTS")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page_exp_1",
+                name: "Hidden Chapters",
+                access_token: "EAAB_PAGE_TOKEN_EXP_1_INSIGHTS",
+                tasks: ["CREATE_CONTENT", "MODERATE", "ANALYZE", "MANAGE"]
+              },
+              {
+                id: "page_exp_2",
+                name: "Zyntrix Vietnam",
+                access_token: "EAAB_PAGE_TOKEN_EXP_2_INSIGHTS",
+                tasks: ["CREATE_CONTENT", "MODERATE", "ANALYZE", "MANAGE"]
+              }
+            ],
+            paging: {}
+          }),
+          { status: 200 }
+        );
+      }
       if (u.includes("EAAB_EXPLORER_TOKEN_VALID")) {
         return new Response(
           JSON.stringify({
@@ -797,6 +858,103 @@ async function runAll30Tests() {
 
     if (u.match(/\/cmt_[a-zA-Z0-9]+/)) {
       return new Response(JSON.stringify({ id: "cmt_verified" }), { status: 200 });
+    }
+
+    // 7. Reels Video Insights API (/{video_id}/video_insights)
+    if (u.includes("/video_insights")) {
+      // Nếu gọi với token không có read_insights (EAAB_PAGE_TOKEN_EXP_1 cũ), trả về lỗi thiếu quyền (#200)
+      if (u.includes("EAAB_PAGE_TOKEN_EXP_1&") || u.endsWith("EAAB_PAGE_TOKEN_EXP_1")) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "(#200) Requires read_insights permission to access video_insights",
+              type: "OAuthException",
+              code: 200
+            }
+          }),
+          { status: 403 }
+        );
+      }
+      // Nếu batch metric có chứa metric không hỗ trợ post_video_retention_graph, giả lập Meta trả lỗi #100 để kiểm tra cơ chế fallback từng metric
+      if (u.includes("post_video_retention_graph") && (u.includes(",") || u.includes("%2C") || u.includes("%2c"))) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "(#100) Tried accessing nonexisting field (post_video_retention_graph) on node type (Video)",
+              type: "OAuthException",
+              code: 100
+            }
+          }),
+          { status: 400 }
+        );
+      }
+      if (u.includes("metric=post_video_retention_graph")) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "(#100) Metric post_video_retention_graph is not supported for Reels v27.0",
+              type: "OAuthException",
+              code: 100
+            }
+          }),
+          { status: 400 }
+        );
+      }
+      const metricMatch = /[?&]metric=([^&]+)/.exec(u);
+      const metricName = metricMatch ? decodeURIComponent(metricMatch[1]) : "";
+      const metricMap = {
+        fb_reels_total_plays: 12500,
+        post_impressions_unique: 9800,
+        post_video_view_time: 185000,
+        post_video_avg_time_watched: 6500,
+        fb_reels_replay_count: 1400,
+        post_video_views: 11000,
+        post_video_complete_views_30s: 4200,
+        post_video_Reactions_by_type_total: { like: 320, love: 80 },
+        post_video_Social_actions_count_unique: { comment: 45, share: 25 }
+      };
+      if (metricName && metricMap[metricName] !== undefined) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                name: metricName,
+                period: "lifetime",
+                values: [{ value: metricMap[metricName] }]
+              }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    }
+
+    // 8. Video Node Fields (fields=id,views,length,permalink_url)
+    if (u.includes("fields=id,views,length,permalink_url")) {
+      return new Response(
+        JSON.stringify({
+          id: "1439027771006176",
+          views: 12500,
+          length: 28.5,
+          permalink_url: "/reel/1439027771006176/",
+          created_time: "2026-11-06T20:25:00+0000"
+        }),
+        { status: 200 }
+      );
+    }
+
+    // 9. Post Node Engagement Summary (fields=id,shares,reactions.summary)
+    if (u.includes("fields=id,shares,reactions.summary")) {
+      return new Response(
+        JSON.stringify({
+          id: "1418723557985686_122107908045520254",
+          shares: { count: 25 },
+          reactions: { summary: { total_count: 400 } },
+          comments: { summary: { total_count: 45 } }
+        }),
+        { status: 200 }
+      );
     }
 
     return originalFetch(input, init);
@@ -2039,10 +2197,351 @@ async function runAll30Tests() {
   assert.equal(smartNoonFrom0016.scheduledAtUtc, noonVnUtc + 60);
   console.log("  ✓ [Test 36] Chuẩn hóa thời gian 24 tiếng (00:00 - 23:59) & Tự động nhận diện SA/CH/AM/PM chính xác");
 
+  // --------------------------------------------------------------------------
+  // [TEST 37] KHÓA TASK SAU KHI ĐĂNG REELS THÀNH CÔNG & KHÓA KHI ĐANG XỬ LÝ (PHẦN 1)
+  // --------------------------------------------------------------------------
+  // 1. finishedWithCmt đã có status = 'success' (từ Test 31) -> Phải có is_locked = true và publish_status = 'success'
+  const tasksListForLock = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const lockedSuccessTask = tasksListForLock.find((t) => t.id === finishedWithCmt.id);
+  assert.equal(lockedSuccessTask.status, "success");
+  assert.equal(lockedSuccessTask.publish_status, "success");
+  assert.equal(lockedSuccessTask.is_locked, true, "Task đã đăng thành công phải có is_locked = true");
+
+  // 2. Thử PUT /api/tasks/:id trên task đã đăng thành công -> Bị chặn 403 với TASK_ALREADY_PUBLISHED
+  const editPublishedResp = await callWorker(`/api/tasks/${lockedSuccessTask.id}`, {
+    method: "PUT",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      caption: "Cố tình sửa caption task đã đăng",
+      facebook_page_id: "page_exp_2"
+    })
+  });
+  assert.equal(editPublishedResp.status, 403, "Không được phép sửa task đã đăng thành công");
+  const editPublishedErr = await editPublishedResp.json();
+  assert.equal(editPublishedErr.error_code, "TASK_ALREADY_PUBLISHED");
+  assert.ok(
+    editPublishedErr.detail.startsWith(
+      "TASK_ALREADY_PUBLISHED: Task đã đăng Reels thành công và không thể chỉnh sửa."
+    )
+  );
+
+  // 3. Thử DELETE /api/tasks/:id trên task đã đăng thành công -> Bị chặn 403 với TASK_ALREADY_PUBLISHED
+  const delPublishedResp = await callWorker(`/api/tasks/${lockedSuccessTask.id}`, {
+    method: "DELETE",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(delPublishedResp.status, 403, "Không được phép xóa task đã đăng thành công");
+  const delPublishedErr = await delPublishedResp.json();
+  assert.equal(delPublishedErr.error_code, "TASK_ALREADY_PUBLISHED");
+
+  // 4. Thử POST /api/tasks/:id/reset trên task đã đăng thành công -> Bị chặn 403 với TASK_ALREADY_PUBLISHED
+  const resetPublishedResp = await callWorker(`/api/tasks/${lockedSuccessTask.id}/reset`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(resetPublishedResp.status, 403, "Không được phép reset task đã đăng thành công");
+  const resetPublishedErr = await resetPublishedResp.json();
+  assert.equal(resetPublishedErr.error_code, "TASK_ALREADY_PUBLISHED");
+
+  // 5. Thử Bulk Delete chỉ chứa task đã đăng thành công -> Bị chặn 403 với TASK_ALREADY_PUBLISHED
+  const bulkDelPublishedOnlyResp = await callWorker("/api/tasks/bulk-delete", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: [lockedSuccessTask.id] })
+  });
+  assert.equal(bulkDelPublishedOnlyResp.status, 403, "Bulk delete chỉ chứa task đã đăng phải bị chặn");
+  const bulkDelPublishedOnlyErr = await bulkDelPublishedOnlyResp.json();
+  assert.equal(bulkDelPublishedOnlyErr.error_code, "TASK_ALREADY_PUBLISHED");
+
+  // 6. Thử Bulk Delete hỗn hợp (1 task pending + 1 task đã đăng thành công) -> Chỉ xóa task pending, giữ nguyên task đã đăng
+  const mixPendingTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task pending xóa chung với task locked"
+    })
+  });
+  const mixPendingTask = (await mixPendingTaskResp.json()).task;
+  const bulkDelMixedResp = await callWorker("/api/tasks/bulk-delete", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: [mixPendingTask.id, lockedSuccessTask.id] })
+  });
+  assert.equal(bulkDelMixedResp.status, 200);
+  const bulkDelMixedData = await bulkDelMixedResp.json();
+  assert.equal(bulkDelMixedData.deleted_count, 1, "Chỉ được xóa 1 task pending");
+  assert.ok(bulkDelMixedData.skipped_locked_ids.includes(lockedSuccessTask.id), "Phải ghi nhận đã bỏ qua task locked");
+
+  const verifyStillExists = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  assert.ok(verifyStillExists.some((t) => t.id === lockedSuccessTask.id), "Task đã đăng thành công vẫn phải nguyên vẹn trong D1");
+
+  // 7. Kiểm tra khóa khi task đang xử lý (status = 'running' / 'processing' / 'queued')
+  const inFlightTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task đang chạy"
+    })
+  });
+  const inFlightTask = (await inFlightTaskResp.json()).task;
+  await d1.prepare("UPDATE tasks SET status = 'running', publish_status = 'running' WHERE id = ?").bind(inFlightTask.id).run();
+
+  const editRunningResp = await callWorker(`/api/tasks/${inFlightTask.id}`, {
+    method: "PUT",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ caption: "Sửa khi đang chạy" })
+  });
+  assert.equal(editRunningResp.status, 409, "Không được sửa task đang xử lý");
+  const editRunningErr = await editRunningResp.json();
+  assert.equal(editRunningErr.error_code, "TASK_IN_PROGRESS");
+
+  // Đặt lại failed để kiểm tra task failed vẫn cho phép sửa/reset
+  await d1.prepare("UPDATE tasks SET status = 'failed', publish_status = 'failed' WHERE id = ?").bind(inFlightTask.id).run();
+  const editFailedResp = await callWorker(`/api/tasks/${inFlightTask.id}`, {
+    method: "PUT",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ caption: "Đã sửa lại task failed thành công" })
+  });
+  assert.equal(editFailedResp.status, 200, "Task failed phải cho phép sửa để thử lại");
+  console.log("  ✓ [Test 37] Khóa Task sau khi đăng Reels thành công (TASK_ALREADY_PUBLISHED) & Khóa khi đang xử lý (TASK_CURRENTLY_RUNNING)");
+
+  // --------------------------------------------------------------------------
+  // [TEST 38] BỔ SUNG QUYỀN read_insights & TRANG THỐNG KÊ REELS INSIGHTS v27.0 (PHẦN 2, 3, 4, 6, 7)
+  // --------------------------------------------------------------------------
+  // 1. Khi token hiện tại (EAAB_EXPLORER_TOKEN_VALID) chưa có read_insights:
+  // Kiểm tra đồng bộ Insights trả về cảnh báo thiếu quyền rõ ràng mà không làm hỏng hệ thống
+  const syncWithoutPermResp = await callWorker(`/api/tasks/${staleTask.id}/sync-insights`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(syncWithoutPermResp.status, 200);
+  const syncWithoutPermData = await syncWithoutPermResp.json();
+  assert.equal(syncWithoutPermData.analytics_status, "partial", "Thiếu read_insights nhưng vẫn lấy được tương tác cơ bản -> partial");
+  assert.ok(
+    syncWithoutPermData.warnings.some((w) => w.includes("read_insights") || w.includes("ANALYZE")),
+    "Phải có cảnh báo thiếu quyền read_insights hoặc ANALYZE"
+  );
+  assert.equal(
+    syncWithoutPermData.snapshot.reach,
+    null,
+    "Khi thiếu read_insights, chỉ số Reach không lấy được phải là null chứ không bị ép về 0"
+  );
+
+  // 2. Liên kết/Cập nhật token có đầy đủ read_insights và ANALYZE (EAAB_EXPLORER_TOKEN_WITH_INSIGHTS)
+  const connectInsightsResp = await callWorker("/api/meta/connect-token", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ access_token: "EAAB_EXPLORER_TOKEN_WITH_INSIGHTS" })
+  });
+  assert.equal(connectInsightsResp.status, 200);
+  const connectInsightsData = await connectInsightsResp.json();
+  assert.equal(connectInsightsData.has_read_insights, true, "Token mới phải ghi nhận has_read_insights = true");
+  assert.equal(connectInsightsData.insights_warning, null, "Có đủ read_insights thì không còn cảnh báo thiếu quyền");
+  assert.equal(connectInsightsData.analyze_warning, null, "Có đủ quyền ANALYZE trên Page thì không còn cảnh báo");
+
+  // 3. Đồng bộ Insights cho bài Reels đã đăng (staleTask: video_id=1439027771006176, post_id=1418723557985686_122107908045520254)
+  const syncSingleResp = await callWorker(`/api/tasks/${staleTask.id}/sync-insights`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(syncSingleResp.status, 200);
+  const syncSingleData = await syncSingleResp.json();
+  assert.equal(syncSingleData.success, true, "Đồng bộ Insights phải thành công khi có read_insights");
+  assert.equal(syncSingleData.analytics_status, "success");
+  assert.equal(syncSingleData.snapshot.plays, 12500);
+  assert.equal(syncSingleData.snapshot.views, 12500);
+  assert.equal(syncSingleData.snapshot.reach, 9800);
+  assert.equal(syncSingleData.snapshot.total_watch_time_ms, 185000);
+  assert.equal(syncSingleData.snapshot.avg_watch_time_ms, 6500);
+  assert.equal(syncSingleData.snapshot.replays, 1400);
+  assert.equal(syncSingleData.snapshot.likes, 400);
+  assert.equal(syncSingleData.snapshot.comments, 45);
+  assert.equal(syncSingleData.snapshot.shares, 25);
+  assert.equal(syncSingleData.snapshot.total_interactions, 470);
+
+  // 4. Đồng bộ lại lần 2 trong cùng ngày -> Không tạo trùng lặp bản ghi snapshot cùng (task_id, sync_date)
+  await callWorker(`/api/tasks/${staleTask.id}/sync-insights`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  const snapCountRow = await d1
+    .prepare("SELECT COUNT(*) AS cnt FROM reel_insight_snapshots WHERE task_id = ?")
+    .bind(staleTask.id)
+    .first();
+  assert.equal(Number(snapCountRow.cnt), 1, "Đồng bộ nhiều lần trong ngày phải UPSERT chứ không tạo trùng snapshot");
+
+  // 5. Truy vấn Dashboard Thống kê Reels GET /api/insights/reels (với bộ lọc Page & Thời gian)
+  const dashResp = await callWorker("/api/insights/reels?range=30d&sort_by=views&sort_dir=desc", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(dashResp.status, 200);
+  const dashData = await dashResp.json();
+  assert.ok(dashData.total_published_reels >= 1);
+  assert.equal(dashData.overview.total_views, 12500);
+  assert.equal(dashData.overview.total_reach, 9800);
+  assert.equal(dashData.overview.total_interactions, 470);
+  assert.equal(dashData.overview.total_watch_time_ms, 185000);
+  assert.equal(dashData.overview.avg_watch_time_ms, 6500);
+  assert.ok(Array.isArray(dashData.charts.views_over_time));
+  assert.ok(Array.isArray(dashData.charts.performance_by_reel));
+  assert.ok(Array.isArray(dashData.charts.page_comparison));
+
+  // 6. Truy vấn Chi tiết Insights của 1 Reel GET /api/insights/reels/:taskId
+  const detailResp = await callWorker(`/api/insights/reels/${staleTask.id}`, {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(detailResp.status, 200);
+  const detailData = await detailResp.json();
+  assert.equal(detailData.task.id, staleTask.id);
+  assert.equal(detailData.task.video_id, "1439027771006176");
+  assert.equal(detailData.latest_snapshot.plays, 12500);
+  assert.ok(detailData.metrics.some((m) => m.metric_name === "fb_reels_total_plays" && m.status === "supported"));
+  assert.ok(
+    detailData.metrics.some((m) => m.metric_name === "post_video_retention_graph" && m.status === "unavailable" && m.value === null),
+    "Metric không được hỗ trợ phải có value = null chứ không bị ép về 0"
+  );
+
+  // 7. Cô lập dữ liệu Multi-User: Bob không được xem hoặc đồng bộ Insights của Alice
+  const bobStealInsightResp = await callWorker(`/api/insights/reels/${staleTask.id}`, {
+    headers: { Cookie: `session_token=${tokenB}` }
+  });
+  assert.equal(bobStealInsightResp.status, 404, "User khác không được xem chi tiết Insights của Alice");
+
+  const bobStealDashResp = await callWorker("/api/insights/reels?range=30d", {
+    headers: { Cookie: `session_token=${tokenB}` }
+  });
+  const bobDashData = await bobStealDashResp.json();
+  assert.equal(bobDashData.reels.length, 0, "Dashboard Insights của Bob không được chứa Reels của Alice");
+
+  // 8. Kiểm tra route HTML /insights trả về giao diện ứng dụng
+  const insightsPageResp = await callWorker("/insights", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(insightsPageResp.status, 200);
+  const insightsHtml = await insightsPageResp.text();
+  assert.ok(insightsHtml.includes("Thống kê Reels"), "Route /insights phải hiển thị giao diện Thống kê Reels");
+  console.log("  ✓ [Test 38] Quyền read_insights + ANALYZE, Đồng bộ Meta Video Insights v27.0, Lưu Snapshot D1 & Cô lập Multi-User");
+
+  // --------------------------------------------------------------------------
+  // [TEST 39] PHÂN LOẠI 8 LOẠI LỖI META & CẬP NHẬT TOKEN AN TOÀN KHÔNG MẤT DỮ LIỆU (PHẦN 5)
+  // --------------------------------------------------------------------------
+  const { classifyMetaApiError } = await import("../src/services/metaGraphService.ts");
+
+  assert.equal(
+    classifyMetaApiError(190, 463, "Error validating access token: Session has expired").category,
+    "TOKEN_EXPIRED"
+  );
+  assert.equal(
+    classifyMetaApiError(190, 458, "User has not authorized application").category,
+    "TOKEN_REVOKED"
+  );
+  assert.equal(
+    classifyMetaApiError(190, undefined, "Invalid OAuth access token").category,
+    "INVALID_TOKEN"
+  );
+  assert.equal(
+    classifyMetaApiError(200, undefined, "(#200) Requires pages_manage_posts permission").category,
+    "MISSING_PERMISSION"
+  );
+  assert.equal(
+    classifyMetaApiError(200, undefined, "User does not have MODERATE task on this page").category,
+    "MISSING_PAGE_ROLE"
+  );
+  assert.equal(
+    classifyMetaApiError(100, undefined, "Page token does not match target page_id").category,
+    "PAGE_TOKEN_MISMATCH"
+  );
+  assert.equal(
+    classifyMetaApiError(4, undefined, "Application request limit reached").category,
+    "RATE_LIMIT_OR_TEMPORARY"
+  );
+  assert.equal(
+    classifyMetaApiError(999, undefined, "Some other Graph API error").category,
+    "OTHER_API_ERROR"
+  );
+
+  // Kiểm tra quy trình Cập nhật Access Token an toàn (/api/meta/accounts/:id/update-token)
+  const aliceAccsNow = await (
+    await callWorker("/api/meta/accounts", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const expAdmin = aliceAccsNow.find((a) => a.facebook_user_id === "fb_uid_exp_1");
+  assert.ok(expAdmin, "Phải tìm thấy tài khoản Admin fb_uid_exp_1 của Alice");
+
+  // Tạo 1 task đã đăng trên page_exp_2 để kiểm tra bảo toàn dữ liệu khi token mới thiếu quyền quản lý page_exp_2
+  const taskOnPage2Resp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_2",
+      video_path: compUploadData.video_path,
+      caption: "Reel lịch sử trên Page 2 (Zyntrix Vietnam)"
+    })
+  });
+  const taskOnPage2 = (await taskOnPage2Resp.json()).task;
+  await d1
+    .prepare("UPDATE tasks SET status = 'success', publish_status = 'success', is_locked = 1, video_id = 'vid_p2', post_id = 'page_exp_2_post_1' WHERE id = ?")
+    .bind(taskOnPage2.id)
+    .run();
+
+  // 1. Thử cập nhật bằng Token KHÔNG HỢP LỆ -> Phải từ chối 400 và KHÔNG ghi đè token cũ đang lưu trong D1
+  const badUpdateResp = await callWorker(`/api/meta/accounts/${expAdmin.id}/update-token`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ access_token: "EAAB_EXPLORER_TOKEN_INVALID" })
+  });
+  assert.equal(badUpdateResp.status, 400, "Token mới không hợp lệ phải bị từ chối trước khi ghi đè");
+  const accAfterBadUpdate = await (
+    await callWorker("/api/meta/accounts", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const expAdminStillValid = accAfterBadUpdate.find((a) => a.id === expAdmin.id);
+  assert.equal(expAdminStillValid.status, "connected", "Token cũ hợp lệ không được bị xóa khi token mới lỗi");
+
+  // 2. Cập nhật bằng Token mới hợp lệ nhưng CHỈ có quyền trên page_exp_1 (thiếu quyền trên page_exp_2)
+  // Hệ thống phải:
+  // - Cập nhật token mới cho page_exp_1
+  // - KHÔNG xóa page_exp_2 khỏi DB, đánh dấu page_exp_2 là missing_permission
+  // - KHÔNG xóa task lịch sử của page_exp_2
+  const partialUpdateResp = await callWorker(`/api/meta/accounts/${expAdmin.id}/update-token`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ access_token: "EAAB_EXPLORER_TOKEN_PARTIAL_PAGES" })
+  });
+  assert.equal(partialUpdateResp.status, 200);
+  const partialUpdateData = await partialUpdateResp.json();
+  assert.equal(partialUpdateData.success, true);
+  assert.ok(
+    partialUpdateData.missing_permission_page_ids.includes("page_exp_2"),
+    "Phải phát hiện và cảnh báo page_exp_2 bị thiếu quyền trong token mới"
+  );
+  assert.equal(
+    partialUpdateData.missing_pages_warning,
+    "Page này chưa có trong token mới hoặc thiếu quyền quản lý."
+  );
+
+  const pagesAfterPartial = await (
+    await callWorker("/api/pages", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const page2Preserved = pagesAfterPartial.find((p) => p.facebook_page_id === "page_exp_2");
+  assert.ok(page2Preserved, "page_exp_2 không được bị xóa mất khi cập nhật token thiếu quyền");
+  assert.equal(page2Preserved.status, "missing_permission", "page_exp_2 phải được đánh dấu status = missing_permission");
+
+  const tasksAfterPartial = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  assert.ok(
+    tasksAfterPartial.some((t) => t.id === taskOnPage2.id && t.status === "success"),
+    "Task lịch sử của page_exp_2 phải được giữ nguyên 100%"
+  );
+  console.log("  ✓ [Test 39] Phân loại 8 loại lỗi Meta API & Cập nhật Access Token an toàn (Bảo toàn Page & Lịch sử Task)");
+
   globalThis.fetch = originalFetch;
 
   console.log("\n==================================================================");
-  console.log(" TẤT CẢ 30/30 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
+  console.log(" TẤT CẢ 39/39 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
   console.log("==================================================================");
 }
 

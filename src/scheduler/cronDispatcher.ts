@@ -12,6 +12,7 @@ import { randomHex } from "../utils/crypto.ts";
 import { appendTaskStageLog } from "../db.ts";
 import { processTaskQueueMessages } from "../queue/publishQueue.ts";
 import { cleanupExpiredR2Media } from "../services/r2MediaService.ts";
+import { syncDueReelsInsightsBatch } from "../services/reelsInsightsService.ts";
 
 export async function dispatchDueScheduledTasks(
   db: D1Database,
@@ -53,6 +54,10 @@ export async function dispatchDueScheduledTasks(
     }>();
 
   if (!candidateRows || candidateRows.length === 0) {
+    // Khi không có task đến hạn cần đăng ngay, chạy đồng bộ Insights định kỳ cho tối đa 2 Reels
+    if (ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(syncDueReelsInsightsBatch(db, env, 2, 30).catch(() => {}));
+    }
     return {
       checked_at_utc: now,
       claimed_count: 0,

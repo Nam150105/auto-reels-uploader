@@ -29,6 +29,85 @@ import { sanitizeSensitiveText } from "./utils/sanitize.ts";
 let schemaInitialized = false;
 let schemaInitPromise: Promise<void> | null = null;
 
+export class TaskLockError extends Error {
+  public readonly code: string;
+  public readonly httpStatus: number;
+
+  constructor(code: string, message: string, httpStatus = 403) {
+    super(message);
+    this.name = "TaskLockError";
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
+export function isTaskPublishedAndLocked(task: {
+  status?: string | null;
+  raw_status?: string | null;
+  publish_status?: string | null;
+  is_locked?: boolean | number | null;
+  video_id?: string | null;
+  post_id?: string | null;
+}): boolean {
+  const st = String(task.raw_status || task.status || "").toLowerCase();
+  const pubSt = String(task.publish_status || "").toLowerCase();
+  const hasPublishedIds =
+    Boolean(task.video_id && String(task.video_id).trim()) &&
+    Boolean(task.post_id && String(task.post_id).trim());
+  return (
+    st === "success" ||
+    st === "done" ||
+    pubSt === "success" ||
+    Boolean(task.is_locked) ||
+    hasPublishedIds
+  );
+}
+
+export function isTaskCurrentlyRunning(task: {
+  status?: string | null;
+  raw_status?: string | null;
+  publish_status?: string | null;
+}): boolean {
+  const st = String(task.raw_status || task.status || "").toLowerCase();
+  const pubSt = String(task.publish_status || "").toLowerCase();
+  return (
+    st === "processing" ||
+    st === "running" ||
+    st === "queued" ||
+    pubSt === "processing" ||
+    pubSt === "publishing" ||
+    pubSt === "uploading"
+  );
+}
+
+export function assertTaskMutable(
+  task: {
+    id?: number;
+    status?: string | null;
+    raw_status?: string | null;
+    publish_status?: string | null;
+    is_locked?: boolean | number | null;
+    video_id?: string | null;
+    post_id?: string | null;
+  },
+  actionLabel = "chỉnh sửa"
+): void {
+  if (isTaskPublishedAndLocked(task)) {
+    throw new TaskLockError(
+      "TASK_ALREADY_PUBLISHED",
+      `TASK_ALREADY_PUBLISHED: Task đã đăng Reels thành công và không thể ${actionLabel}. Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử. Bạn vẫn có thể xem thông tin và thống kê bài đăng.`,
+      403
+    );
+  }
+  if (isTaskCurrentlyRunning(task)) {
+    throw new TaskLockError(
+      "TASK_IN_PROGRESS",
+      `TASK_IN_PROGRESS: Task đang trong quá trình xử lý đăng Reels, không thể ${actionLabel} lúc này.`,
+      409
+    );
+  }
+}
+
 export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
   try {
     const info = await db.prepare("PRAGMA table_info(tasks)").all<{ name: string }>();
@@ -57,6 +136,21 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
     if (!existing.has("last_processed_at")) {
       try { await db.exec("ALTER TABLE tasks ADD COLUMN last_processed_at TEXT"); } catch {}
     }
+    if (!existing.has("publish_status")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN publish_status TEXT DEFAULT 'pending'"); } catch {}
+    }
+    if (!existing.has("is_locked")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN is_locked INTEGER DEFAULT 0"); } catch {}
+    }
+    if (!existing.has("analytics_status")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_status TEXT DEFAULT 'not_synced'"); } catch {}
+    }
+    if (!existing.has("analytics_last_synced_at")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_last_synced_at TEXT"); } catch {}
+    }
+    if (!existing.has("analytics_error")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_error TEXT DEFAULT ''"); } catch {}
+    }
   } catch {
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT ''"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none'"); } catch {}
@@ -66,7 +160,94 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
     try { await db.exec("ALTER TABLE tasks ADD COLUMN uploaded_at TEXT"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN published_at TEXT"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN last_processed_at TEXT"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN publish_status TEXT DEFAULT 'pending'"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN is_locked INTEGER DEFAULT 0"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_status TEXT DEFAULT 'not_synced'"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_last_synced_at TEXT"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_error TEXT DEFAULT ''"); } catch {}
   }
+
+  try {
+    const accInfo = await db.prepare("PRAGMA table_info(facebook_accounts)").all<{ name: string }>();
+    const existingAcc = new Set((accInfo.results || []).map((c) => c.name));
+    if (!existingAcc.has("has_read_insights")) {
+      try { await db.exec("ALTER TABLE facebook_accounts ADD COLUMN has_read_insights INTEGER DEFAULT 0"); } catch {}
+    }
+    if (!existingAcc.has("last_token_checked_at")) {
+      try { await db.exec("ALTER TABLE facebook_accounts ADD COLUMN last_token_checked_at TEXT"); } catch {}
+    }
+  } catch {
+    try { await db.exec("ALTER TABLE facebook_accounts ADD COLUMN has_read_insights INTEGER DEFAULT 0"); } catch {}
+    try { await db.exec("ALTER TABLE facebook_accounts ADD COLUMN last_token_checked_at TEXT"); } catch {}
+  }
+
+  try {
+    const pageInfo = await db.prepare("PRAGMA table_info(facebook_pages)").all<{ name: string }>();
+    const existingPage = new Set((pageInfo.results || []).map((c) => c.name));
+    if (!existingPage.has("can_analyze")) {
+      try { await db.exec("ALTER TABLE facebook_pages ADD COLUMN can_analyze INTEGER DEFAULT 0"); } catch {}
+    }
+    const accPageInfo = await db.prepare("PRAGMA table_info(facebook_account_pages)").all<{ name: string }>();
+    const existingAccPage = new Set((accPageInfo.results || []).map((c) => c.name));
+    if (!existingAccPage.has("can_analyze")) {
+      try { await db.exec("ALTER TABLE facebook_account_pages ADD COLUMN can_analyze INTEGER DEFAULT 0"); } catch {}
+    }
+  } catch {
+    try { await db.exec("ALTER TABLE facebook_pages ADD COLUMN can_analyze INTEGER DEFAULT 0"); } catch {}
+    try { await db.exec("ALTER TABLE facebook_account_pages ADD COLUMN can_analyze INTEGER DEFAULT 0"); } catch {}
+  }
+
+  try {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS reel_insight_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_user_id TEXT NOT NULL,
+        task_id INTEGER NOT NULL,
+        facebook_page_id TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        post_id TEXT DEFAULT '',
+        sync_date TEXT NOT NULL,
+        synced_at TEXT NOT NULL,
+        sync_status TEXT NOT NULL DEFAULT 'success',
+        views INTEGER,
+        plays INTEGER,
+        initial_plays INTEGER,
+        replays INTEGER,
+        reach INTEGER,
+        likes INTEGER,
+        comments INTEGER,
+        shares INTEGER,
+        total_interactions INTEGER,
+        total_watch_time_ms INTEGER,
+        avg_watch_time_ms INTEGER,
+        video_length_sec REAL,
+        retention_json TEXT DEFAULT '[]',
+        raw_metrics_json TEXT DEFAULT '{}',
+        error_code INTEGER,
+        error_message TEXT DEFAULT '',
+        UNIQUE(task_id, sync_date)
+      )`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS reel_insight_metric_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_user_id TEXT NOT NULL,
+        task_id INTEGER NOT NULL,
+        facebook_page_id TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        post_id TEXT DEFAULT '',
+        metric_name TEXT NOT NULL,
+        metric_value REAL,
+        metric_json TEXT DEFAULT '',
+        period TEXT DEFAULT 'lifetime',
+        fetched_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'supported',
+        error_message TEXT DEFAULT '',
+        UNIQUE(task_id, metric_name)
+      )`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_reel_snapshots_owner_page ON reel_insight_snapshots(owner_user_id, facebook_page_id, sync_date)`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_reel_snapshots_task ON reel_insight_snapshots(task_id, sync_date)`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_reel_metrics_owner_task ON reel_insight_metric_items(owner_user_id, task_id)`)
+    ]);
+  } catch {}
 
   try {
     const mediaInfo = await db.prepare("PRAGMA table_info(media_files)").all<{ name: string }>();
@@ -765,6 +946,7 @@ export async function saveFacebookAccount(
     tokenType?: string;
     scopes?: string[];
     missingScopes?: string[];
+    hasReadInsights?: boolean;
     tokenExpiresAt?: string | null;
     status?: string;
     tokenStatus?: string;
@@ -777,8 +959,17 @@ export async function saveFacebookAccount(
   const now = new Date().toISOString();
   const encryptedToken = await encryptToken(params.accessToken, encryptionKey, "v2");
   const tokenVersion = detectTokenVersion(encryptedToken);
-  const scopesJson = JSON.stringify(params.scopes || []);
+  const scopesArr = params.scopes || [];
+  const scopesJson = JSON.stringify(scopesArr);
   const missingJson = JSON.stringify(params.missingScopes || []);
+  const hasReadInsightsInt =
+    params.hasReadInsights !== undefined
+      ? params.hasReadInsights
+        ? 1
+        : 0
+      : scopesArr.some((s) => s.toLowerCase() === "read_insights")
+        ? 1
+        : 0;
   const status = params.status || "connected";
   const tokenStatus = params.tokenStatus || (status === "connected" ? "valid" : status);
 
@@ -803,6 +994,8 @@ export async function saveFacebookAccount(
     targetId = existing.id;
   }
 
+  await ensureTaskCommentColumns(db);
+
   if (existing) {
     await db
       .prepare(
@@ -815,10 +1008,12 @@ export async function saveFacebookAccount(
              token_type = ?,
              scopes = ?,
              missing_scopes = ?,
+             has_read_insights = ?,
              status = ?,
              token_status = ?,
              connected_at = ?,
              token_expires_at = ?,
+             last_token_checked_at = ?,
              last_error = ?,
              updated_at = ?
          WHERE id = ? AND owner_user_id = ?`
@@ -832,10 +1027,12 @@ export async function saveFacebookAccount(
         params.tokenType || "long_lived_user",
         scopesJson,
         missingJson,
+        hasReadInsightsInt,
         status,
         tokenStatus,
         now,
         params.tokenExpiresAt || null,
+        now,
         params.lastError ? sanitizeSensitiveText(params.lastError) : null,
         now,
         targetId,
@@ -847,9 +1044,9 @@ export async function saveFacebookAccount(
       .prepare(
         `INSERT INTO facebook_accounts (
            id, owner_user_id, facebook_user_id, facebook_user_name, facebook_user_email,
-           access_token, token_version, token_type, scopes, missing_scopes, status, token_status,
-           connected_at, token_expires_at, last_error, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           access_token, token_version, token_type, scopes, missing_scopes, has_read_insights, status, token_status,
+           connected_at, token_expires_at, last_token_checked_at, last_error, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         targetId,
@@ -862,10 +1059,12 @@ export async function saveFacebookAccount(
         params.tokenType || "long_lived_user",
         scopesJson,
         missingJson,
+        hasReadInsightsInt,
         status,
         tokenStatus,
         now,
         params.tokenExpiresAt || null,
+        now,
         params.lastError ? sanitizeSensitiveText(params.lastError) : null,
         now,
         now
@@ -898,6 +1097,7 @@ export async function getFacebookAccounts(
         `SELECT fap.facebook_account_id,
                 fap.facebook_page_id,
                 fap.can_post,
+                fap.can_analyze,
                 COALESCE(fp.page_name, fap.facebook_page_id) AS page_name,
                 COALESCE(fp.category, '') AS category,
                 COALESCE(fp.avatar_url, '') AS avatar_url
@@ -922,6 +1122,7 @@ export async function getFacebookAccounts(
       category: string;
       avatar_url: string;
       can_post: boolean;
+      can_analyze: boolean;
     }>
   >();
 
@@ -934,7 +1135,8 @@ export async function getFacebookAccounts(
       page_name: String(lr.page_name || lr.facebook_page_id || ""),
       category: String(lr.category || ""),
       avatar_url: String(lr.avatar_url || ""),
-      can_post: Boolean(lr.can_post)
+      can_post: Boolean(lr.can_post),
+      can_analyze: Boolean(lr.can_analyze)
     });
     pagesByAccountId.set(accId, list);
   }
@@ -944,6 +1146,10 @@ export async function getFacebookAccounts(
   for (const r of rows) {
     const scopes = safeJsonParseArray(r.scopes as string);
     const missingScopes = safeJsonParseArray(r.missing_scopes as string);
+    const hasReadInsights =
+      r.has_read_insights !== undefined && r.has_read_insights !== null
+        ? Boolean(r.has_read_insights)
+        : scopes.some((s) => s.toLowerCase() === "read_insights");
 
     let daysRemaining: number | null = null;
     let isExpired = false;
@@ -983,12 +1189,14 @@ export async function getFacebookAccounts(
       token_type: (r.token_type as string) || "long_lived_user",
       scopes,
       missing_scopes: missingScopes,
+      has_read_insights: hasReadInsights,
       status,
       token_status: tokenStatus,
       connected_at: (r.connected_at as string) || null,
       token_expires_at: expStr,
       expires_at: expStr,
       last_synced_at: (r.last_synced_at as string) || null,
+      last_token_checked_at: (r.last_token_checked_at as string) || null,
       last_error: (r.last_error as string) || null,
       created_at: (r.created_at as string) || null,
       updated_at: (r.updated_at as string) || null,
@@ -1045,6 +1253,7 @@ export async function updateFacebookAccountStatus(
            token_status = ?,
            last_error = ?,
            last_synced_at = COALESCE(?, last_synced_at),
+           last_token_checked_at = ?,
            updated_at = ?
        WHERE id = ?`
     )
@@ -1053,6 +1262,7 @@ export async function updateFacebookAccountStatus(
       resolvedTokenStatus,
       lastError ? sanitizeSensitiveText(lastError) : null,
       lastSyncedAt,
+      now,
       now,
       accountId
     )
@@ -1085,7 +1295,7 @@ export async function disconnectFacebookAccount(
       .bind(accountId, ownerUserId)
   ]);
 
-  await reconcileOrphanPages(db, encryptionKeyFallback, ownerUserId);
+  await reconcileOrphanPages(db, encryptionKeyFallback, ownerUserId, { preservePages: true });
   return true;
 }
 
@@ -1196,6 +1406,7 @@ export async function deleteFacebookAccountWithPages(
              SET page_access_token = ?,
                  tasks_json = ?,
                  can_post = ?,
+                 can_analyze = ?,
                  is_published = ?,
                  status = 'active',
                  token_status = 'valid',
@@ -1207,6 +1418,7 @@ export async function deleteFacebookAccountWithPages(
             String(otherLink.page_access_token || ""),
             String(otherLink.tasks_json || "[]"),
             Number(otherLink.can_post ?? 1),
+            Number(otherLink.can_analyze ?? 0),
             Number(otherLink.is_published ?? 1),
             String(otherLink.facebook_account_id),
             now,
@@ -1216,19 +1428,20 @@ export async function deleteFacebookAccountWithPages(
       );
     } else {
       deletedPageIds.push(p.facebook_page_id);
+      // Xóa các task chưa đăng (pending/failed) nhưng giữ lại các task đã đăng thành công (status='success') để bảo toàn lịch sử
       batchStmts.push(
         db
           .prepare(
-            "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?)"
+            "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ? AND status != 'success')"
           )
           .bind(p.facebook_page_id, ownerUserId),
         db
           .prepare(
-            "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?)"
+            "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ? AND status != 'success')"
           )
           .bind(p.facebook_page_id, ownerUserId),
         db
-          .prepare("DELETE FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?")
+          .prepare("DELETE FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ? AND status != 'success'")
           .bind(p.facebook_page_id, ownerUserId),
         db
           .prepare("DELETE FROM profiles WHERE facebook_page_id = ? AND owner_user_id = ?")
@@ -1277,7 +1490,7 @@ export async function removeStaleAccountPages(
   accountId: string,
   ownerUserId: string,
   activeFacebookPageIds: string[]
-): Promise<void> {
+): Promise<string[]> {
   const { results: currentLinks } = await db
     .prepare(
       "SELECT facebook_page_id FROM facebook_account_pages WHERE facebook_account_id = ? AND owner_user_id = ?"
@@ -1290,7 +1503,7 @@ export async function removeStaleAccountPages(
     .map((r) => String(r.facebook_page_id))
     .filter((pid) => !activeSet.has(pid));
 
-  if (staleIds.length === 0) return;
+  if (staleIds.length === 0) return [];
 
   const stmts = staleIds.map((pid) =>
     db
@@ -1300,7 +1513,9 @@ export async function removeStaleAccountPages(
       .bind(accountId, pid, ownerUserId)
   );
   await db.batch(stmts);
-  await reconcileOrphanPages(db, encryptionKeyFallback, ownerUserId);
+  // Khi đồng bộ lại hoặc cập nhật token mới, tuyệt đối KHÔNG tự xóa Page cũ hay Task cũ (Mục 5.4)
+  await reconcileOrphanPages(db, encryptionKeyFallback, ownerUserId, { preservePages: true });
+  return staleIds;
 }
 
 export async function disconnectAllUserAccounts(
@@ -1318,8 +1533,10 @@ export async function disconnectAllUserAccounts(
 export async function reconcileOrphanPages(
   db: D1Database,
   _encryptionKey: string,
-  ownerUserId: string
+  ownerUserId: string,
+  options?: { preservePages?: boolean }
 ): Promise<void> {
+  const preservePages = options?.preservePages ?? true;
   const now = new Date().toISOString();
   const { results: pages } = await db
     .prepare(
@@ -1351,6 +1568,7 @@ export async function reconcileOrphanPages(
            SET page_access_token = ?,
                tasks_json = ?,
                can_post = ?,
+               can_analyze = ?,
                is_published = ?,
                status = 'active',
                token_status = 'valid',
@@ -1362,26 +1580,42 @@ export async function reconcileOrphanPages(
           String(activeLink.page_access_token || ""),
           String(activeLink.tasks_json || "[]"),
           Number(activeLink.can_post ?? 1),
+          Number(activeLink.can_analyze ?? 0),
           Number(activeLink.is_published ?? 1),
           String(activeLink.facebook_account_id),
           now,
           p.id
         )
         .run();
+    } else if (preservePages) {
+      // Giữ lại Page cũ và toàn bộ lịch sử Task/Thống kê, chỉ đánh dấu thiếu quyền trên token mới (Mục 5.4)
+      await db
+        .prepare(
+          `UPDATE facebook_pages
+           SET page_access_token = '',
+               can_post = 0,
+               can_analyze = 0,
+               status = 'missing_permission',
+               token_status = 'missing_permission',
+               updated_at = ?
+           WHERE id = ? AND owner_user_id = ?`
+        )
+        .bind(now, p.id, ownerUserId)
+        .run();
     } else {
       await db.batch([
         db
           .prepare(
-            "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?)"
+            "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ? AND status != 'success')"
           )
           .bind(p.facebook_page_id, ownerUserId),
         db
           .prepare(
-            "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?)"
+            "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ? AND status != 'success')"
           )
           .bind(p.facebook_page_id, ownerUserId),
         db
-          .prepare("DELETE FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ?")
+          .prepare("DELETE FROM tasks WHERE facebook_page_id = ? AND owner_user_id = ? AND status != 'success'")
           .bind(p.facebook_page_id, ownerUserId),
         db
           .prepare("DELETE FROM profiles WHERE facebook_page_id = ? AND owner_user_id = ?")
@@ -1414,6 +1648,7 @@ export async function upsertFacebookPage(
     pageAccessToken: string;
     tasks?: string[];
     canPost?: boolean;
+    canAnalyze?: boolean;
     isPublished?: boolean;
     connectedAccountId: string;
     tokenStatus?: string;
@@ -1421,25 +1656,38 @@ export async function upsertFacebookPage(
   }
 ): Promise<string> {
   const now = new Date().toISOString();
-  const tasksJson = JSON.stringify(params.tasks || []);
+  const tasksArr = params.tasks || [];
+  const tasksJson = JSON.stringify(tasksArr);
   const encryptedToken = await encryptToken(params.pageAccessToken, encryptionKey, "v2");
   const tokenVersion = detectTokenVersion(encryptedToken);
   const canPostInt = params.canPost !== false ? 1 : 0;
+  const upperTasks = tasksArr.map((t) => String(t).toUpperCase());
+  const canAnalyzeInt =
+    params.canAnalyze !== undefined
+      ? params.canAnalyze
+        ? 1
+        : 0
+      : upperTasks.includes("ANALYZE") || upperTasks.includes("MANAGE")
+        ? 1
+        : 0;
   const isPublishedInt = params.isPublished !== false ? 1 : 0;
   const tokenStatus = params.tokenStatus || (encryptedToken ? "valid" : "missing");
+
+  await ensureTaskCommentColumns(db);
 
   await db
     .prepare(
       `INSERT INTO facebook_account_pages (
          owner_user_id, facebook_account_id, facebook_page_id, page_access_token, token_version,
-         tasks_json, can_post, is_published, token_status, last_synced_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         tasks_json, can_post, can_analyze, is_published, token_status, last_synced_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(facebook_account_id, facebook_page_id) DO UPDATE SET
          owner_user_id = excluded.owner_user_id,
          page_access_token = excluded.page_access_token,
          token_version = excluded.token_version,
          tasks_json = excluded.tasks_json,
          can_post = excluded.can_post,
+         can_analyze = excluded.can_analyze,
          is_published = excluded.is_published,
          token_status = excluded.token_status,
          last_synced_at = excluded.last_synced_at,
@@ -1453,6 +1701,7 @@ export async function upsertFacebookPage(
       tokenVersion,
       tasksJson,
       canPostInt,
+      canAnalyzeInt,
       isPublishedInt,
       tokenStatus,
       now,
@@ -1481,6 +1730,7 @@ export async function upsertFacebookPage(
              token_version = ?,
              tasks_json = CASE WHEN ? = 1 OR can_post = 0 THEN ? ELSE tasks_json END,
              can_post = CASE WHEN ? = 1 THEN 1 ELSE can_post END,
+             can_analyze = CASE WHEN ? = 1 THEN 1 ELSE can_analyze END,
              is_published = ?,
              status = 'active',
              token_status = ?,
@@ -1499,6 +1749,7 @@ export async function upsertFacebookPage(
         canPostInt,
         tasksJson,
         canPostInt,
+        canAnalyzeInt,
         isPublishedInt,
         tokenStatus,
         canPostInt,
@@ -1513,9 +1764,9 @@ export async function upsertFacebookPage(
       .prepare(
         `INSERT INTO facebook_pages (
            id, owner_user_id, facebook_page_id, page_name, category, avatar_url,
-           page_access_token, token_version, tasks_json, can_post, is_published, is_selected,
+           page_access_token, token_version, tasks_json, can_post, can_analyze, is_published, is_selected,
            status, token_status, connected_account_id, last_synced_at, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?, ?, ?)`
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?, ?, ?)`
       )
       .bind(
         internalId,
@@ -1528,6 +1779,7 @@ export async function upsertFacebookPage(
         tokenVersion,
         tasksJson,
         canPostInt,
+        canAnalyzeInt,
         isPublishedInt,
         tokenStatus,
         params.connectedAccountId,
@@ -1614,17 +1866,26 @@ export async function getFacebookPages(
     const adminAccounts: AdminAccountLink[] = [];
     const mergedTasksSet = new Set<string>(safeJsonParseArray(r.tasks_json as string));
     let anyCanPost = Boolean(r.can_post);
+    let anyCanAnalyze = Boolean(r.can_analyze);
     const candidateEncryptedTokens: string[] = [];
 
     for (const lnk of linkRows) {
       const lTasks = safeJsonParseArray(lnk.tasks_json as string);
       for (const t of lTasks) mergedTasksSet.add(t);
       const lCanPost = Boolean(lnk.can_post);
+      const upperLTasks = lTasks.map((t) => t.toUpperCase());
+      const lCanAnalyze =
+        lnk.can_analyze !== undefined && lnk.can_analyze !== null
+          ? Boolean(lnk.can_analyze)
+          : upperLTasks.includes("ANALYZE") || upperLTasks.includes("MANAGE");
       if (lCanPost && lnk.account_status === "connected") {
         anyCanPost = true;
         if (lnk.page_access_token) {
           candidateEncryptedTokens.push(String(lnk.page_access_token));
         }
+      }
+      if (lCanAnalyze && lnk.account_status === "connected") {
+        anyCanAnalyze = true;
       }
       adminAccounts.push({
         account_id: String(lnk.facebook_account_id),
@@ -1636,9 +1897,16 @@ export async function getFacebookPages(
         token_status: String(lnk.token_status || "valid"),
         tasks: lTasks,
         can_post: lCanPost,
+        can_analyze: lCanAnalyze,
         is_published: Boolean(lnk.is_published),
         last_synced_at: (lnk.last_synced_at as string) || null
       });
+    }
+
+    const mergedTasksArr = Array.from(mergedTasksSet);
+    const mergedUpper = mergedTasksArr.map((t) => t.toUpperCase());
+    if (!anyCanAnalyze && (mergedUpper.includes("ANALYZE") || mergedUpper.includes("MANAGE"))) {
+      anyCanAnalyze = true;
     }
 
     for (const lnk of linkRows) {
@@ -1664,8 +1932,9 @@ export async function getFacebookPages(
       name: String(r.page_name),
       category: String(r.category || ""),
       avatar_url: String(r.avatar_url || ""),
-      tasks: Array.from(mergedTasksSet),
+      tasks: mergedTasksArr,
       can_post: anyCanPost,
+      can_analyze: anyCanAnalyze,
       is_published: Boolean(r.is_published),
       is_selected: Boolean(r.is_selected),
       status: String(r.status || "active"),
@@ -2291,6 +2560,14 @@ export async function getTasks(
   return results.map((r) => {
     const rawStatus = String(r.status || "pending");
     const schedAt = r.scheduled_at !== null && r.scheduled_at !== undefined ? Number(r.scheduled_at) : null;
+    const videoIdStr = String(r.video_id || "");
+    const postIdStr = String(r.post_id || "");
+    const publishStatus = String(r.publish_status || rawStatus);
+    const isLocked =
+      Boolean(r.is_locked) ||
+      rawStatus === "success" ||
+      publishStatus === "success" ||
+      (Boolean(videoIdStr.trim()) && Boolean(postIdStr.trim()));
     return {
       id: Number(r.id),
       owner_user_id: (r.owner_user_id as string) || null,
@@ -2308,6 +2585,8 @@ export async function getTasks(
       timezone: String(r.timezone || "Asia/Ho_Chi_Minh"),
       status: mapStatusForFrontend(rawStatus, schedAt),
       raw_status: rawStatus,
+      publish_status: publishStatus,
+      is_locked: isLocked,
       is_future_schedule: schedAt !== null && schedAt > nowUtcSeconds(),
       idempotency_key: (r.idempotency_key as string) || null,
       attempt_count: Number(r.attempt_count || 0),
@@ -2319,8 +2598,8 @@ export async function getTasks(
       error_subcode: r.error_subcode ? Number(r.error_subcode) : null,
       retryable: Number(r.retryable ?? 1),
       log: String(r.log || ""),
-      video_id: String(r.video_id || ""),
-      post_id: String(r.post_id || ""),
+      video_id: videoIdStr,
+      post_id: postIdStr,
       video_url: String(r.video_url || ""),
       comment_id: String(r.comment_id || ""),
       comment_status: String(
@@ -2328,6 +2607,11 @@ export async function getTasks(
       ),
       comment_log: String(r.comment_log || ""),
       comment_posted_at: (r.comment_posted_at as string) || null,
+      analytics_status: String(
+        r.analytics_status || (rawStatus === "success" ? "pending" : "not_synced")
+      ),
+      analytics_last_synced_at: (r.analytics_last_synced_at as string) || null,
+      analytics_error: String(r.analytics_error || ""),
       uploaded_at: (r.uploaded_at as string) || null,
       published_at: (r.published_at as string) || null,
       last_processed_at: (r.last_processed_at as string) || null,
@@ -2373,6 +2657,9 @@ export async function updateTask(
   const existing = await getTask(db, taskId, params.ownerUserId);
   if (!existing) return false;
 
+  // Khóa toàn bộ thao tác chỉnh sửa khi Task đã đăng Reels thành công hoặc đang chạy (Mục 1.2 & 1.5)
+  assertTaskMutable(existing, "chỉnh sửa");
+
   const newPageId =
     params.facebookPageId !== undefined ? params.facebookPageId : existing.facebook_page_id;
   const newVideo = params.videoPath !== undefined ? params.videoPath.trim() : existing.video_path;
@@ -2403,7 +2690,7 @@ export async function updateTask(
     }
   }
 
-  await db
+  const res = await db
     .prepare(
       `UPDATE tasks
        SET facebook_page_id = ?,
@@ -2418,7 +2705,10 @@ export async function updateTask(
            schedule_time = ?,
            scheduled_at = ?,
            updated_at = ?
-       WHERE id = ? AND owner_user_id = ?`
+       WHERE id = ?
+         AND owner_user_id = ?
+         AND status != 'success'
+         AND COALESCE(is_locked, 0) = 0`
     )
     .bind(
       newPageId,
@@ -2437,6 +2727,13 @@ export async function updateTask(
       params.ownerUserId
     )
     .run();
+
+  if ((res.meta?.changes || 0) === 0) {
+    const recheck = await getTask(db, taskId, params.ownerUserId);
+    if (recheck) {
+      assertTaskMutable(recheck, "chỉnh sửa");
+    }
+  }
 
   return true;
 }
@@ -2461,10 +2758,11 @@ export async function updateTaskExecutionState(
 ): Promise<void> {
   const now = new Date().toISOString();
   const cleanLog = sanitizeSensitiveText(logMsg);
+  const isSuccess = status === "success" || status === "done";
   const publishedAtVal =
     extra?.publishedAt !== undefined
       ? extra.publishedAt
-      : status === "done"
+      : isSuccess
         ? now
         : null;
 
@@ -2473,6 +2771,12 @@ export async function updateTaskExecutionState(
       .prepare(
         `UPDATE tasks
          SET status = ?,
+             publish_status = ?,
+             is_locked = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(is_locked, 0) END,
+             analytics_status = CASE
+               WHEN ? = 1 AND (analytics_status IS NULL OR analytics_status = 'not_synced') THEN 'pending'
+               ELSE COALESCE(analytics_status, 'not_synced')
+             END,
              log = ?,
              video_id = COALESCE(?, video_id),
              post_id = COALESCE(?, post_id),
@@ -2491,6 +2795,9 @@ export async function updateTaskExecutionState(
       )
       .bind(
         status,
+        status,
+        isSuccess ? 1 : 0,
+        isSuccess ? 1 : 0,
         cleanLog,
         extra?.videoId ?? null,
         extra?.postId ?? null,
@@ -2509,6 +2816,7 @@ export async function updateTaskExecutionState(
       )
       .run();
   } catch {
+    await ensureTaskCommentColumns(db);
     await db
       .prepare(
         `UPDATE tasks
@@ -2543,6 +2851,43 @@ export async function updateTaskExecutionState(
         now,
         taskId
       )
+      .run();
+  }
+}
+
+export async function updateTaskAnalyticsState(
+  db: D1Database,
+  taskId: number,
+  analyticsStatus: string,
+  analyticsError = "",
+  syncedAt?: string | null
+): Promise<void> {
+  const now = new Date().toISOString();
+  const cleanErr = sanitizeSensitiveText(analyticsError || "");
+  try {
+    await db
+      .prepare(
+        `UPDATE tasks
+         SET analytics_status = ?,
+             analytics_error = ?,
+             analytics_last_synced_at = COALESCE(?, analytics_last_synced_at),
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(analyticsStatus, cleanErr, syncedAt !== undefined ? syncedAt : now, now, taskId)
+      .run();
+  } catch {
+    await ensureTaskCommentColumns(db);
+    await db
+      .prepare(
+        `UPDATE tasks
+         SET analytics_status = ?,
+             analytics_error = ?,
+             analytics_last_synced_at = COALESCE(?, analytics_last_synced_at),
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(analyticsStatus, cleanErr, syncedAt !== undefined ? syncedAt : now, now, taskId)
       .run();
   }
 }
@@ -2688,11 +3033,15 @@ export async function resetTask(
   const existing = await getTask(db, taskId, ownerUserId);
   if (!existing) return false;
 
+  // Khóa không cho chuyển task đã đăng thành công hoặc đang chạy về trạng thái chờ đăng (Mục 1.2 & 1.5)
+  assertTaskMutable(existing, "đặt lại trạng thái chờ đăng");
+
   const now = new Date().toISOString();
-  await db
+  const res = await db
     .prepare(
       `UPDATE tasks
        SET status = 'pending',
+           publish_status = 'pending',
            attempt_count = 0,
            next_retry_at = NULL,
            locked_until = NULL,
@@ -2709,10 +3058,20 @@ export async function resetTask(
            comment_log = '',
            comment_posted_at = NULL,
            updated_at = ?
-       WHERE id = ? AND owner_user_id = ?`
+       WHERE id = ?
+         AND owner_user_id = ?
+         AND status != 'success'
+         AND COALESCE(is_locked, 0) = 0`
     )
     .bind(now, taskId, ownerUserId)
     .run();
+
+  if ((res.meta?.changes || 0) === 0) {
+    const recheck = await getTask(db, taskId, ownerUserId);
+    if (recheck) {
+      assertTaskMutable(recheck, "đặt lại trạng thái chờ đăng");
+    }
+  }
   return true;
 }
 
@@ -2724,10 +3083,26 @@ export async function deleteTask(
   const existing = await getTask(db, taskId, ownerUserId);
   if (!existing) return { deleted: false };
 
-  await db
-    .prepare("DELETE FROM tasks WHERE id = ? AND owner_user_id = ?")
+  // Khóa không cho xóa task đã đăng thành công hoặc đang chạy (Mục 1.2 & 1.5)
+  assertTaskMutable(existing, "xóa");
+
+  const res = await db
+    .prepare(
+      `DELETE FROM tasks
+       WHERE id = ?
+         AND owner_user_id = ?
+         AND status != 'success'
+         AND COALESCE(is_locked, 0) = 0`
+    )
     .bind(taskId, ownerUserId)
     .run();
+
+  if ((res.meta?.changes || 0) === 0) {
+    const recheck = await getTask(db, taskId, ownerUserId);
+    if (recheck) {
+      assertTaskMutable(recheck, "xóa");
+    }
+  }
 
   let orphanMediaId: string | null = null;
   if (existing.media_id) {
@@ -2747,9 +3122,14 @@ export async function deleteTasksBulk(
   db: D1Database,
   taskIds: number[],
   ownerUserId: string
-): Promise<{ deletedCount: number; orphanMediaIds: string[] }> {
+): Promise<{
+  deletedCount: number;
+  orphanMediaIds: string[];
+  skippedLockedCount: number;
+  lockedTaskIds: number[];
+}> {
   if (!Array.isArray(taskIds) || taskIds.length === 0) {
-    return { deletedCount: 0, orphanMediaIds: [] };
+    return { deletedCount: 0, orphanMediaIds: [], skippedLockedCount: 0, lockedTaskIds: [] };
   }
 
   const validIds = taskIds
@@ -2757,30 +3137,63 @@ export async function deleteTasksBulk(
     .filter((id) => Number.isInteger(id) && id > 0);
 
   if (validIds.length === 0) {
-    return { deletedCount: 0, orphanMediaIds: [] };
+    return { deletedCount: 0, orphanMediaIds: [], skippedLockedCount: 0, lockedTaskIds: [] };
   }
 
   const placeholders = validIds.map(() => "?").join(",");
   const { results: targetTasks } = await db
     .prepare(
-      `SELECT id, media_id FROM tasks WHERE id IN (${placeholders}) AND owner_user_id = ?`
+      `SELECT id, media_id, status, publish_status, is_locked, video_id, post_id
+       FROM tasks
+       WHERE id IN (${placeholders}) AND owner_user_id = ?`
     )
     .bind(...validIds, ownerUserId)
-    .all<{ id: number; media_id: string | null }>();
+    .all<{
+      id: number;
+      media_id: string | null;
+      status: string;
+      publish_status?: string;
+      is_locked?: number;
+      video_id?: string;
+      post_id?: string;
+    }>();
 
   if (!targetTasks || targetTasks.length === 0) {
-    return { deletedCount: 0, orphanMediaIds: [] };
+    return { deletedCount: 0, orphanMediaIds: [], skippedLockedCount: 0, lockedTaskIds: [] };
   }
 
-  const idsToDelete = targetTasks.map((t) => t.id);
-  const mediaIds = targetTasks
+  const lockedTaskIds: number[] = [];
+  const deletableTasks: typeof targetTasks = [];
+
+  for (const t of targetTasks) {
+    if (isTaskPublishedAndLocked(t) || isTaskCurrentlyRunning(t)) {
+      lockedTaskIds.push(t.id);
+    } else {
+      deletableTasks.push(t);
+    }
+  }
+
+  if (deletableTasks.length === 0 && lockedTaskIds.length > 0) {
+    throw new TaskLockError(
+      "TASK_ALREADY_PUBLISHED",
+      "TASK_ALREADY_PUBLISHED: Task đã đăng Reels thành công và không thể xóa. Các task đã xuất bản hoặc đang xử lý đã được khóa để bảo toàn lịch sử.",
+      403
+    );
+  }
+
+  const idsToDelete = deletableTasks.map((t) => t.id);
+  const mediaIds = deletableTasks
     .map((t) => t.media_id)
     .filter((m): m is string => Boolean(m && m.trim().length > 0));
 
   const delPlaceholders = idsToDelete.map(() => "?").join(",");
   await db
     .prepare(
-      `DELETE FROM tasks WHERE id IN (${delPlaceholders}) AND owner_user_id = ?`
+      `DELETE FROM tasks
+       WHERE id IN (${delPlaceholders})
+         AND owner_user_id = ?
+         AND status != 'success'
+         AND COALESCE(is_locked, 0) = 0`
     )
     .bind(...idsToDelete, ownerUserId)
     .run();
@@ -2801,7 +3214,12 @@ export async function deleteTasksBulk(
     }
   }
 
-  return { deletedCount: idsToDelete.length, orphanMediaIds };
+  return {
+    deletedCount: idsToDelete.length,
+    orphanMediaIds,
+    skippedLockedCount: lockedTaskIds.length,
+    lockedTaskIds
+  };
 }
 
 export async function resetRunningTasks(

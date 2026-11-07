@@ -42,8 +42,15 @@ import {
   getTaskLogs,
   getTaskAttempts,
   updateTaskCommentState,
-  appendTaskStageLog
+  appendTaskStageLog,
+  TaskLockError
 } from "./db.ts";
+import {
+  getReelsAnalyticsDashboard,
+  getSingleReelInsightDetail,
+  syncSingleReelInsights,
+  syncUserReelsInsights
+} from "./services/reelsInsightsService.ts";
 import {
   PRODUCTION_DOMAIN,
   generateOAuthUrl,
@@ -215,7 +222,8 @@ export async function handleWorkerRequest(
     (pathname === "/page" ||
       pathname === "/pages" ||
       pathname === "/schedules" ||
-      pathname === "/reels") &&
+      pathname === "/reels" ||
+      pathname === "/insights") &&
     method === "GET"
   ) {
     const ua = request.headers.get("User-Agent") || "";
@@ -226,7 +234,7 @@ export async function handleWorkerRequest(
         if (staticResp) return staticResp;
       }
       const loginRedirect =
-        pathname === "/schedules" || pathname === "/reels"
+        pathname === "/schedules" || pathname === "/reels" || pathname === "/insights"
           ? `/login?redirect=${encodeURIComponent(pathname + url.search)}`
           : "/login";
       return redirectResponse(`${url.origin}${loginRedirect}`, 302);
@@ -538,6 +546,7 @@ export async function handleWorkerRequest(
       const body = (await request.json().catch(() => ({}))) as {
         access_token?: string;
         token?: string;
+        account_id?: string;
       };
       const rawToken = (body.access_token || body.token || "").trim();
       if (!rawToken) {
@@ -546,17 +555,72 @@ export async function handleWorkerRequest(
           400
         );
       }
-      const res = await connectFacebookWithAccessToken(db, env, rawToken, ownerUserId);
+      const res = await connectFacebookWithAccessToken(
+        db,
+        env,
+        rawToken,
+        ownerUserId,
+        body.account_id ? String(body.account_id).trim() : null
+      );
       if (!res.success) {
         return jsonResponse(
           {
             detail: res.message,
+            message: res.message,
+            error_type: res.error_type || "INVALID_TOKEN",
+            error_code: res.error_code || 400,
             missing_scopes: res.missing_scopes
           },
           400
         );
       }
-      return jsonResponse(res);
+      const accounts = await getFacebookAccounts(db, encryptionKey, false, ownerUserId);
+      const pages = await getFacebookPages(db, encryptionKey, {
+        includeToken: false,
+        ownerUserId
+      });
+      return jsonResponse({ ...res, accounts, pages });
+    }
+
+    const updateTokenAccMatch = /^\/api\/meta\/accounts\/([^/]+)\/update-token$/.exec(pathname);
+    if (updateTokenAccMatch && method === "POST") {
+      const accountId = decodeURIComponent(updateTokenAccMatch[1]);
+      const body = (await request.json().catch(() => ({}))) as {
+        access_token?: string;
+        token?: string;
+      };
+      const rawToken = (body.access_token || body.token || "").trim();
+      if (!rawToken) {
+        return jsonResponse(
+          { detail: "Vui lòng nhập Access Token mới từ Graph API Explorer." },
+          400
+        );
+      }
+      const res = await connectFacebookWithAccessToken(
+        db,
+        env,
+        rawToken,
+        ownerUserId,
+        accountId
+      );
+      if (!res.success) {
+        return jsonResponse(
+          {
+            detail: res.message,
+            message: res.message,
+            error_type: res.error_type || "INVALID_TOKEN",
+            error_code: res.error_code || 400,
+            missing_scopes: res.missing_scopes
+          },
+          400
+        );
+      }
+      const accounts = await getFacebookAccounts(db, encryptionKey, false, ownerUserId);
+      const pages = await getFacebookPages(db, encryptionKey, {
+        includeToken: false,
+        ownerUserId
+      });
+      return jsonResponse({ ...res, accounts, pages });
     }
 
     if (pathname === "/api/meta/sync-pages" && method === "POST") {
@@ -943,11 +1007,26 @@ export async function handleWorkerRequest(
     const taskResetMatch = /^\/api\/tasks\/(\d+)\/reset$/.exec(pathname);
     if (taskResetMatch && method === "POST") {
       const taskId = parseInt(taskResetMatch[1], 10);
-      const ok = await resetTask(db, taskId, ownerUserId);
-      if (!ok) {
-        return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+      try {
+        const ok = await resetTask(db, taskId, ownerUserId);
+        if (!ok) {
+          return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+        }
+        return jsonResponse({ success: true, id: taskId });
+      } catch (err: any) {
+        if (err instanceof TaskLockError) {
+          return jsonResponse(
+            {
+              error_code: err.code,
+              detail: err.message,
+              message: err.message,
+              locked: true
+            },
+            err.httpStatus
+          );
+        }
+        return jsonResponse({ detail: err?.message || "Không thể đặt lại tác vụ." }, 400);
       }
-      return jsonResponse({ success: true, id: taskId });
     }
 
     const taskRetryCommentMatch = /^\/api\/tasks\/(\d+)\/retry-comment$/.exec(pathname);
@@ -970,11 +1049,13 @@ export async function handleWorkerRequest(
         return jsonResponse({ detail: "Tác vụ này không có nội dung bình luận." }, 400);
       }
 
-      if (task.comment_status === "success" && task.comment_id) {
+      if (task.comment_status === "success") {
         return jsonResponse({
           success: true,
+          locked: true,
+          already_commented: true,
           message: "Bình luận này đã được đăng thành công trên Facebook.",
-          comment_id: task.comment_id
+          comment_id: task.comment_id || ""
         });
       }
 
@@ -1061,6 +1142,19 @@ export async function handleWorkerRequest(
       }
     }
 
+    const taskSyncInsightsMatch = /^\/api\/tasks\/(\d+)\/sync-insights$/.exec(pathname);
+    if (taskSyncInsightsMatch && method === "POST") {
+      const taskId = parseInt(taskSyncInsightsMatch[1], 10);
+      const res = await syncSingleReelInsights(db, env, taskId, ownerUserId);
+      if (!res.success && res.error_type === "NOT_FOUND") {
+        return jsonResponse({ detail: res.message, error_type: res.error_type }, 404);
+      }
+      if (!res.success && res.error_type === "INVALID_STATE") {
+        return jsonResponse({ detail: res.message, error_type: res.error_type }, 400);
+      }
+      return jsonResponse(res);
+    }
+
     const taskItemMatch = /^\/api\/tasks\/(\d+)$/.exec(pathname);
     if (taskItemMatch && method === "PUT") {
       const taskId = parseInt(taskItemMatch[1], 10);
@@ -1091,6 +1185,17 @@ export async function handleWorkerRequest(
         const updated = await getTask(db, taskId, ownerUserId);
         return jsonResponse({ success: true, task: updated });
       } catch (err: any) {
+        if (err instanceof TaskLockError) {
+          return jsonResponse(
+            {
+              error_code: err.code,
+              detail: err.message,
+              message: err.message,
+              locked: true
+            },
+            err.httpStatus
+          );
+        }
         return jsonResponse(
           { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
           400
@@ -1100,19 +1205,34 @@ export async function handleWorkerRequest(
 
     if (taskItemMatch && method === "DELETE") {
       const taskId = parseInt(taskItemMatch[1], 10);
-      const delRes = await deleteTask(db, taskId, ownerUserId);
-      if (!delRes.deleted) {
-        return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+      try {
+        const delRes = await deleteTask(db, taskId, ownerUserId);
+        if (!delRes.deleted) {
+          return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+        }
+        // Tự động xóa video tạm trên R2 nếu không còn task nào khác tham chiếu
+        if (delRes.orphanMediaId) {
+          await deleteUserVideo(db, env, delRes.orphanMediaId, ownerUserId);
+        }
+        return jsonResponse({
+          success: true,
+          deleted_id: taskId,
+          cleaned_orphan_media_id: delRes.orphanMediaId || null
+        });
+      } catch (err: any) {
+        if (err instanceof TaskLockError) {
+          return jsonResponse(
+            {
+              error_code: err.code,
+              detail: err.message,
+              message: err.message,
+              locked: true
+            },
+            err.httpStatus
+          );
+        }
+        return jsonResponse({ detail: err?.message || "Không thể xóa tác vụ." }, 400);
       }
-      // Tự động xóa video tạm trên R2 nếu không còn task nào khác tham chiếu
-      if (delRes.orphanMediaId) {
-        await deleteUserVideo(db, env, delRes.orphanMediaId, ownerUserId);
-      }
-      return jsonResponse({
-        success: true,
-        deleted_id: taskId,
-        cleaned_orphan_media_id: delRes.orphanMediaId || null
-      });
     }
 
     // ------------------------------------------
@@ -1127,15 +1247,83 @@ export async function handleWorkerRequest(
       if (taskIds.length === 0) {
         return jsonResponse({ detail: "Vui lòng chọn ít nhất một tác vụ để xóa." }, 400);
       }
-      const bulkRes = await deleteTasksBulk(db, taskIds, ownerUserId);
-      for (const mId of bulkRes.orphanMediaIds) {
-        await deleteUserVideo(db, env, mId, ownerUserId);
+      try {
+        const bulkRes = await deleteTasksBulk(db, taskIds, ownerUserId);
+        for (const mId of bulkRes.orphanMediaIds) {
+          await deleteUserVideo(db, env, mId, ownerUserId);
+        }
+        return jsonResponse({
+          success: true,
+          deleted_count: bulkRes.deletedCount,
+          cleaned_orphan_count: bulkRes.orphanMediaIds.length,
+          skipped_locked_count: bulkRes.skippedLockedCount,
+          skipped_locked_ids: bulkRes.lockedTaskIds
+        });
+      } catch (err: any) {
+        if (err instanceof TaskLockError) {
+          return jsonResponse(
+            {
+              error_code: err.code,
+              detail: err.message,
+              message: err.message,
+              locked: true
+            },
+            err.httpStatus
+          );
+        }
+        return jsonResponse({ detail: err?.message || "Không thể xóa tác vụ." }, 400);
       }
-      return jsonResponse({
-        success: true,
-        deleted_count: bulkRes.deletedCount,
-        cleaned_orphan_count: bulkRes.orphanMediaIds.length
+    }
+
+    // ------------------------------------------
+    // 6.4D. THỐNG KÊ REELS INSIGHTS (/api/insights*)
+    // ------------------------------------------
+    if (pathname === "/api/insights/reels" && method === "GET") {
+      const facebookPageId = url.searchParams.get("facebook_page_id") || url.searchParams.get("page_id") || null;
+      const range = url.searchParams.get("range") || "30d";
+      const startDate = url.searchParams.get("start_date") || null;
+      const endDate = url.searchParams.get("end_date") || null;
+      const search = url.searchParams.get("search") || null;
+      const sortBy = url.searchParams.get("sort_by") || "published_at";
+      const sortDir = (url.searchParams.get("sort_dir") === "asc" ? "asc" : "desc") as "asc" | "desc";
+
+      const dashboard = await getReelsAnalyticsDashboard(db, env, ownerUserId, {
+        facebookPageId,
+        range,
+        startDate,
+        endDate,
+        search,
+        sortBy,
+        sortDir
       });
+      return jsonResponse(dashboard);
+    }
+
+    const insightItemMatch = /^\/api\/insights\/reels\/(\d+)$/.exec(pathname);
+    if (insightItemMatch && method === "GET") {
+      const taskId = parseInt(insightItemMatch[1], 10);
+      const detail = await getSingleReelInsightDetail(db, env, taskId, ownerUserId);
+      if (!detail) {
+        return jsonResponse(
+          { detail: "Không tìm thấy bài đăng Reels thuộc quyền sở hữu của bạn." },
+          404
+        );
+      }
+      return jsonResponse(detail);
+    }
+
+    if (pathname === "/api/insights/sync" && method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as {
+        facebook_page_id?: string | null;
+        task_id?: number | null;
+        limit?: number;
+      };
+      const syncRes = await syncUserReelsInsights(db, env, ownerUserId, {
+        facebookPageId: body.facebook_page_id || null,
+        taskId: body.task_id ? Number(body.task_id) : null,
+        limit: body.limit ? Number(body.limit) : 20
+      });
+      return jsonResponse(syncRes);
     }
 
     // ------------------------------------------
@@ -1294,6 +1482,8 @@ export async function handleWorkerRequest(
           .prepare(
             `SELECT COUNT(*) AS total_accounts,
                     COALESCE(SUM(CASE WHEN status = 'connected' THEN 1 ELSE 0 END), 0) AS connected_accounts,
+                    COALESCE(SUM(CASE WHEN status IN ('expired', 'invalid_token', 'revoked') THEN 1 ELSE 0 END), 0) AS expired_accounts,
+                    COALESCE(SUM(CASE WHEN status = 'connected' AND COALESCE(has_read_insights, 0) = 0 THEN 1 ELSE 0 END), 0) AS missing_insights_accounts,
                     MAX(CASE WHEN status = 'connected' THEN facebook_user_name ELSE NULL END) AS primary_user_name
              FROM facebook_accounts
              WHERE owner_user_id = ?`
@@ -1314,6 +1504,8 @@ export async function handleWorkerRequest(
       const runningCount = Number(taskCounts.running_tasks || 0);
       const connectedAccounts = Number(accCounts.connected_accounts || 0);
       const totalAccounts = Number(accCounts.total_accounts || 0);
+      const expiredAccounts = Number(accCounts.expired_accounts || 0);
+      const missingInsightsAccounts = Number(accCounts.missing_insights_accounts || 0);
 
       return jsonResponse({
         is_running: runningCount > 0,
@@ -1322,6 +1514,8 @@ export async function handleWorkerRequest(
         meta_user_name: (accCounts.primary_user_name as string) || null,
         connected_accounts_count: connectedAccounts,
         total_accounts_count: totalAccounts,
+        expired_accounts_count: expiredAccounts,
+        missing_read_insights_count: missingInsightsAccounts,
         total_pages: totalPages,
         selected_pages: selectedPages,
         total_profiles: totalPages,

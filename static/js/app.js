@@ -31,6 +31,7 @@
     const isPageLoading = ref(true);
     const pageLoadError = ref('');
     const currentUser = ref(null);
+    const mainView = ref('workspace'); // 'workspace' | 'insights'
     const currentTab = ref('pages'); // 'pages' | 'schedules'
     const pages = ref([]);
     const tasks = ref([]);
@@ -128,6 +129,7 @@
     const connectStatus = ref('idle'); // 'idle' | 'processing' | 'success' | 'error'
     const connectMessage = ref('');
     const connectAccountInfo = ref(null);
+    const connectWarnings = ref([]);
     const oauthFlowState = ref('idle'); // 'idle' | 'opening' | 'processing' | 'success' | 'denied' | 'no_pages' | 'missing_permissions' | 'invalid_token' | 'error'
     const oauthFlowMessage = ref('');
     const isConnectingOAuth = ref(false);
@@ -140,6 +142,70 @@
     const showEditTaskModal = ref(false);
     const showLogModal = ref(false);
     const retryingCommentTaskId = ref(null);
+
+    // Reels Insights State
+    const insightsFilter = ref({
+      facebook_page_id: '',
+      range: '30d',
+      start_date: '',
+      end_date: '',
+      search: '',
+      sort_by: 'published_at',
+      sort_dir: 'desc'
+    });
+    const insightsData = ref({
+      overview: {
+        total_reels_count: 0,
+        total_views: null,
+        total_reach: null,
+        total_interactions: null,
+        total_likes: null,
+        total_comments: null,
+        total_shares: null,
+        total_watch_time_ms: null,
+        avg_watch_time_ms: null
+      },
+      charts: {
+        views_over_time: [],
+        reel_performance: [],
+        interactions_breakdown: [],
+        watch_time: [],
+        page_comparison: []
+      },
+      reels: [],
+      permission_warnings: [],
+      last_synced_at: null
+    });
+    const isLoadingInsights = ref(false);
+    const isSyncingInsights = ref(false);
+    const syncingTaskInsightId = ref(null);
+    const showReelInsightModal = ref(false);
+    const isLoadingReelDetail = ref(false);
+    const reelInsightDetail = ref({
+      task: null,
+      latest_snapshot: null,
+      metric_items: [],
+      history: []
+    });
+
+    function isTaskLocked(t) {
+      if (!t) return false;
+      return Boolean(
+        t.status === 'success' ||
+        t.publish_status === 'success' ||
+        Number(t.is_locked || 0) === 1 ||
+        (t.video_id && t.post_id)
+      );
+    }
+
+    function isTaskInFlight(t) {
+      if (!t) return false;
+      return Boolean(
+        t.status === 'running' ||
+        t.status === 'processing' ||
+        t.status === 'queued'
+      );
+    }
 
     // Single Task Form
     const singleTaskForm = ref({
@@ -196,6 +262,16 @@
       return accounts.value.filter(a => a.status === 'connected').length;
     });
 
+    const expiredAccounts = computed(() => {
+      return accounts.value.filter(a =>
+        a.status === 'expired' || a.status === 'invalid_token' || a.status === 'revoked'
+      );
+    });
+
+    const missingInsightsAccounts = computed(() => {
+      return accounts.value.filter(a => a.status === 'connected' && !a.has_read_insights);
+    });
+
     const selectedPageCount = computed(() => {
       return pages.value.filter(p => p.is_selected).length;
     });
@@ -205,7 +281,36 @@
     });
 
     const isAllTasksSelected = computed(() => {
-      return tasks.value.length > 0 && selectedTaskIds.value.length === tasks.value.length;
+      const mutableTasks = tasks.value.filter(t => !isTaskLocked(t) && !isTaskInFlight(t));
+      return mutableTasks.length > 0 && mutableTasks.every(t => selectedTaskIds.value.includes(t.id));
+    });
+
+    const maxTimeSeriesViews = computed(() => {
+      const list = (insightsData.value.charts && insightsData.value.charts.views_over_time) || [];
+      let max = 1;
+      for (const item of list) {
+        if ((item.views || 0) > max) max = item.views;
+      }
+      return max;
+    });
+
+    const maxReelPerformanceViews = computed(() => {
+      const list = (insightsData.value.charts && insightsData.value.charts.reel_performance) || [];
+      let max = 1;
+      for (const item of list) {
+        if ((item.views || 0) > max) max = item.views;
+      }
+      return max;
+    });
+
+    const maxReelInteractions = computed(() => {
+      const list = (insightsData.value.charts && insightsData.value.charts.interactions_breakdown) || [];
+      let max = 1;
+      for (const item of list) {
+        const sum = (item.likes || 0) + (item.comments || 0) + (item.shares || 0);
+        if (sum > max) max = sum;
+      }
+      return max;
     });
 
     // ==========================================
@@ -532,9 +637,21 @@
 
     function setTab(tab) {
       currentTab.value = tab;
+      mainView.value = 'workspace';
       const targetPath = tab === 'pages' ? '/page' : '/schedules';
       if (window.location.pathname !== targetPath) {
         history.pushState(null, '', targetPath);
+      }
+    }
+
+    function setMainView(view) {
+      mainView.value = view === 'insights' ? 'insights' : 'workspace';
+      const targetPath = mainView.value === 'insights' ? '/insights' : '/page';
+      if (window.location.pathname !== targetPath) {
+        history.pushState(null, '', targetPath);
+      }
+      if (mainView.value === 'insights') {
+        loadReelsInsights();
       }
     }
 
@@ -559,6 +676,7 @@
       connectStatus.value = 'idle';
       connectMessage.value = '';
       connectAccountInfo.value = null;
+      connectWarnings.value = [];
       oauthFlowState.value = 'idle';
       oauthFlowMessage.value = '';
       showConnectModal.value = true;
@@ -575,12 +693,16 @@
       isConnectingToken.value = true;
       connectStatus.value = 'processing';
       connectMessage.value = 'Đang kiểm tra token và kết nối Facebook...';
+      connectWarnings.value = [];
 
       try {
         const res = await apiFetch('/api/meta/connect-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ access_token: raw }),
+          body: JSON.stringify({
+            access_token: raw,
+            account_id: reconnectTargetAccountId.value || null
+          }),
           timeoutMs: 30000
         });
         const data = await res.json();
@@ -590,10 +712,18 @@
             user_name: data.user_name || 'Facebook User',
             synced_count: data.synced_count || 0
           };
+          connectWarnings.value = [
+            data.insights_warning,
+            data.analyze_warning,
+            data.missing_pages_warning
+          ].filter(Boolean);
           connectMessage.value = data.message || `Đã liên kết tài khoản "${data.user_name}" và đồng bộ ${data.synced_count || 0} Fanpage!`;
           directAccessToken.value = '';
           showToast(connectMessage.value, 'success');
           await loadAll();
+          if (mainView.value === 'insights') {
+            await loadReelsInsights();
+          }
         } else {
           connectStatus.value = 'error';
           connectMessage.value = data.detail || 'Không thể kết nối Facebook. Vui lòng kiểm tra lại token và các quyền được cấp.';
@@ -1587,9 +1717,20 @@
     }
 
     // ==========================================
-    // 9. TASK ACTIONS (EDIT, RESET, DELETE, LOG)
+    // 9. TASK ACTIONS (EDIT, RESET, DELETE, LOG) & LOCK GUARDS
     // ==========================================
     function openEditTaskModal(t) {
+      if (isTaskLocked(t)) {
+        showToast(
+          "Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử. Bạn vẫn có thể xem thông tin và thống kê bài đăng.",
+          "warning"
+        );
+        return;
+      }
+      if (isTaskInFlight(t)) {
+        showToast("Task đang trong tiến trình đăng Reels, không thể chỉnh sửa lúc này.", "warning");
+        return;
+      }
       editTaskForm.value = {
         id: t.id,
         facebook_page_id: t.facebook_page_id || '',
@@ -1603,6 +1744,12 @@
     }
 
     async function handleUpdateTaskSubmit() {
+      const targetTask = tasks.value.find(x => x.id === editTaskForm.value.id);
+      if (targetTask && isTaskLocked(targetTask)) {
+        showToast("Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử.", "error");
+        showEditTaskModal.value = false;
+        return;
+      }
       if (editTaskForm.value.schedule_date || editTaskForm.value.schedule_time) {
         const val = validateVnScheduleClient(
           editTaskForm.value.schedule_date,
@@ -1625,7 +1772,7 @@
           schedule_time: editTaskForm.value.schedule_time || "",
           publish_mode: (editTaskForm.value.schedule_date || editTaskForm.value.schedule_time) ? "scheduled" : "now"
         };
-        const res = await fetch(`/api/tasks/${editTaskForm.value.id}`, {
+        const res = await apiFetch(`/api/tasks/${editTaskForm.value.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -1644,8 +1791,13 @@
     }
 
     async function handleResetTask(taskId) {
+      const targetTask = tasks.value.find(x => x.id === taskId);
+      if (targetTask && isTaskLocked(targetTask)) {
+        showToast("Task đã đăng Reels thành công và không thể đặt lại trạng thái chờ.", "warning");
+        return;
+      }
       try {
-        const res = await fetch(`/api/tasks/${taskId}/reset`, { method: 'POST' });
+        const res = await apiFetch(`/api/tasks/${taskId}/reset`, { method: 'POST' });
         const data = await res.json();
         if (res.ok) {
           showToast("Đã đặt lại task về trạng thái Chờ xử lý.", "success");
@@ -1659,9 +1811,14 @@
     }
 
     async function handleDeleteTask(taskId) {
+      const targetTask = tasks.value.find(x => x.id === taskId);
+      if (targetTask && isTaskLocked(targetTask)) {
+        showToast("Task đã đăng Reels thành công và đã khóa để bảo toàn lịch sử, không thể xóa.", "warning");
+        return;
+      }
       if (!confirm(`Bạn có chắc chắn muốn xóa Task #${taskId} không?`)) return;
       try {
-        const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+        const res = await apiFetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
         const data = await res.json();
         if (res.ok) {
           showToast("Đã xóa task.", "success");
@@ -1679,11 +1836,18 @@
       if (isAllTasksSelected.value) {
         selectedTaskIds.value = [];
       } else {
-        selectedTaskIds.value = tasks.value.map(t => t.id);
+        selectedTaskIds.value = tasks.value
+          .filter(t => !isTaskLocked(t) && !isTaskInFlight(t))
+          .map(t => t.id);
       }
     }
 
     function toggleTaskSelection(taskId) {
+      const targetTask = tasks.value.find(x => x.id === taskId);
+      if (targetTask && (isTaskLocked(targetTask) || isTaskInFlight(targetTask))) {
+        showToast("Task đã đăng thành công hoặc đang chạy không thể chọn để xóa.", "warning");
+        return;
+      }
       const idx = selectedTaskIds.value.indexOf(taskId);
       if (idx > -1) {
         selectedTaskIds.value.splice(idx, 1);
@@ -1697,22 +1861,30 @@
     }
 
     async function handleBulkDeleteSelectedTasks() {
-      if (selectedTaskIds.value.length === 0) return;
-      const count = selectedTaskIds.value.length;
-      if (!confirm(`Bạn có chắc chắn muốn xóa ${count} task đã chọn không?\n(Video liên kết trên R2 không còn dùng cũng sẽ được tự động dọn dẹp sạch sẽ)`)) {
+      const mutableIds = selectedTaskIds.value.filter(id => {
+        const t = tasks.value.find(x => x.id === id);
+        return t && !isTaskLocked(t) && !isTaskInFlight(t);
+      });
+      if (mutableIds.length === 0) {
+        showToast("Các task đã đăng thành công đã được khóa và không thể xóa.", "warning");
+        selectedTaskIds.value = [];
+        return;
+      }
+      const count = mutableIds.length;
+      if (!confirm(`Bạn có chắc chắn muốn xóa ${count} task đã chọn không?\n(Task đã đăng thành công sẽ được bảo vệ không bị xóa)`)) {
         return;
       }
       isBulkDeletingTasks.value = true;
       try {
-        const res = await fetch('/api/tasks/bulk-delete', {
+        const res = await apiFetch('/api/tasks/bulk-delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ task_ids: selectedTaskIds.value })
+          body: JSON.stringify({ task_ids: mutableIds })
         });
         const data = await res.json();
         if (res.ok) {
           showToast(`Đã xóa thành công ${data.deleted_count || count} task.`, 'success');
-          const deletedSet = new Set(selectedTaskIds.value);
+          const deletedSet = new Set(mutableIds);
           tasks.value = tasks.value.filter(t => !deletedSet.has(t.id));
           selectedTaskIds.value = [];
           await loadStats();
@@ -1801,7 +1973,7 @@
       };
       showLogModal.value = true;
       try {
-        const res = await fetch(`/api/tasks/${t.id}/logs`);
+        const res = await apiFetch(`/api/tasks/${t.id}/logs`);
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data.logs) && data.logs.length > 0) {
@@ -1822,7 +1994,7 @@
       if (!taskId || retryingCommentTaskId.value) return;
       retryingCommentTaskId.value = taskId;
       try {
-        const res = await fetch(`/api/tasks/${taskId}/retry-comment`, {
+        const res = await apiFetch(`/api/tasks/${taskId}/retry-comment`, {
           method: 'POST'
         });
         const data = await res.json();
@@ -1859,6 +2031,196 @@
         showToast("Lỗi kết nối khi thử đăng lại bình luận: " + err.message, "error");
       } finally {
         retryingCommentTaskId.value = null;
+      }
+    }
+
+    // ==========================================
+    // 9B. THỐNG KÊ REELS (META INSIGHTS v27.0)
+    // ==========================================
+    function formatMetricValue(val) {
+      if (val === null || val === undefined || Number.isNaN(Number(val))) {
+        return 'Không có dữ liệu';
+      }
+      return Number(val).toLocaleString('vi-VN');
+    }
+
+    function formatMetricNumber(val) {
+      if (val === null || val === undefined || Number.isNaN(Number(val))) {
+        return '—';
+      }
+      return Number(val).toLocaleString('vi-VN');
+    }
+
+    function formatDurationMs(ms) {
+      if (ms === null || ms === undefined || Number.isNaN(Number(ms))) {
+        return 'Không có dữ liệu';
+      }
+      const totalSeconds = Math.round(Number(ms) / 1000);
+      if (totalSeconds <= 0) return '0s';
+      const hours = Math.floor(totalSeconds / 3600);
+      const mins = Math.floor((totalSeconds % 3600) / 60);
+      const secs = totalSeconds % 60;
+      if (hours > 0) {
+        return `${hours}h ${mins}p ${secs}s`;
+      }
+      if (mins > 0) {
+        return `${mins}p ${secs}s`;
+      }
+      return `${secs}s`;
+    }
+
+    function formatVnDateTime(isoStr) {
+      if (!isoStr) return '—';
+      try {
+        const d = new Date(isoStr);
+        if (isNaN(d.getTime())) return String(isoStr);
+        return d.toLocaleString('vi-VN', {
+          timeZone: 'Asia/Ho_Chi_Minh',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+      } catch {
+        return String(isoStr);
+      }
+    }
+
+    function calcChartBarWidth(val, maxVal) {
+      const n = Number(val || 0);
+      const m = Number(maxVal || 1);
+      if (n <= 0 || m <= 0) return 0;
+      return Math.min(100, Math.max(4, Math.round((n / m) * 100)));
+    }
+
+    async function loadReelsInsights() {
+      if (authState.value !== 'authenticated') return false;
+      isLoadingInsights.value = true;
+      try {
+        const params = new URLSearchParams();
+        if (insightsFilter.value.facebook_page_id) {
+          params.append('facebook_page_id', insightsFilter.value.facebook_page_id);
+        }
+        if (insightsFilter.value.range) {
+          params.append('range', insightsFilter.value.range);
+        }
+        if (insightsFilter.value.range === 'custom') {
+          if (insightsFilter.value.start_date) params.append('start_date', insightsFilter.value.start_date);
+          if (insightsFilter.value.end_date) params.append('end_date', insightsFilter.value.end_date);
+        }
+        if ((insightsFilter.value.search || '').trim()) {
+          params.append('search', insightsFilter.value.search.trim());
+        }
+        if (insightsFilter.value.sort_by) {
+          params.append('sort_by', insightsFilter.value.sort_by);
+        }
+        if (insightsFilter.value.sort_dir) {
+          params.append('sort_dir', insightsFilter.value.sort_dir);
+        }
+
+        const res = await apiFetch(`/api/insights/reels?${params.toString()}`, {
+          abortKey: 'loadReelsInsights',
+          timeoutMs: 15000
+        });
+        if (res.ok) {
+          const data = await res.json();
+          insightsData.value = {
+            overview: data.overview || insightsData.value.overview,
+            charts: data.charts || insightsData.value.charts,
+            reels: Array.isArray(data.reels) ? data.reels : [],
+            permission_warnings: Array.isArray(data.permission_warnings) ? data.permission_warnings : [],
+            last_synced_at: data.last_synced_at || null
+          };
+          return true;
+        }
+      } catch (err) {
+        if (!err || err.name !== 'AbortError') {
+          console.error("Lỗi tải thống kê Reels:", err);
+        }
+      } finally {
+        isLoadingInsights.value = false;
+      }
+      return false;
+    }
+
+    async function handleSyncAllInsights() {
+      if (isSyncingInsights.value) return;
+      isSyncingInsights.value = true;
+      try {
+        const res = await apiFetch('/api/insights/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            facebook_page_id: insightsFilter.value.facebook_page_id || null,
+            limit: 20
+          }),
+          timeoutMs: 30000
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message || 'Đã đồng bộ số liệu thống kê từ Meta!', data.success ? 'success' : 'warning');
+          await Promise.allSettled([loadReelsInsights(), loadAccounts(), loadPages()]);
+        } else {
+          showToast(data.detail || data.message || 'Không thể đồng bộ thống kê.', 'error');
+        }
+      } catch (err) {
+        showToast('Lỗi đồng bộ thống kê: ' + (err.message || 'Mạng không ổn định'), 'error');
+      } finally {
+        isSyncingInsights.value = false;
+      }
+    }
+
+    async function handleSyncSingleReelInsight(taskId) {
+      if (!taskId || syncingTaskInsightId.value) return;
+      syncingTaskInsightId.value = taskId;
+      try {
+        const res = await apiFetch(`/api/tasks/${taskId}/sync-insights`, {
+          method: 'POST',
+          timeoutMs: 20000
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message || 'Đã cập nhật chỉ số Reels!', data.success ? 'success' : 'warning');
+          await loadReelsInsights();
+          if (showReelInsightModal.value && reelInsightDetail.value.task && reelInsightDetail.value.task.id === taskId) {
+            await openReelInsightModal(taskId);
+          }
+        } else {
+          showToast(data.detail || data.message || 'Không thể làm mới chỉ số Reels.', 'error');
+        }
+      } catch (err) {
+        showToast('Lỗi làm mới chỉ số: ' + err.message, 'error');
+      } finally {
+        syncingTaskInsightId.value = null;
+      }
+    }
+
+    async function openReelInsightModal(taskId) {
+      if (!taskId) return;
+      showReelInsightModal.value = true;
+      isLoadingReelDetail.value = true;
+      try {
+        const res = await apiFetch(`/api/insights/reels/${taskId}`, {
+          timeoutMs: 15000
+        });
+        if (res.ok) {
+          const data = await res.json();
+          reelInsightDetail.value = {
+            task: data.task || null,
+            latest_snapshot: data.latest_snapshot || null,
+            metric_items: Array.isArray(data.metric_items) ? data.metric_items : [],
+            history: Array.isArray(data.history) ? data.history : []
+          };
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          showToast(errData.detail || 'Không thể tải chi tiết thống kê bài đăng.', 'error');
+        }
+      } catch (err) {
+        showToast('Lỗi tải chi tiết thống kê: ' + err.message, 'error');
+      } finally {
+        isLoadingReelDetail.value = false;
       }
     }
 
@@ -1950,9 +2312,14 @@
 
     function onPopState() {
       const p = window.location.pathname;
-      if (p === '/schedules' || p === '/reels') {
+      if (p === '/insights') {
+        mainView.value = 'insights';
+        loadReelsInsights();
+      } else if (p === '/schedules' || p === '/reels') {
+        mainView.value = 'workspace';
         currentTab.value = 'schedules';
       } else {
+        mainView.value = 'workspace';
         currentTab.value = 'pages';
       }
     }
@@ -1988,11 +2355,15 @@
     }
 
     onMounted(async () => {
-      // Chuẩn hóa đường dẫn mặc định về /page
+      // Chuẩn hóa đường dẫn mặc định về /page hoặc /insights
       const path = window.location.pathname;
-      if (path === '/schedules' || path === '/reels') {
+      if (path === '/insights') {
+        mainView.value = 'insights';
+      } else if (path === '/schedules' || path === '/reels') {
+        mainView.value = 'workspace';
         currentTab.value = 'schedules';
       } else {
+        mainView.value = 'workspace';
         currentTab.value = 'pages';
         if (path === '/' || path === '/pages') {
           history.replaceState(null, '', '/page' + window.location.search);
@@ -2010,6 +2381,9 @@
 
       // 2. Tải dữ liệu thiết yếu của trang /page (Pages & Accounts), dữ liệu phụ chạy ngầm không chặn UI
       await loadAll();
+      if (mainView.value === 'insights') {
+        await loadReelsInsights();
+      }
 
       // 3. Xử lý kết quả OAuth nếu quay lại từ chế độ redirect toàn trang
       const urlParams = new URLSearchParams(window.location.search);
@@ -2052,6 +2426,8 @@
       pageLoadError,
       retryInitializePage,
       currentUser,
+      mainView,
+      setMainView,
       currentTab,
       setTab,
       checkAuth,
@@ -2059,6 +2435,8 @@
       pages,
       tasks,
       accounts,
+      expiredAccounts,
+      missingInsightsAccounts,
       selectedAdminFilterIds,
       searchPage,
       filterPageStatus,
@@ -2085,6 +2463,7 @@
       connectStatus,
       connectMessage,
       connectAccountInfo,
+      connectWarnings,
       handleConnectToken,
       hours24List,
       minutes60List,
@@ -2162,6 +2541,8 @@
       openBulkTaskModal,
       handleBulkInputChanged,
       handleBulkSubmit,
+      isTaskLocked,
+      isTaskInFlight,
       openEditTaskModal,
       handleUpdateTaskSubmit,
       handleResetTask,
@@ -2177,6 +2558,26 @@
       formatFriendlyLog,
       retryingCommentTaskId,
       handleRetryComment,
+      insightsFilter,
+      insightsData,
+      isLoadingInsights,
+      isSyncingInsights,
+      syncingTaskInsightId,
+      showReelInsightModal,
+      isLoadingReelDetail,
+      reelInsightDetail,
+      maxTimeSeriesViews,
+      maxReelPerformanceViews,
+      maxReelInteractions,
+      formatMetricValue,
+      formatMetricNumber,
+      formatDurationMs,
+      formatVnDateTime,
+      calcChartBarWidth,
+      loadReelsInsights,
+      handleSyncAllInsights,
+      handleSyncSingleReelInsight,
+      openReelInsightModal,
       copyToClipboard,
       getFileName,
       startResizeSplitter

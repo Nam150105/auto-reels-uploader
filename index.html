@@ -70,9 +70,20 @@
         <div>
           <div class="flex items-center gap-2">
             <h1 class="font-extrabold text-sm tracking-tight text-white">FB Reels Auto Scheduler</h1>
-            <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-              Quản lý Fanpage &amp; Reels
-            </span>
+            <!-- Main View Navigation Pills -->
+            <div class="flex items-center gap-1 bg-slate-950/90 p-0.5 rounded-lg border border-slate-800 ml-1">
+              <button @click="setMainView('workspace')"
+                      class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
+                      :class="mainView === 'workspace' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+                <span>📢 Quản lý &amp; Lịch Reels</span>
+              </button>
+              <button @click="setMainView('insights')"
+                      class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
+                      :class="mainView === 'insights' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+                <span>📊 Thống kê Reels</span>
+                <span v-if="systemStats.success_tasks > 0" class="px-1.5 py-0.2 rounded-full text-[9px] bg-white/15 text-white font-mono">{{ systemStats.success_tasks }}</span>
+              </button>
+            </div>
           </div>
 
           <!-- Summary Metrics Chips -->
@@ -188,11 +199,32 @@
       </button>
     </div>
 
+    <!-- ================= BANNER CẢNH BÁO ACCESS TOKEN HẾT HẠN / BỊ THU HỒI ================= -->
+    <div v-if="expiredAccounts.length > 0" class="mx-3 mt-2 px-4 py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-lg">
+      <div class="flex items-center gap-2.5 text-xs text-amber-200">
+        <span class="text-base">⚠️</span>
+        <div>
+          <div class="font-bold text-amber-300">
+            Access Token đã hết hạn hoặc không còn hợp lệ ({{ expiredAccounts.map(a => a.user_name || a.user_id).join(', ') }})
+          </div>
+          <div class="text-[11px] text-amber-200/90">
+            Access Token của bạn đã hết hạn hoặc không còn hợp lệ. Vui lòng tạo lại Access Token trong Graph API Explorer và cập nhật vào hệ thống. Toàn bộ Fanpage, lịch sử bài đăng và thống kê sẽ được giữ nguyên.
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <button @click="openConnectModal(expiredAccounts[0]?.id)" class="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold transition shadow-md">
+          🔑 Cập nhật Access Token
+        </button>
+      </div>
+    </div>
+
     <!-- ================= MAIN WORKSPACE ================= -->
     <main class="flex-1 flex overflow-hidden p-3 gap-2">
 
       <!-- ================= LEFT: FANPAGE MANAGEMENT ================= -->
       <section 
+        v-if="mainView === 'workspace'"
         class="flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl shrink-0 transition-all duration-75"
         :class="{ 'hidden md:flex': currentTab !== 'pages' }"
         :style="{ width: sidebarWidth + 'px', minWidth: '320px', maxWidth: '750px' }">
@@ -358,12 +390,18 @@
                 <!-- Quyền Đăng -->
                 <td class="py-1 px-1 text-center whitespace-nowrap" @click.stop>
                   <div class="space-y-0.5">
-                    <span v-if="p.can_post" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 inline-block" title="Fanpage đã sẵn sàng đăng bài">
+                    <span v-if="p.status === 'missing_permission'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 inline-block" title="Token hiện tại không còn quyền quản lý Page này. Dữ liệu & lịch sử vẫn được giữ nguyên.">
+                      ⚠ Cần quyền Token
+                    </span>
+                    <span v-else-if="p.can_post" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 inline-block" title="Fanpage đã sẵn sàng đăng bài">
                       ✓ Đủ quyền
                     </span>
                     <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 inline-block" title="Chưa cấp đủ quyền quản lý Fanpage">
                       ⚠ Thiếu quyền
                     </span>
+                    <div v-if="p.can_analyze" class="text-[9px] text-indigo-300 font-semibold" title="Có quyền ANALYZE đọc Insights">
+                      📊 ANALYZE
+                    </div>
                     <div v-if="p.token_status && p.token_status !== 'valid'" class="text-[9px] text-rose-400 font-semibold">
                       Cần kết nối lại
                     </div>
@@ -405,6 +443,7 @@
 
       <!-- ================= RESIZABLE SPLITTER HANDLE ================= -->
       <div 
+        v-if="mainView === 'workspace'"
         class="hidden md:flex w-2.5 -mx-1 hover:w-2.5 bg-transparent hover:bg-blue-500/30 cursor-col-resize select-none items-center justify-center transition-colors group relative z-20 shrink-0"
         :class="isResizingSplitter ? 'bg-blue-500/50' : ''"
         @mousedown="startResizeSplitter"
@@ -415,6 +454,7 @@
 
       <!-- ================= RIGHT: TASK MANAGEMENT ================= -->
       <section 
+        v-if="mainView === 'workspace'"
         class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0"
         :class="{ 'hidden md:flex': currentTab !== 'schedules' }">
         
@@ -458,7 +498,7 @@
 
             <button @click="openBulkTaskModal" class="flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold px-3.5 py-1.5 rounded-lg text-xs transition shadow-md">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-              <span>📋 Nhập Nhanh Từ Excel (Bulk)</span>
+              <span>Nhập Nhanh Từ Excel (Bulk)</span>
             </button>
 
             <button @click="loadAll" title="Làm mới bảng" class="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition">
@@ -515,7 +555,7 @@
             <tbody class="divide-y divide-slate-800/60 text-xs font-normal">
               <tr v-if="tasks.length === 0">
                 <td colspan="9" class="text-center py-20 text-slate-500">
-                  Chưa có task nào.<br>Bấm <b>+ Thêm Task Đơn Lẻ</b> hoặc <b>Nhập Nhanh Từ Excel</b> để tạo lịch đăng.
+                  Chưa có task nào.<br>Bấm <b>Thêm Task Đơn Lẻ</b> hoặc <b>Nhập Nhanh Từ Excel</b> để tạo lịch đăng.
                 </td>
               </tr>
 
@@ -523,8 +563,10 @@
                 <td class="py-2.5 px-3 text-center">
                   <input type="checkbox"
                          :checked="selectedTaskIds.includes(t.id)"
+                         :disabled="isTaskLocked(t) || isTaskInFlight(t)"
                          @change="toggleTaskSelection(t.id)"
-                         class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer">
+                         :title="isTaskLocked(t) ? 'Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử.' : 'Chọn task'"
+                         class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 focus:ring-offset-0 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">
                 </td>
                 <td class="py-2.5 px-3 text-center font-mono text-slate-400 font-semibold">{{ t.id }}</td>
                 
@@ -584,21 +626,28 @@
                       <span v-else-if="t.status === 'queued'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">Hàng đợi</span>
                       <span v-else-if="t.status === 'pending'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Chờ đăng</span>
                       <span v-else-if="t.status === 'running'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/30 animate-pulse">Đang đăng Reels...</span>
-                      <span v-else-if="t.status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Reels: Xong</span>
-                      <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">Reels: Lỗi</span>
+                      <span v-else-if="t.status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Reels: Thành công</span>
+                      <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">Reels: Thất bại</span>
                       <span v-else-if="t.status === 'cancelled'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">Đã hủy</span>
+                    </div>
+
+                    <!-- Trạng thái khóa sau khi đăng -->
+                    <div v-if="isTaskLocked(t)">
+                      <span class="px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-800 text-slate-300 border border-slate-700" title="Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử. Bạn vẫn có thể xem thông tin và thống kê bài đăng.">
+                        🔒 Đã khóa sau khi đăng
+                      </span>
                     </div>
 
                     <!-- Trạng thái Comment (Chỉ hiển thị khi task có nhập nội dung comment) -->
                     <div v-if="t.comment_text">
                       <span v-if="t.comment_status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-teal-500/10 text-teal-300 border border-teal-500/20" title="Bình luận đã đăng thành công">
-                        💬 Comment: Xong
+                        💬 Comment: Thành công
                       </span>
                       <span v-else-if="t.comment_status === 'processing'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-300 border border-sky-500/20 animate-pulse">
-                        💬 Comment: Đang gửi...
+                        💬 Comment: Đang xử lý...
                       </span>
                       <span v-else-if="t.comment_status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30 cursor-pointer hover:bg-amber-500/25" :title="t.comment_log || 'Lỗi bình luận'" @click="openLogModal(t)">
-                        ⚠️ Comment: Lỗi
+                        ⚠️ Comment: Thất bại
                       </span>
                       <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700/60" title="Chưa gửi bình luận">
                         💬 Comment: Chưa gửi
@@ -611,7 +660,7 @@
                 <td class="py-2.5 px-3 max-w-[220px]">
                   <div v-if="t.video_url" class="truncate">
                     <a :href="t.video_url" target="_blank" class="text-blue-400 hover:underline font-semibold text-[11px] flex items-center gap-1">
-                      <span>🔗 Xem Reels Facebook</span>
+                      <span>🔗 Mở bài đăng Facebook</span>
                     </a>
                   </div>
                   <div @click="openLogModal(t)" class="truncate cursor-pointer hover:underline text-[11px] mt-0.5" :class="t.status === 'failed' ? 'text-rose-400 font-semibold' : 'text-slate-400'" :title="formatFriendlyLog(t)">
@@ -626,7 +675,7 @@
                 <td class="py-2.5 px-3 text-center whitespace-nowrap">
                   <div class="flex items-center justify-center gap-1">
                     <!-- Nút Thử đăng lại comment (Chỉ khi Reels thành công nhưng comment thất bại) -->
-                    <button v-if="t.status === 'success' && t.comment_text && t.comment_status === 'failed'"
+                    <button v-if="isTaskLocked(t) && t.comment_text && t.comment_status === 'failed'"
                             @click="handleRetryComment(t.id)"
                             :disabled="retryingCommentTaskId === t.id"
                             title="Thử đăng lại bình luận (Tuyệt đối không đăng lại video)"
@@ -635,15 +684,42 @@
                       <svg v-else class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                       <span>Đăng lại cmt</span>
                     </button>
-                    <button @click="openEditTaskModal(t)" title="Sửa task" class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition">
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-                    </button>
-                    <button @click="handleResetTask(t.id)" title="Đặt lại về Pending" class="p-1 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded transition">
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                    </button>
-                    <button @click="handleDeleteTask(t.id)" title="Xóa task" class="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition">
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    </button>
+
+                    <!-- Khi task đã đăng thành công (isTaskLocked): Chỉ cho Xem thống kê & Xem chi tiết, khóa Sửa/Đặt lại/Xóa -->
+                    <template v-if="isTaskLocked(t)">
+                      <button @click="openReelInsightModal(t.id)"
+                              title="Xem thống kê hiệu suất Reels"
+                              class="px-2 py-1 bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition">
+                        <span>📊 Thống kê</span>
+                      </button>
+                      <button @click="openLogModal(t)"
+                              title="Xem chi tiết task & lịch sử thực thi"
+                              class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                      </button>
+                    </template>
+
+                    <!-- Khi task chưa đăng thành công: Cho phép Sửa / Đặt lại / Xóa (khóa nếu đang chạy) -->
+                    <template v-else>
+                      <button @click="openEditTaskModal(t)"
+                              :disabled="isTaskInFlight(t)"
+                              title="Sửa task"
+                              class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                      </button>
+                      <button @click="handleResetTask(t.id)"
+                              :disabled="isTaskInFlight(t)"
+                              title="Đặt lại về Pending"
+                              class="p-1 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                      </button>
+                      <button @click="handleDeleteTask(t.id)"
+                              :disabled="isTaskInFlight(t)"
+                              title="Xóa task"
+                              class="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                      </button>
+                    </template>
                   </div>
                 </td>
               </tr>
@@ -654,9 +730,458 @@
         <!-- Footer -->
         <div class="px-4 py-2 border-t border-slate-800 bg-slate-950/70 flex items-center justify-between text-xs text-slate-400 shrink-0">
           <span>Tổng cộng: <b class="text-white">{{ tasks.length }}</b> tasks</span>
-          <span class="text-[11px] text-slate-500">Tự động đồng bộ mỗi 3 giây • Chuẩn Meta Graph API</span>
+          <span class="text-[11px] text-slate-500">By Nam Năng Nổ</span>
         </div>
 
+      </section>
+
+      <!-- ================= VIEW: THỐNG KÊ REELS (INSIGHTS DASHBOARD) ================= -->
+      <section
+        v-if="mainView === 'insights'"
+        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
+
+        <!-- 1. Thanh tiêu đề & Bộ lọc Thống kê -->
+        <div class="p-3.5 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div class="flex items-center gap-2.5">
+            <span class="text-lg">📊</span>
+            <div>
+              <h2 class="font-extrabold text-white text-sm">Thống Kê Hiệu Suất Facebook Reels (Meta Graph API v27.0)</h2>
+              <p class="text-[11px] text-slate-400">
+                Số liệu thực tế từ Meta Insights • Múi giờ: <span class="font-mono text-slate-300">Asia/Ho_Chi_Minh</span>
+                <span v-if="insightsData.last_synced_at" class="ml-2 text-emerald-400">
+                  • Cập nhật gần nhất: <b>{{ formatVnDateTime(insightsData.last_synced_at) }}</b>
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <!-- Bộ lọc -->
+          <div class="flex items-center gap-2 flex-wrap">
+            <!-- Chọn Page -->
+            <select v-model="insightsFilter.facebook_page_id" @change="loadReelsInsights"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 max-w-[200px]">
+              <option value="">Tất cả Fanpage</option>
+              <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">
+                {{ p.name }} ({{ p.facebook_page_id }})
+              </option>
+            </select>
+
+            <!-- Chọn khoảng thời gian -->
+            <select v-model="insightsFilter.range" @change="loadReelsInsights"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+              <option value="7d">7 ngày gần nhất</option>
+              <option value="30d">30 ngày gần nhất (Mặc định)</option>
+              <option value="90d">90 ngày gần nhất</option>
+              <option value="custom">Tùy chọn từ ngày – đến ngày</option>
+            </select>
+
+            <!-- Tùy chọn ngày bắt đầu / kết thúc -->
+            <template v-if="insightsFilter.range === 'custom'">
+              <input type="date" v-model="insightsFilter.start_date" @change="loadReelsInsights"
+                     class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono">
+              <span class="text-slate-500">→</span>
+              <input type="date" v-model="insightsFilter.end_date" @change="loadReelsInsights"
+                     class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono">
+            </template>
+
+            <!-- Tìm kiếm theo caption -->
+            <div class="relative">
+              <input type="text" v-model="insightsFilter.search" @input="loadReelsInsights"
+                     placeholder="Tìm theo caption, ID..."
+                     class="w-44 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 pl-7 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+              <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2 top-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            </div>
+
+            <!-- Sắp xếp theo -->
+            <select v-model="insightsFilter.sort_by" @change="loadReelsInsights"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+              <option value="published_at">Sắp xếp: Ngày đăng</option>
+              <option value="views">Sắp xếp: Lượt xem</option>
+              <option value="reach">Sắp xếp: Lượt tiếp cận (Reach)</option>
+              <option value="total_interactions">Sắp xếp: Tương tác</option>
+              <option value="total_watch_time_ms">Sắp xếp: Thời gian xem</option>
+            </select>
+
+            <!-- Nút Đồng bộ / Làm mới dữ liệu từ Meta -->
+            <button @click="handleSyncAllInsights"
+                    :disabled="isSyncingInsights"
+                    class="flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 text-white font-bold px-3.5 py-1.5 rounded-lg text-xs transition shadow-md">
+              <svg class="w-3.5 h-3.5" :class="isSyncingInsights ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              <span>{{ isSyncingInsights ? 'Đang đồng bộ Meta...' : 'Làm mới số liệu Meta' }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Nội dung cuộn của Trang Thống Kê -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-5 select-text">
+
+          <!-- Cảnh báo thiếu quyền read_insights / ANALYZE / Token hết hạn -->
+          <div v-if="insightsData.permission_warnings && insightsData.permission_warnings.length > 0"
+               class="p-3.5 rounded-xl bg-amber-950/40 border border-amber-600/40 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3">
+            <div class="space-y-1">
+              <div class="font-bold text-amber-300 flex items-center gap-1.5">
+                <span>⚠️ Lưu ý về quyền truy cập thống kê Meta Insights</span>
+              </div>
+              <ul class="list-disc list-inside space-y-0.5 text-[11px] text-amber-200/90">
+                <li v-for="(w, idx) in insightsData.permission_warnings" :key="idx">{{ w }}</li>
+              </ul>
+            </div>
+            <button @click="openConnectModal(expiredAccounts[0]?.id || missingInsightsAccounts[0]?.id || null)"
+                    class="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition shrink-0">
+              🔑 Cập nhật Token (read_insights)
+            </button>
+          </div>
+
+          <!-- 2. 8 THẺ CHỈ SỐ TỔNG QUAN (OVERVIEW CARDS) -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+            <!-- Card 1: Tổng lượt xem Reels -->
+            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-col justify-between">
+              <div class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+                <span>Tổng lượt xem</span>
+                <span class="text-blue-400">▶️</span>
+              </div>
+              <div class="text-base font-extrabold text-white font-mono mt-1.5">
+                {{ formatMetricValue(insightsData.overview.total_views) }}
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">
+                Trên {{ insightsData.overview.total_reels_count || 0 }} bài Reels đã đăng
+              </div>
+            </div>
+
+            <!-- Card 2: Tổng lượt tiếp cận -->
+            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-col justify-between">
+              <div class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+                <span>Lượt tiếp cận</span>
+                <span class="text-cyan-400">👁️</span>
+              </div>
+              <div class="text-base font-extrabold text-cyan-300 font-mono mt-1.5">
+                {{ formatMetricValue(insightsData.overview.total_reach) }}
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">Unique Reach (post_impressions_unique)</div>
+            </div>
+
+            <!-- Card 3: Tổng tương tác -->
+            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-col justify-between">
+              <div class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+                <span>Tổng tương tác</span>
+                <span class="text-indigo-400">⚡</span>
+              </div>
+              <div class="text-base font-extrabold text-indigo-300 font-mono mt-1.5">
+                {{ formatMetricValue(insightsData.overview.total_interactions) }}
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">Cảm xúc + Bình luận + Chia sẻ</div>
+            </div>
+
+            <!-- Card 4: Tổng lượt thích / cảm xúc -->
+            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-col justify-between">
+              <div class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+                <span>Lượt thích</span>
+                <span class="text-pink-400">❤️</span>
+              </div>
+              <div class="text-base font-extrabold text-pink-300 font-mono mt-1.5">
+                {{ formatMetricValue(insightsData.overview.total_likes) }}
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">Reactions trên bài Reels</div>
+            </div>
+
+            <!-- Card 5: Tổng bình luận -->
+            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-col justify-between">
+              <div class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+                <span>Tổng bình luận</span>
+                <span class="text-teal-400">💬</span>
+              </div>
+              <div class="text-base font-extrabold text-teal-300 font-mono mt-1.5">
+                {{ formatMetricValue(insightsData.overview.total_comments) }}
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">Comments trên bài Reels</div>
+            </div>
+
+            <!-- Card 6: Tổng lượt chia sẻ -->
+            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-col justify-between">
+              <div class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+                <span>Lượt chia sẻ</span>
+                <span class="text-emerald-400">🔁</span>
+              </div>
+              <div class="text-base font-extrabold text-emerald-300 font-mono mt-1.5">
+                {{ formatMetricValue(insightsData.overview.total_shares) }}
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">Shares trên bài Reels</div>
+            </div>
+
+            <!-- Card 7: Tổng thời gian xem -->
+            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-col justify-between">
+              <div class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+                <span>Tổng TG xem</span>
+                <span class="text-amber-400">⏱️</span>
+              </div>
+              <div class="text-base font-extrabold text-amber-300 font-mono mt-1.5">
+                {{ formatDurationMs(insightsData.overview.total_watch_time_ms) }}
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">post_video_view_time</div>
+            </div>
+
+            <!-- Card 8: Thời gian xem trung bình -->
+            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-col justify-between">
+              <div class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+                <span>TG xem TB</span>
+                <span class="text-purple-400">⏳</span>
+              </div>
+              <div class="text-base font-extrabold text-purple-300 font-mono mt-1.5">
+                {{ formatDurationMs(insightsData.overview.avg_watch_time_ms) }}
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">post_video_avg_time_watched</div>
+            </div>
+          </div>
+
+          <!-- 3. KHU VỰC 5 BIỂU ĐỒ TRỰC QUAN -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <!-- Biểu đồ 1: Lượt xem theo thời gian -->
+            <div class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="text-xs font-bold text-white">1. Biểu đồ Lượt xem &amp; Tiếp cận theo thời gian</h3>
+                  <p class="text-[10px] text-slate-400">Tổng lượt xem và Reach theo ngày đăng Reels</p>
+                </div>
+                <span class="text-[10px] font-mono text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">Time Series</span>
+              </div>
+              <div v-if="!insightsData.charts.views_over_time || insightsData.charts.views_over_time.length === 0"
+                   class="h-40 flex items-center justify-center text-xs text-slate-500 italic">
+                Chưa có dữ liệu biểu đồ trong khoảng thời gian đã chọn.
+              </div>
+              <div v-else class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                <div v-for="pt in insightsData.charts.views_over_time" :key="pt.date" class="space-y-1">
+                  <div class="flex items-center justify-between text-[11px] font-mono">
+                    <span class="text-slate-300 font-semibold">{{ pt.date }} <span class="text-slate-500">({{ pt.reels_count }} Reels)</span></span>
+                    <span class="text-blue-300">▶️ {{ formatMetricNumber(pt.views) }} views <span class="text-slate-600">|</span> <span class="text-cyan-300">👁️ {{ formatMetricNumber(pt.reach) }} reach</span></span>
+                  </div>
+                  <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex">
+                    <div class="bg-gradient-to-r from-blue-600 to-cyan-400 h-full rounded-full transition-all"
+                         :style="{ width: calcChartBarWidth(pt.views, maxTimeSeriesViews) + '%' }"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Biểu đồ 2: Hiệu suất từng Reels -->
+            <div class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="text-xs font-bold text-white">2. Biểu đồ Hiệu suất từng bài Reels</h3>
+                  <p class="text-[10px] text-slate-400">So sánh Views và Reach giữa các bài Reels</p>
+                </div>
+                <span class="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">Top Reels</span>
+              </div>
+              <div v-if="!insightsData.charts.reel_performance || insightsData.charts.reel_performance.length === 0"
+                   class="h-40 flex items-center justify-center text-xs text-slate-500 italic">
+                Chưa có bài Reels nào có số liệu.
+              </div>
+              <div v-else class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                <div v-for="rp in insightsData.charts.reel_performance.slice(0, 8)" :key="rp.task_id" class="space-y-1">
+                  <div class="flex items-center justify-between text-[11px]">
+                    <span class="text-slate-200 truncate max-w-[230px] font-medium" :title="rp.label">#{{ rp.task_id }} • {{ rp.page_name }}: {{ rp.label }}</span>
+                    <span class="font-mono text-indigo-300 shrink-0">{{ formatMetricNumber(rp.views) }} views • {{ formatMetricNumber(rp.reach) }} reach</span>
+                  </div>
+                  <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden">
+                    <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-full rounded-full transition-all"
+                         :style="{ width: calcChartBarWidth(rp.views, maxReelPerformanceViews) + '%' }"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Biểu đồ 3: Tương tác (Likes, Comments, Shares) -->
+            <div class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="text-xs font-bold text-white">3. Biểu đồ Phân bổ Tương tác (Likes, Comments, Shares)</h3>
+                  <p class="text-[10px] text-slate-400">Chi tiết cảm xúc, bình luận và chia sẻ trên từng bài Reels</p>
+                </div>
+                <span class="text-[10px] font-mono text-pink-400 bg-pink-500/10 px-2 py-0.5 rounded border border-pink-500/20">Engagement</span>
+              </div>
+              <div v-if="!insightsData.charts.interactions_breakdown || insightsData.charts.interactions_breakdown.length === 0"
+                   class="h-40 flex items-center justify-center text-xs text-slate-500 italic">
+                Chưa có dữ liệu tương tác.
+              </div>
+              <div v-else class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                <div v-for="ib in insightsData.charts.interactions_breakdown.slice(0, 8)" :key="ib.task_id" class="space-y-1">
+                  <div class="flex items-center justify-between text-[11px]">
+                    <span class="text-slate-200 truncate max-w-[200px]">#{{ ib.task_id }} {{ ib.label }}</span>
+                    <span class="font-mono text-[10px] space-x-2 shrink-0">
+                      <span class="text-pink-300">❤️ {{ ib.likes }}</span>
+                      <span class="text-teal-300">💬 {{ ib.comments }}</span>
+                      <span class="text-emerald-300">🔁 {{ ib.shares }}</span>
+                    </span>
+                  </div>
+                  <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden flex">
+                    <div class="bg-pink-500 h-full" :style="{ width: calcChartBarWidth(ib.likes, maxReelInteractions) + '%' }"></div>
+                    <div class="bg-teal-400 h-full" :style="{ width: calcChartBarWidth(ib.comments, maxReelInteractions) + '%' }"></div>
+                    <div class="bg-emerald-400 h-full" :style="{ width: calcChartBarWidth(ib.shares, maxReelInteractions) + '%' }"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Biểu đồ 4: Thời gian xem & Biểu đồ 5: So sánh giữa các Page -->
+            <div class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="text-xs font-bold text-white">4. Thời gian xem &amp; 5. So sánh hiệu suất giữa các Fanpage</h3>
+                  <p class="text-[10px] text-slate-400">Tổng thời gian xem và đối chiếu chỉ số giữa các Fanpage</p>
+                </div>
+                <span class="text-[10px] font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">Watch Time &amp; Pages</span>
+              </div>
+              <div v-if="(!insightsData.charts.page_comparison || insightsData.charts.page_comparison.length === 0)"
+                   class="h-40 flex items-center justify-center text-xs text-slate-500 italic">
+                Chưa có dữ liệu so sánh Fanpage.
+              </div>
+              <div v-else class="space-y-2.5 max-h-48 overflow-y-auto pr-1">
+                <div v-for="pg in insightsData.charts.page_comparison" :key="pg.facebook_page_id"
+                     class="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800/80 space-y-1">
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="font-bold text-white">{{ pg.page_name }} <span class="text-[10px] text-slate-400 font-mono">({{ pg.reels_count }} Reels)</span></span>
+                    <span class="font-mono text-[11px] text-amber-300">⏱️ {{ formatDurationMs(pg.total_watch_time_ms) }}</span>
+                  </div>
+                  <div class="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span>▶️ Views: <b class="text-blue-300">{{ formatMetricNumber(pg.views) }}</b></span>
+                    <span>👁️ Reach: <b class="text-cyan-300">{{ formatMetricNumber(pg.reach) }}</b></span>
+                    <span>⚡ Tương tác: <b class="text-indigo-300">{{ formatMetricNumber(pg.interactions) }}</b></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. BẢNG DANH SÁCH REELS ĐÃ ĐĂNG VÀ CHỈ SỐ INSIGHTS -->
+          <div class="bg-slate-950/90 border border-slate-800 rounded-xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <h3 class="text-xs font-extrabold text-white uppercase tracking-wider">Danh Sách Bài Đăng Reels Đã Xuất Bản ({{ insightsData.reels ? insightsData.reels.length : 0 }})</h3>
+              </div>
+              <span class="text-[11px] text-slate-400">Nhấn <b>"📊 Chi tiết"</b> để xem lịch sử tăng trưởng &amp; trạng thái từng metric</span>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse">
+                <thead class="bg-slate-900/95 border-b border-slate-800 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  <tr>
+                    <th class="py-2.5 px-3">Bài đăng Reels</th>
+                    <th class="py-2.5 px-3">Fanpage</th>
+                    <th class="py-2.5 px-3">Thời gian đăng</th>
+                    <th class="py-2.5 px-2 text-center">Trạng thái</th>
+                    <th class="py-2.5 px-2.5 text-right">Lượt xem</th>
+                    <th class="py-2.5 px-2.5 text-right">Reach</th>
+                    <th class="py-2.5 px-2 text-right">Likes</th>
+                    <th class="py-2.5 px-2 text-right">Comments</th>
+                    <th class="py-2.5 px-2 text-right">Shares</th>
+                    <th class="py-2.5 px-2.5 text-right">TG Xem TB</th>
+                    <th class="py-2.5 px-2.5 text-right">Tổng TG Xem</th>
+                    <th class="py-2.5 px-3 text-center">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 text-xs">
+                  <tr v-if="!insightsData.reels || insightsData.reels.length === 0">
+                    <td colspan="12" class="py-14 text-center text-slate-500">
+                      Chưa có bài Reels nào đã đăng thành công trong bộ lọc hiện tại.
+                    </td>
+                  </tr>
+                  <tr v-for="item in insightsData.reels" :key="item.task_id" class="hover:bg-slate-900/60 transition">
+                    <!-- Thumbnail / Caption / IDs -->
+                    <td class="py-2.5 px-3 max-w-[240px]">
+                      <div class="flex items-start gap-2.5">
+                        <div class="w-9 h-12 rounded-lg bg-gradient-to-br from-indigo-900/60 to-slate-900 border border-indigo-500/30 flex flex-col items-center justify-center shrink-0 text-[10px] font-mono text-indigo-300">
+                          <span>🎬</span>
+                          <span>#{{ item.task_id }}</span>
+                        </div>
+                        <div class="min-w-0">
+                          <div class="font-semibold text-slate-100 truncate" :title="item.caption">
+                            {{ item.caption || '(Không có caption)' }}
+                          </div>
+                          <div class="text-[10px] font-mono text-slate-400 truncate mt-0.5">
+                            Video ID: {{ item.video_id || '—' }}
+                          </div>
+                          <div class="text-[10px] font-mono text-slate-500 truncate">
+                            Post ID: {{ item.post_id || '—' }}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <!-- Fanpage -->
+                    <td class="py-2.5 px-3 whitespace-nowrap">
+                      <div class="font-bold text-white text-xs">{{ item.page_name }}</div>
+                      <div class="text-[10px] font-mono text-slate-500">{{ item.facebook_page_id }}</div>
+                    </td>
+
+                    <!-- Thời gian đăng -->
+                    <td class="py-2.5 px-3 whitespace-nowrap font-mono text-[11px] text-slate-300">
+                      {{ formatVnDateTime(item.published_at) }}
+                    </td>
+
+                    <!-- Trạng thái đăng & comment -->
+                    <td class="py-2.5 px-2 text-center whitespace-nowrap">
+                      <div class="flex flex-col gap-1 items-center">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          🔒 Đã đăng Reels
+                        </span>
+                        <span v-if="item.comment_text && item.comment_status === 'success'" class="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-teal-500/10 text-teal-300 border border-teal-500/20">
+                          💬 Cmt: Thành công
+                        </span>
+                        <span v-else-if="item.comment_text && item.comment_status === 'failed'" class="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          ⚠️ Cmt: Thất bại
+                        </span>
+                      </div>
+                    </td>
+
+                    <!-- Chỉ số -->
+                    <td class="py-2.5 px-2.5 text-right font-mono font-bold text-blue-300 whitespace-nowrap">
+                      {{ formatMetricValue(item.metrics.views) }}
+                    </td>
+                    <td class="py-2.5 px-2.5 text-right font-mono text-cyan-300 whitespace-nowrap">
+                      {{ formatMetricValue(item.metrics.reach) }}
+                    </td>
+                    <td class="py-2.5 px-2 text-right font-mono text-pink-300 whitespace-nowrap">
+                      {{ formatMetricValue(item.metrics.likes) }}
+                    </td>
+                    <td class="py-2.5 px-2 text-right font-mono text-teal-300 whitespace-nowrap">
+                      {{ formatMetricValue(item.metrics.comments) }}
+                    </td>
+                    <td class="py-2.5 px-2 text-right font-mono text-emerald-300 whitespace-nowrap">
+                      {{ formatMetricValue(item.metrics.shares) }}
+                    </td>
+                    <td class="py-2.5 px-2.5 text-right font-mono text-purple-300 whitespace-nowrap">
+                      {{ formatDurationMs(item.metrics.avg_watch_time_ms) }}
+                    </td>
+                    <td class="py-2.5 px-2.5 text-right font-mono text-amber-300 whitespace-nowrap">
+                      {{ formatDurationMs(item.metrics.total_watch_time_ms) }}
+                    </td>
+
+                    <!-- Thao tác -->
+                    <td class="py-2.5 px-3 text-center whitespace-nowrap">
+                      <div class="flex items-center justify-center gap-1.5">
+                        <button @click="openReelInsightModal(item.task_id)"
+                                class="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/35 text-indigo-300 border border-indigo-500/30 text-[11px] font-bold transition">
+                          📊 Chi tiết
+                        </button>
+                        <button @click="handleSyncSingleReelInsight(item.task_id)"
+                                :disabled="syncingTaskInsightId === item.task_id"
+                                title="Làm mới chỉ số bài đăng này từ Meta"
+                                class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition disabled:opacity-40">
+                          <svg class="w-3.5 h-3.5" :class="syncingTaskInsightId === item.task_id ? 'animate-spin text-blue-400' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        </button>
+                        <a v-if="item.permalink_url" :href="item.permalink_url" target="_blank"
+                           title="Mở bài đăng trên Facebook"
+                           class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-blue-400 border border-slate-700 transition">
+                          🔗
+                        </a>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
       </section>
 
     </main>
@@ -696,7 +1221,7 @@
 
               <button @click="openConnectModal()" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-md active:scale-95">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
-                <span>+ Kết nối Facebook</span>
+                <span>Kết nối Facebook</span>
               </button>
             </div>
           </div>
@@ -730,11 +1255,18 @@
                       <span v-if="acc.status === 'connected'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
                         🟢 Đang kết nối
                       </span>
-                      <span v-else-if="acc.status === 'expired'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                        🟡 Cần kết nối lại
+                      <span v-else-if="acc.status === 'expired' || acc.status === 'invalid_token' || acc.status === 'revoked'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                        🟡 Token hết hạn / Cần cập nhật
                       </span>
                       <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30">
                         🔴 Ngắt kết nối
+                      </span>
+                      <!-- read_insights Badge -->
+                      <span v-if="acc.has_read_insights" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30" title="Tài khoản đã cấp quyền read_insights đọc thống kê">
+                        📊 read_insights: Đã cấp
+                      </span>
+                      <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-amber-300 border border-amber-700/40" title="Chưa cấp quyền read_insights - Hãy cập nhật token để xem đầy đủ thống kê">
+                        ⚠ Thiếu read_insights
                       </span>
                     </div>
 
@@ -750,6 +1282,10 @@
 
                 <!-- Right: Actions per Account -->
                 <div class="flex items-center gap-1.5 shrink-0 flex-wrap">
+                  <button @click="showAccountsModal = false; openConnectModal(acc.id)" class="px-2.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition flex items-center gap-1" title="Cập nhật Access Token từ Graph API Explorer cho tài khoản này (Giữ nguyên toàn bộ Fanpage & lịch sử)">
+                    <span>🔑 Cập nhật Token</span>
+                  </button>
+
                   <button @click="handleSyncAccountPages(acc.id)" :disabled="isSyncingPages || acc.status !== 'connected'" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition disabled:opacity-40 flex items-center gap-1" title="Đồng bộ lại danh sách Fanpage của tài khoản này">
                     <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                     <span>Đồng Bộ</span>
@@ -789,7 +1325,7 @@
       </div>
     </div>
 
-    <!-- ================= MODAL: LIÊN KẾT TÀI KHOẢN FACEBOOK (GRAPH API EXPLORER) ================= -->
+    <!-- ================= MODAL: LIÊN KẾT / CẬP NHẬT TOKEN FACEBOOK (GRAPH API EXPLORER) ================= -->
     <div v-if="showConnectModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         
@@ -799,18 +1335,22 @@
               f
             </div>
             <div>
-              <h3 class="font-bold text-white text-base">Liên kết tài khoản Facebook</h3>
-              <p class="text-[11px] text-slate-400">Tạo Access Token từ Graph API Explorer để kết nối Fanpage</p>
+              <h3 class="font-bold text-white text-base">
+                {{ reconnectTargetAccountId ? 'Cập nhật Access Token Facebook' : 'Liên kết tài khoản Facebook' }}
+              </h3>
+              <p class="text-[11px] text-slate-400">
+                {{ reconnectTargetAccountId ? 'Cập nhật token mới an toàn (Giữ nguyên toàn bộ Fanpage, lịch sử đăng và thống kê)' : 'Tạo Access Token từ Graph API Explorer để kết nối Fanpage & đọc thống kê Reels' }}
+              </p>
             </div>
           </div>
           <button @click="showConnectModal = false" :disabled="isConnectingToken" class="text-slate-400 hover:text-white text-xl font-bold disabled:opacity-40">&times;</button>
         </div>
 
         <div class="p-5 overflow-y-auto space-y-4 text-xs">
-          <!-- Hướng dẫn 6 bước -->
+          <!-- Hướng dẫn 9 bước chuẩn Meta Graph API Explorer -->
           <div class="bg-slate-950/70 border border-slate-800/90 rounded-xl p-3.5 space-y-2.5 text-slate-300">
             <div class="font-bold text-slate-200 text-xs flex items-center justify-between border-b border-slate-800/80 pb-2">
-              <span>Hướng dẫn tạo token qua Graph API Explorer</span>
+              <span>Hướng dẫn tạo &amp; cập nhật Access Token qua Graph API Explorer</span>
               <a href="https://developers.facebook.com/tools/explorer/"
                  target="_blank"
                  rel="noopener noreferrer"
@@ -823,7 +1363,7 @@
             <div class="space-y-2 text-[12px] leading-relaxed">
               <div class="flex items-start gap-2">
                 <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">1</span>
-                <span>Nhấn nút <b>"Mở Graph API Explorer"</b> ở trên (sẽ mở tab mới).</span>
+                <span>Nhấn nút <b>"Mở Graph API Explorer"</b> ở trên (mở tab mới).</span>
               </div>
               <div class="flex items-start gap-2">
                 <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">2</span>
@@ -831,8 +1371,8 @@
               </div>
               <div class="flex items-start gap-2">
                 <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">3</span>
-                <div class="space-y-1">
-                  <span>Tại mục <b>User or Page</b>, chọn <b>Get User Access Token</b> và thêm các quyền sau:</span>
+                <div class="space-y-1.5">
+                  <span>Tại mục <b>User or Page</b>, chọn <b>Get User Access Token</b> và thêm đầy đủ các quyền sau:</span>
                   <div class="flex flex-wrap gap-1 mt-1">
                     <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_show_list</span>
                     <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">business_management</span>
@@ -841,20 +1381,21 @@
                     <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_read_user_content</span>
                     <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_manage_posts</span>
                     <span class="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-[10px] border border-indigo-900/40">pages_manage_engagement</span>
+                    <span class="px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-300 font-mono font-bold text-[10px] border border-emerald-500/40">read_insights</span>
+                  </div>
+                  <!-- Giải thích quyền read_insights theo yêu cầu 2.2 -->
+                  <div class="p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-800/50 text-[11px] text-indigo-200 leading-normal mt-1">
+                    💡 <b>Lưu ý về quyền <code class="font-mono text-emerald-300">read_insights</code>:</b> Quyền <code class="font-mono">read_insights</code> được sử dụng để đọc số liệu thống kê hiệu suất Reels và Page. Nếu không cấp quyền này, các chức năng đăng Reels và comment vẫn có thể hoạt động theo quyền hiện có, nhưng trang thống kê sẽ không lấy được đầy đủ dữ liệu.
                   </div>
                 </div>
               </div>
               <div class="flex items-start gap-2">
                 <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">4</span>
-                <span>Nhấn <b>Generate Access Token</b> và chấp thuận các quyền trên cửa sổ Facebook hiện ra.</span>
+                <span>Nhấn <b>Generate Access Token</b>, chọn đúng các Fanpage cần quản lý và xác nhận cấp quyền trên cửa sổ Facebook.</span>
               </div>
               <div class="flex items-start gap-2">
                 <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">5</span>
-                <span>Sao chép toàn bộ mã trong ô <b>Access Token</b>, quay lại đây và dán vào ô bên dưới.</span>
-              </div>
-              <div class="flex items-start gap-2">
-                <span class="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5">6</span>
-                <span>Nhấn nút <b>"Liên kết Facebook"</b> để hệ thống tự động đồng bộ tất cả Fanpage.</span>
+                <span>Sao chép toàn bộ mã <b>Access Token</b> vừa tạo, dán vào ô bên dưới và nhấn <b>"{{ reconnectTargetAccountId ? 'Cập nhật Access Token' : 'Liên kết Facebook' }}"</b>.</span>
               </div>
             </div>
           </div>
@@ -885,17 +1426,20 @@
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
             </svg>
-            <span class="font-medium">Đang kiểm tra token và kết nối Facebook...</span>
+            <span class="font-medium">Đang kiểm tra token và đồng bộ quyền Fanpage...</span>
           </div>
 
           <div v-else-if="connectStatus === 'success'"
-               class="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-600/50 text-xs text-emerald-300 space-y-1">
+               class="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-600/50 text-xs text-emerald-300 space-y-1.5">
             <div class="font-bold flex items-center gap-1.5">
-              <span>✓ Liên kết thành công!</span>
+              <span>✓ {{ reconnectTargetAccountId ? 'Cập nhật Access Token thành công!' : 'Liên kết thành công!' }}</span>
             </div>
             <div class="text-[11px] opacity-90">{{ connectMessage }}</div>
             <div v-if="connectAccountInfo" class="text-[11px] text-emerald-400/90 font-medium">
               • Tài khoản: <b>{{ connectAccountInfo.user_name }}</b> | Fanpage đồng bộ: <b>{{ connectAccountInfo.synced_count }}</b>
+            </div>
+            <div v-if="connectWarnings && connectWarnings.length > 0" class="pt-1.5 border-t border-emerald-800/50 space-y-1 text-amber-300 text-[11px]">
+              <div v-for="(cw, cIdx) in connectWarnings" :key="cIdx">⚠️ {{ cw }}</div>
             </div>
           </div>
 
@@ -923,7 +1467,7 @@
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
             </svg>
-            <span>{{ isConnectingToken ? 'Đang kiểm tra...' : 'Liên kết Facebook' }}</span>
+            <span>{{ isConnectingToken ? 'Đang kiểm tra...' : (reconnectTargetAccountId ? 'Cập nhật Access Token' : 'Liên kết Facebook') }}</span>
           </button>
         </div>
 
@@ -970,7 +1514,7 @@
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
           <h3 class="font-bold text-white text-base flex items-center gap-2">
-            <span>+ Thêm Task Đơn Lẻ</span>
+            <span>Thêm Task Đơn Lẻ</span>
           </h3>
           <button @click="showSingleTaskModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
         </div>
@@ -1345,6 +1889,18 @@
           <button @click="showLogModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
         </div>
         <div class="p-5 overflow-y-auto space-y-4">
+          <!-- Thông báo khóa sau khi đăng thành công -->
+          <div v-if="currentLogTask.status === 'success'" class="p-3 rounded-xl bg-slate-950 border border-slate-700/80 flex items-center justify-between gap-3">
+            <div class="text-xs text-slate-200 flex items-center gap-2">
+              <span class="text-sm">🔒</span>
+              <span>Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử. Bạn vẫn có thể xem thông tin và thống kê bài đăng.</span>
+            </div>
+            <button @click="showLogModal = false; openReelInsightModal(currentLogTask.id)"
+                    class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shrink-0 transition">
+              📊 Xem thống kê bài đăng
+            </button>
+          </div>
+
           <!-- 1. Chi tiết Reels Facebook -->
           <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
             <div class="flex items-center justify-between">
@@ -1415,6 +1971,216 @@
         </div>
         <div class="px-5 py-3 border-t border-slate-800 flex justify-end">
           <button @click="showLogModal = false" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: CHI TIẾT THỐNG KÊ REELS (REEL INSIGHTS DETAIL) ================= -->
+    <div v-if="showReelInsightModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        <!-- Header -->
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div class="flex items-center gap-2.5">
+            <span class="text-xl">📊</span>
+            <div>
+              <h3 class="font-bold text-white text-base">
+                Chi Tiết Thống Kê Reels #{{ reelInsightDetail.task ? reelInsightDetail.task.id : '' }}
+                <span v-if="reelInsightDetail.task" class="text-indigo-400 font-semibold">— {{ reelInsightDetail.task.page_name }}</span>
+              </h3>
+              <p class="text-[11px] text-slate-400">
+                Dữ liệu Meta Graph API v27.0 • Tách biệt riêng Video ID (Insights) và Post ID (Bình luận)
+              </p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button v-if="reelInsightDetail.task"
+                    @click="handleSyncSingleReelInsight(reelInsightDetail.task.id)"
+                    :disabled="syncingTaskInsightId === reelInsightDetail.task.id"
+                    class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 transition">
+              <svg class="w-3.5 h-3.5" :class="syncingTaskInsightId === reelInsightDetail.task.id ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              <span>{{ syncingTaskInsightId === reelInsightDetail.task.id ? 'Đang đồng bộ...' : 'Làm mới từ Meta' }}</span>
+            </button>
+            <button @click="showReelInsightModal = false" class="text-slate-400 hover:text-white text-xl font-bold ml-1">&times;</button>
+          </div>
+        </div>
+
+        <!-- Body -->
+        <div class="p-5 overflow-y-auto space-y-4 select-text">
+          <div v-if="isLoadingReelDetail" class="py-16 text-center text-xs text-slate-400 flex flex-col items-center gap-2">
+            <svg class="animate-spin h-6 w-6 text-indigo-400" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+            <span>Đang tải chi tiết thống kê Reels...</span>
+          </div>
+
+          <template v-else-if="reelInsightDetail.task">
+            <!-- 1. Thông tin định danh bài đăng -->
+            <div class="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                    🔒 Đã đăng thành công – Đã khóa chỉnh sửa
+                  </span>
+                  <span v-if="reelInsightDetail.latest_snapshot && reelInsightDetail.latest_snapshot.sync_status"
+                        class="px-2 py-0.5 rounded-full text-[10px] font-mono border"
+                        :class="reelInsightDetail.latest_snapshot.sync_status === 'ok' ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30' : 'bg-amber-500/15 text-amber-300 border-amber-500/30'">
+                    Sync: {{ reelInsightDetail.latest_snapshot.sync_status }}
+                  </span>
+                </div>
+                <a v-if="reelInsightDetail.task.permalink_url" :href="reelInsightDetail.task.permalink_url" target="_blank"
+                   class="text-xs font-bold text-blue-400 hover:underline flex items-center gap-1">
+                  <span>🔗 Mở bài đăng trên Facebook</span>
+                </a>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono bg-slate-900/80 p-3 rounded-lg border border-slate-800/80">
+                <div><span class="text-slate-500">Fanpage:</span> <b class="text-white">{{ reelInsightDetail.task.page_name }}</b> ({{ reelInsightDetail.task.facebook_page_id }})</div>
+                <div><span class="text-slate-500">Video ID:</span> <b class="text-indigo-300">{{ reelInsightDetail.task.video_id || '—' }}</b></div>
+                <div><span class="text-slate-500">Post ID:</span> <b class="text-cyan-300">{{ reelInsightDetail.task.post_id || '—' }}</b></div>
+                <div><span class="text-slate-500">Thời gian đăng:</span> <span class="text-slate-200">{{ formatVnDateTime(reelInsightDetail.task.published_at) }}</span></div>
+                <div><span class="text-slate-500">Comment ID:</span> <span class="text-teal-300">{{ reelInsightDetail.task.comment_id || '—' }}</span></div>
+                <div><span class="text-slate-500">Đồng bộ lúc:</span> <span class="text-emerald-300">{{ reelInsightDetail.latest_snapshot ? formatVnDateTime(reelInsightDetail.latest_snapshot.fetched_at) : 'Chưa đồng bộ' }}</span></div>
+              </div>
+
+              <div class="text-xs text-slate-200 whitespace-pre-line bg-slate-900/50 p-3 rounded-lg border border-slate-800/60">
+                <span class="text-slate-400 font-semibold block mb-1">Caption bài đăng:</span>
+                {{ reelInsightDetail.task.caption || '(Không có caption)' }}
+              </div>
+
+              <div v-if="reelInsightDetail.latest_snapshot && reelInsightDetail.latest_snapshot.error_message"
+                   class="p-2.5 rounded-lg bg-amber-950/50 border border-amber-700/50 text-[11px] text-amber-200">
+                ⚠️ Ghi chú đồng bộ Meta: {{ reelInsightDetail.latest_snapshot.error_message }}
+              </div>
+            </div>
+
+            <!-- 2. Bảng chỉ số hiện tại của bài đăng -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-[11px] text-slate-400">Lượt xem (Views / Plays)</div>
+                <div class="text-sm font-extrabold text-blue-300 font-mono mt-1">
+                  {{ formatMetricValue(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.views : null) }}
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-[11px] text-slate-400">Lượt tiếp cận (Reach)</div>
+                <div class="text-sm font-extrabold text-cyan-300 font-mono mt-1">
+                  {{ formatMetricValue(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.reach : null) }}
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-[11px] text-slate-400">Tổng tương tác</div>
+                <div class="text-sm font-extrabold text-indigo-300 font-mono mt-1">
+                  {{ formatMetricValue(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.total_interactions : null) }}
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-[11px] text-slate-400">Likes / Comments / Shares</div>
+                <div class="text-xs font-extrabold text-white font-mono mt-1">
+                  ❤️ {{ formatMetricValue(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.likes : null) }}
+                  | 💬 {{ formatMetricValue(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.comments : null) }}
+                  | 🔁 {{ formatMetricValue(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.shares : null) }}
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-[11px] text-slate-400">Tổng thời gian xem</div>
+                <div class="text-sm font-extrabold text-amber-300 font-mono mt-1">
+                  {{ formatDurationMs(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.total_watch_time_ms : null) }}
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-[11px] text-slate-400">Thời gian xem trung bình</div>
+                <div class="text-sm font-extrabold text-purple-300 font-mono mt-1">
+                  {{ formatDurationMs(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.avg_watch_time_ms : null) }}
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-[11px] text-slate-400">Lượt xem trọn vẹn (Complete)</div>
+                <div class="text-sm font-extrabold text-emerald-300 font-mono mt-1">
+                  {{ formatMetricValue(reelInsightDetail.latest_snapshot ? reelInsightDetail.latest_snapshot.complete_views : null) }}
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div class="text-[11px] text-slate-400">Thời lượng video</div>
+                <div class="text-sm font-extrabold text-slate-200 font-mono mt-1">
+                  {{ reelInsightDetail.latest_snapshot && reelInsightDetail.latest_snapshot.video_length_sec !== null ? reelInsightDetail.latest_snapshot.video_length_sec + 's' : 'Không có dữ liệu' }}
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. Trạng thái chi tiết từng Metric từ Meta API v27.0 -->
+            <div v-if="reelInsightDetail.metric_items && reelInsightDetail.metric_items.length > 0"
+                 class="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+              <h4 class="text-xs font-bold text-white uppercase tracking-wider">Chi tiết từng Metric từ Meta Graph API v27.0</h4>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div v-for="mItem in reelInsightDetail.metric_items" :key="mItem.metric_name"
+                     class="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-2 text-xs">
+                  <div>
+                    <div class="font-semibold text-slate-200">{{ mItem.metric_label }}</div>
+                    <div class="text-[10px] font-mono text-slate-400">{{ mItem.metric_name }} ({{ mItem.period }})</div>
+                    <div v-if="mItem.note" class="text-[10px] text-amber-300 mt-0.5">{{ mItem.note }}</div>
+                  </div>
+                  <div class="text-right shrink-0">
+                    <span v-if="mItem.metric_status === 'supported'" class="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono">
+                      ✓ Đã lấy dữ liệu
+                    </span>
+                    <span v-else-if="mItem.metric_status === 'unavailable'" class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 text-[10px]">
+                      Không được Meta hỗ trợ
+                    </span>
+                    <span v-else-if="mItem.metric_status === 'permission_required'" class="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px]">
+                      Cần quyền read_insights
+                    </span>
+                    <span v-else class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px]">
+                      Không có dữ liệu
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. Lịch sử các lần đồng bộ (Snapshots trên D1) -->
+            <div class="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+              <h4 class="text-xs font-bold text-white uppercase tracking-wider">
+                Lịch Sử Tăng Trưởng Số Liệu Lưu Trên D1 ({{ reelInsightDetail.history ? reelInsightDetail.history.length : 0 }} lần ghi nhận)
+              </h4>
+              <div v-if="!reelInsightDetail.history || reelInsightDetail.history.length === 0" class="text-xs text-slate-500 py-4 text-center italic">
+                Chưa có lịch sử đồng bộ cho bài Reels này. Nhấn <b>"Làm mới từ Meta"</b> ở góc trên để lấy số liệu ngay.
+              </div>
+              <div v-else class="overflow-x-auto max-h-48">
+                <table class="w-full text-left border-collapse text-xs font-mono">
+                  <thead class="bg-slate-900 text-[10px] text-slate-400 uppercase">
+                    <tr>
+                      <th class="py-1.5 px-2.5">Thời điểm đồng bộ</th>
+                      <th class="py-1.5 px-2 text-right">Views</th>
+                      <th class="py-1.5 px-2 text-right">Reach</th>
+                      <th class="py-1.5 px-2 text-right">Likes</th>
+                      <th class="py-1.5 px-2 text-right">Comments</th>
+                      <th class="py-1.5 px-2 text-right">Shares</th>
+                      <th class="py-1.5 px-2 text-right">Tổng TG Xem</th>
+                      <th class="py-1.5 px-2 text-center">Trạng thái</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800/60">
+                    <tr v-for="snap in reelInsightDetail.history" :key="snap.id">
+                      <td class="py-1.5 px-2.5 text-slate-300">{{ formatVnDateTime(snap.fetched_at) }}</td>
+                      <td class="py-1.5 px-2 text-right text-blue-300">{{ formatMetricValue(snap.views) }}</td>
+                      <td class="py-1.5 px-2 text-right text-cyan-300">{{ formatMetricValue(snap.reach) }}</td>
+                      <td class="py-1.5 px-2 text-right text-pink-300">{{ formatMetricValue(snap.likes) }}</td>
+                      <td class="py-1.5 px-2 text-right text-teal-300">{{ formatMetricValue(snap.comments) }}</td>
+                      <td class="py-1.5 px-2 text-right text-emerald-300">{{ formatMetricValue(snap.shares) }}</td>
+                      <td class="py-1.5 px-2 text-right text-amber-300">{{ formatDurationMs(snap.total_watch_time_ms) }}</td>
+                      <td class="py-1.5 px-2 text-center">
+                        <span class="px-1.5 py-0.5 rounded text-[10px]" :class="snap.sync_status === 'ok' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'">
+                          {{ snap.sync_status }}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="px-5 py-3 border-t border-slate-800 bg-slate-900 flex justify-end">
+          <button @click="showReelInsightModal = false" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Đóng</button>
         </div>
       </div>
     </div>

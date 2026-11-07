@@ -194,6 +194,7 @@ export interface FacebookAccountPageSummary {
   category: string;
   avatar_url: string;
   can_post: boolean;
+  can_analyze?: boolean;
 }
 
 export interface FacebookAccountRecord {
@@ -210,12 +211,14 @@ export interface FacebookAccountRecord {
   token_type: string;
   scopes: string[];
   missing_scopes: string[];
+  has_read_insights?: boolean;
   status: string;
   token_status: string;
   connected_at: string | null;
   token_expires_at: string | null;
   expires_at?: string | null;
   last_synced_at: string | null;
+  last_token_checked_at?: string | null;
   last_error: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -237,6 +240,7 @@ export interface AdminAccountLink {
   token_status: string;
   tasks: string[];
   can_post: boolean;
+  can_analyze?: boolean;
   is_published: boolean;
   last_synced_at: string | null;
 }
@@ -251,6 +255,7 @@ export interface FacebookPageRecord {
   avatar_url: string;
   tasks: string[];
   can_post: boolean;
+  can_analyze?: boolean;
   is_published: boolean;
   is_selected: boolean;
   status: string;
@@ -299,6 +304,8 @@ export interface TaskRecord {
   timezone?: string;
   status: string;
   raw_status?: string;
+  publish_status?: string;
+  is_locked?: boolean;
   idempotency_key?: string | null;
   attempt_count?: number;
   max_attempts?: number;
@@ -316,6 +323,9 @@ export interface TaskRecord {
   comment_status?: string | null;
   comment_log?: string | null;
   comment_posted_at?: string | null;
+  analytics_status?: string | null;
+  analytics_last_synced_at?: string | null;
+  analytics_error?: string | null;
   uploaded_at?: string | null;
   published_at?: string | null;
   last_processed_at?: string | null;
@@ -325,4 +335,48 @@ export interface TaskRecord {
   page_avatar?: string | null;
   page_category?: string | null;
   profile_name?: string | null;
+}
+
+export interface ReelInsightSnapshotRecord {
+  id: number;
+  owner_user_id: string;
+  task_id: number;
+  facebook_page_id: string;
+  video_id: string;
+  post_id: string;
+  sync_date: string;
+  synced_at: string;
+  sync_status: string;
+  views: number | null;
+  plays: number | null;
+  initial_plays: number | null;
+  replays: number | null;
+  reach: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  total_interactions: number | null;
+  total_watch_time_ms: number | null;
+  avg_watch_time_ms: number | null;
+  video_length_sec: number | null;
+  retention_json: string;
+  raw_metrics_json: string;
+  error_code: number | null;
+  error_message: string;
+}
+
+export interface ReelInsightMetricItemRecord {
+  id: number;
+  owner_user_id: string;
+  task_id: number;
+  facebook_page_id: string;
+  video_id: string;
+  post_id: string;
+  metric_name: string;
+  metric_value: number | null;
+  metric_json: string;
+  period: string;
+  fetched_at: string;
+  status: "supported" | "unavailable" | "permission_required" | "no_data" | "retryable";
+  error_message: string;
 }
