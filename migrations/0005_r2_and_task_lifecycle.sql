@@ -18,3 +18,4 @@ CREATE INDEX IF NOT EXISTS idx_media_files_owner_filename
 
 CREATE INDEX IF NOT EXISTS idx_tasks_media_id_status
   ON tasks(media_id, status);
+

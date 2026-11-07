@@ -2003,6 +2003,42 @@ async function runAll30Tests() {
   assert.equal(missingTokRes.errorType, "INVALID_PAGE_TOKEN");
   console.log("  ✓ [Test 35] Cổng xác minh R2 trước khi tạo Task, Bảo vệ Object R2 đang chờ đăng & Unified Permission Checker");
 
+  // --------------------------------------------------------------------------
+  // [TEST 36] Chuẩn hóa thời gian 24 tiếng & Tự nhận diện SA/CH/AM/PM và buổi Trưa/Chiều hôm nay
+  // --------------------------------------------------------------------------
+  const { normalizeVnTime24h } = await import("../src/utils/timezone.ts");
+
+  // 1. Các định dạng 12h kèm SA / CH / AM / PM / tiếng Việt
+  assert.equal(normalizeVnTime24h("2:30 CH").normalizedTime, "14:30");
+  assert.equal(normalizeVnTime24h("2:30 PM").normalizedTime, "14:30");
+  assert.equal(normalizeVnTime24h("12:16 CH").normalizedTime, "12:16");
+  assert.equal(normalizeVnTime24h("12:16 PM").normalizedTime, "12:16");
+  assert.equal(normalizeVnTime24h("7:05 SA").normalizedTime, "07:05");
+  assert.equal(normalizeVnTime24h("7:05 AM").normalizedTime, "07:05");
+  assert.equal(normalizeVnTime24h("19:45").normalizedTime, "19:45");
+  assert.equal(normalizeVnTime24h("2h30 chiều").normalizedTime, "14:30");
+
+  // 2. Kịch bản thực tế từ ảnh chụp màn hình: Hiện tại là 2026-11-07 12:15 trưa VN (UTC = 05:15)
+  // Người dùng chọn ngày hôm nay (2026-11-07 hoặc 07/11/2026) và nhập "12:16 SA" hoặc trình duyệt gửi "00:16"
+  const noonVnUtc = Math.floor(Date.UTC(2026, 10, 7, 5, 15, 0) / 1000); // 2026-11-07 12:15:00 VN
+  const smartNoonFrom1216SA = parseVnScheduleToUtc("2026-11-07", "12:16 SA", {
+    referenceNowUtc: noonVnUtc,
+    minLeadSeconds: 60
+  });
+  assert.equal(smartNoonFrom1216SA.isValid, true, "12:16 SA lúc 12:15 trưa hôm nay phải tự nhận diện thành 12:16 (24h)");
+  assert.equal(smartNoonFrom1216SA.normalizedTime, "12:16");
+  assert.equal(smartNoonFrom1216SA.scheduledAtUtc, noonVnUtc + 60);
+
+  const smartNoonFrom0016 = parseVnScheduleToUtc("07/11/2026", "00:16", {
+    referenceNowUtc: noonVnUtc,
+    minLeadSeconds: 60
+  });
+  assert.equal(smartNoonFrom0016.isValid, true, "00:16 từ input time 12h lúc 12:15 trưa hôm nay phải tự nhận diện thành 12:16 (24h)");
+  assert.equal(smartNoonFrom0016.normalizedDate, "2026-11-07");
+  assert.equal(smartNoonFrom0016.normalizedTime, "12:16");
+  assert.equal(smartNoonFrom0016.scheduledAtUtc, noonVnUtc + 60);
+  console.log("  ✓ [Test 36] Chuẩn hóa thời gian 24 tiếng (00:00 - 23:59) & Tự động nhận diện SA/CH/AM/PM chính xác");
+
   globalThis.fetch = originalFetch;
 
   console.log("\n==================================================================");

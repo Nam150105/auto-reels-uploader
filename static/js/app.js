@@ -1153,6 +1153,9 @@
       }
     }
 
+    const hours24List = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+    const minutes60List = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
+
     function getVnDateString(offsetDays = 0) {
       const formatter = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Asia/Ho_Chi_Minh',
@@ -1167,52 +1170,224 @@
       return formatter.format(now);
     }
 
+    function getVnNowParts(offsetMinutes = 0) {
+      const targetMillis = Date.now() + offsetMinutes * 60000 + 7 * 3600 * 1000;
+      const d = new Date(targetMillis);
+      const yyyy = String(d.getUTCFullYear()).padStart(4, '0');
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const hh = String(d.getUTCHours()).padStart(2, '0');
+      const min = String(d.getUTCMinutes()).padStart(2, '0');
+      return {
+        date: `${yyyy}-${mm}-${dd}`,
+        time: `${hh}:${min}`,
+        hour: d.getUTCHours(),
+        minute: d.getUTCMinutes()
+      };
+    }
+
+    function normalizeTime24hClient(rawTime, scheduleDate = '') {
+      const clean = (rawTime || '').trim();
+      if (!clean) {
+        return { valid: false, normalizedTime: '', hour: -1, minute: -1, autoPromotedToPm: false };
+      }
+      const match = /^(\d{1,2})\s*(?::|h|g)\s*(\d{1,2})?(?:\s*:\s*(\d{1,2}))?\s*(sa|ch|am|pm|sáng|sang|trưa|trua|chiều|chieu|tối|toi)?$/i.exec(clean);
+      if (!match) {
+        return { valid: false, normalizedTime: clean, hour: -1, minute: -1, autoPromotedToPm: false };
+      }
+      let hour = parseInt(match[1], 10);
+      const minute = (match[2] !== undefined && match[2] !== '') ? parseInt(match[2], 10) : 0;
+      const rawMeridiem = (match[4] || '').trim().toLowerCase();
+
+      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return { valid: false, normalizedTime: clean, hour, minute, autoPromotedToPm: false };
+      }
+
+      const isExplicitPm = /^(ch|pm|trưa|trua|chiều|chieu|tối|toi)$/i.test(rawMeridiem);
+      const isExplicitAm = /^(sa|am|sáng|sang)$/i.test(rawMeridiem);
+
+      if (isExplicitPm || isExplicitAm) {
+        if (hour <= 12) {
+          if (isExplicitPm && hour >= 1 && hour <= 11) {
+            hour += 12;
+          } else if (isExplicitAm && hour === 12) {
+            hour = 0;
+          }
+        }
+      }
+
+      let autoPromotedToPm = false;
+      let dStr = (scheduleDate || '').trim();
+      const dmyMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(dStr);
+      if (dmyMatch) {
+        dStr = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+      }
+
+      if (dStr && hour >= 0 && hour < 12 && !isExplicitPm) {
+        const ymdMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dStr);
+        if (ymdMatch) {
+          const todayVn = getVnNowParts(0);
+          if (dStr === todayVn.date) {
+            const y = parseInt(ymdMatch[1], 10);
+            const m = parseInt(ymdMatch[2], 10);
+            const d = parseInt(ymdMatch[3], 10);
+            const nowUtcMillis = Date.now();
+            const candidateMillis = Date.UTC(y, m - 1, d, hour, minute, 0) - 7 * 3600 * 1000;
+            const afternoonHour = hour + 12;
+            const afternoonMillis = Date.UTC(y, m - 1, d, afternoonHour, minute, 0) - 7 * 3600 * 1000;
+
+            if (
+              candidateMillis <= nowUtcMillis &&
+              afternoonMillis > nowUtcMillis &&
+              (nowUtcMillis - candidateMillis >= 60000 || isExplicitAm || todayVn.hour >= 12)
+            ) {
+              hour = afternoonHour;
+              autoPromotedToPm = true;
+            }
+          }
+        }
+      }
+
+      const normalizedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+      return {
+        valid: true,
+        normalizedTime,
+        hour,
+        minute,
+        autoPromotedToPm
+      };
+    }
+
+    function getScheduleHour24(timeStr) {
+      const parsed = normalizeTime24hClient(timeStr, '');
+      if (!parsed.valid) return '';
+      return String(parsed.hour).padStart(2, '0');
+    }
+
+    function getScheduleMinute24(timeStr) {
+      const parsed = normalizeTime24hClient(timeStr, '');
+      if (!parsed.valid) return '';
+      return String(parsed.minute).padStart(2, '0');
+    }
+
+    function onScheduleHour24Change(target, hourVal) {
+      const formObj = target === 'edit' ? editTaskForm.value : singleTaskForm.value;
+      if (!hourVal) {
+        formObj.schedule_time = '';
+        return;
+      }
+      const curMin = getScheduleMinute24(formObj.schedule_time) || '00';
+      formObj.schedule_time = `${hourVal}:${curMin}`;
+      normalizeScheduleTimeField(target);
+    }
+
+    function onScheduleMinute24Change(target, minVal) {
+      const formObj = target === 'edit' ? editTaskForm.value : singleTaskForm.value;
+      if (!minVal) return;
+      const curHour = getScheduleHour24(formObj.schedule_time) || String(getVnNowParts(5).hour).padStart(2, '0');
+      formObj.schedule_time = `${curHour}:${minVal}`;
+      normalizeScheduleTimeField(target);
+    }
+
+    function normalizeScheduleTimeField(target = 'single') {
+      const formObj = target === 'edit' ? editTaskForm.value : singleTaskForm.value;
+      const raw = (formObj.schedule_time || '').trim();
+      if (!raw) return;
+      const parsed = normalizeTime24hClient(raw, formObj.schedule_date);
+      if (parsed.valid) {
+        formObj.schedule_time = parsed.normalizedTime;
+      }
+    }
+
+    function setRelativeTimePreset(offsetMinutes = 5, target = 'single') {
+      const future = getVnNowParts(offsetMinutes);
+      const formObj = target === 'edit' ? editTaskForm.value : singleTaskForm.value;
+      formObj.schedule_date = future.date;
+      formObj.schedule_time = future.time;
+    }
+
+    function describeTime24h(timeStr, scheduleDate = '') {
+      const parsed = normalizeTime24hClient(timeStr, scheduleDate);
+      if (!parsed.valid) {
+        return 'Chưa đúng định dạng 24h (VD: 12:16, 14:30 hoặc 2:30 CH)';
+      }
+      const h = parsed.hour;
+      const mStr = String(parsed.minute).padStart(2, '0');
+      const h12 = h % 12 === 0 ? 12 : h % 12;
+      const meridiem = h >= 12 ? 'CH / PM' : 'SA / AM';
+      let periodName = 'Ban đêm';
+      if (h >= 5 && h < 11) periodName = 'Buổi sáng';
+      else if (h >= 11 && h < 14) periodName = 'Buổi trưa';
+      else if (h >= 14 && h < 18) periodName = 'Buổi chiều';
+      else if (h >= 18 && h <= 23) periodName = 'Buổi tối';
+
+      const autoNote = parsed.autoPromotedToPm ? ' [Đã tự nhận biết CH/PM]' : '';
+      return `${parsed.normalizedTime} (24 tiếng • tương đương ${String(h12).padStart(2, '0')}:${mStr} ${meridiem} - ${periodName})${autoNote}`;
+    }
+
     function setDatePreset(offsetDays) {
       singleTaskForm.value.schedule_date = getVnDateString(offsetDays);
+      if (singleTaskForm.value.schedule_time) {
+        normalizeScheduleTimeField('single');
+      }
     }
 
     function setTimePreset(timeStr) {
       singleTaskForm.value.schedule_time = timeStr;
+      if (!singleTaskForm.value.schedule_date) {
+        singleTaskForm.value.schedule_date = getVnDateString(0);
+      }
+      normalizeScheduleTimeField('single');
     }
 
     function validateVnScheduleClient(scheduleDate, scheduleTime) {
-      const dStr = (scheduleDate || '').trim();
+      let dStr = (scheduleDate || '').trim();
       const tStr = (scheduleTime || '').trim();
-      if (!dStr && !tStr) return { valid: true };
+      if (!dStr && !tStr) return { valid: true, normalizedDate: '', normalizedTime: '' };
       if (!dStr || !tStr) {
         return {
           valid: false,
-          error: 'Phải nhập đầy đủ cả Ngày đăng (YYYY-MM-DD) và Giờ đăng (HH:MM) theo giờ Việt Nam.'
+          error: 'Phải nhập đầy đủ cả Ngày đăng (YYYY-MM-DD) và Giờ đăng (HH:MM 24h) theo giờ Việt Nam.'
         };
       }
+      const dmyMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(dStr);
+      if (dmyMatch) {
+        dStr = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+      }
       const dMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dStr);
-      const tMatch = /^(\d{1,2}):(\d{2})$/.exec(tStr);
-      if (!dMatch || !tMatch) {
+      const parsedTime = normalizeTime24hClient(tStr, dStr);
+      if (!dMatch || !parsedTime.valid) {
         return {
           valid: false,
-          error: 'Định dạng ngày giờ không hợp lệ. Ngày phải có dạng YYYY-MM-DD và giờ HH:MM.'
+          error: 'Định dạng ngày giờ không hợp lệ. Ngày phải có dạng YYYY-MM-DD và giờ 24h HH:MM (hoặc kèm SA/CH/AM/PM).'
         };
       }
       const y = parseInt(dMatch[1], 10);
       const m = parseInt(dMatch[2], 10);
       const d = parseInt(dMatch[3], 10);
-      const h = parseInt(tMatch[1], 10);
-      const min = parseInt(tMatch[2], 10);
+      const h = parsedTime.hour;
+      const min = parsedTime.minute;
+      const normTime = parsedTime.normalizedTime;
       const schedUtcMillis = Date.UTC(y, m - 1, d, h, min, 0) - (7 * 3600 * 1000);
       const nowUtcMillis = Date.now();
       if (schedUtcMillis <= nowUtcMillis) {
         return {
           valid: false,
-          error: `Thời gian đặt lịch (${dStr} ${tStr} giờ VN) đã qua hoặc trùng với thời điểm hiện tại. Vui lòng chọn thời gian trong tương lai!`
+          error: `Thời gian đặt lịch (${dStr} ${normTime} giờ VN - 24h) đã qua hoặc trùng với thời điểm hiện tại. Vui lòng chọn thời gian trong tương lai!`
         };
       }
       if (schedUtcMillis < nowUtcMillis + 60000) {
         return {
           valid: false,
-          error: `Thời gian đặt lịch (${dStr} ${tStr} giờ VN) phải cách thời điểm hiện tại tối thiểu 1 phút!`
+          error: `Thời gian đặt lịch (${dStr} ${normTime} giờ VN - 24h) phải cách thời điểm hiện tại tối thiểu 1 phút!`
         };
       }
-      return { valid: true };
+      return {
+        valid: true,
+        normalizedDate: dStr,
+        normalizedTime: normTime,
+        autoPromotedToPm: parsedTime.autoPromotedToPm
+      };
     }
 
     async function handleCreateSingleTaskSubmit() {
@@ -1238,6 +1413,8 @@
           showToast(val.error, "error");
           return;
         }
+        singleTaskForm.value.schedule_date = val.normalizedDate;
+        singleTaskForm.value.schedule_time = val.normalizedTime;
       }
       try {
         const payload = {
@@ -1294,8 +1471,18 @@
 
         const caption = (parts[1] || '').trim();
         const comment = (parts[2] || '').trim();
-        const scheduleDate = (parts[3] || '').trim();
-        const scheduleTime = (parts[4] || '').trim();
+        let scheduleDate = (parts[3] || '').trim();
+        let scheduleTime = (parts[4] || '').trim();
+        const dmyMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(scheduleDate);
+        if (dmyMatch) {
+          scheduleDate = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+        }
+        if (scheduleTime) {
+          const normT = normalizeTime24hClient(scheduleTime, scheduleDate);
+          if (normT.valid) {
+            scheduleTime = normT.normalizedTime;
+          }
+        }
 
         parsed.push({
           video_path: videoPath,
@@ -1348,6 +1535,8 @@
             showToast(`Dòng ${i + 1}: ${val.error}`, "error");
             return;
           }
+          item.schedule_date = val.normalizedDate;
+          item.schedule_time = val.normalizedTime;
         }
       }
 
@@ -1423,6 +1612,8 @@
           showToast(val.error, "error");
           return;
         }
+        editTaskForm.value.schedule_date = val.normalizedDate;
+        editTaskForm.value.schedule_time = val.normalizedTime;
       }
       try {
         const payload = {
@@ -1895,7 +2086,17 @@
       connectMessage,
       connectAccountInfo,
       handleConnectToken,
+      hours24List,
+      minutes60List,
       getVnDateString,
+      normalizeTime24hClient,
+      getScheduleHour24,
+      getScheduleMinute24,
+      onScheduleHour24Change,
+      onScheduleMinute24Change,
+      normalizeScheduleTimeField,
+      setRelativeTimePreset,
+      describeTime24h,
       validateVnScheduleClient,
       oauthFlowState,
       oauthFlowMessage,

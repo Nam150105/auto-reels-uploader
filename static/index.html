@@ -1068,19 +1068,65 @@
             <input type="date" v-model="singleTaskForm.schedule_date" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
           </div>
 
-          <!-- Giờ lên lịch + Presets khung giờ -->
-          <div class="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-            <div class="flex items-center justify-between">
-              <label class="text-xs font-semibold text-slate-300">Giờ lên lịch (HH:MM):</label>
-              <div class="flex items-center gap-1.5">
-                <button type="button" @click="setTimePreset('00:00')" class="px-2.5 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[00:00]</button>
-                <button type="button" @click="setTimePreset('07:00')" class="px-2.5 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[07:00]</button>
-                <button type="button" @click="setTimePreset('12:00')" class="px-2.5 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[12:00]</button>
-                <button type="button" @click="setTimePreset('19:00')" class="px-2.5 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[19:00]</button>
+          <!-- Giờ lên lịch (24 tiếng) + Tự nhận biết SA/CH/AM/PM -->
+          <div class="space-y-2 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+            <div class="flex items-center justify-between flex-wrap gap-1.5">
+              <label class="text-xs font-semibold text-slate-300">Giờ lên lịch (24 tiếng - HH:MM):</label>
+              <div class="flex items-center gap-1 flex-wrap">
+                <button type="button" @click="setRelativeTimePreset(5, 'single')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[11px] text-emerald-300 font-bold border border-emerald-700/60 transition" title="Đặt nhanh hiện tại + 5 phút">[+5 phút]</button>
+                <button type="button" @click="setRelativeTimePreset(15, 'single')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[11px] text-emerald-300 font-bold border border-emerald-700/60 transition" title="Đặt nhanh hiện tại + 15 phút">[+15 phút]</button>
+                <button type="button" @click="setTimePreset('00:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[00:00]</button>
+                <button type="button" @click="setTimePreset('07:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[07:00]</button>
+                <button type="button" @click="setTimePreset('12:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[12:00]</button>
+                <button type="button" @click="setTimePreset('19:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[19:00]</button>
               </div>
             </div>
-            <input type="time" v-model="singleTaskForm.schedule_time" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
-            <p class="text-[10px] text-slate-500">Lưu ý: Meta Reels yêu cầu hẹn giờ tối thiểu trước 20 phút và tối đa 75 ngày.</p>
+
+            <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              <!-- Chọn Giờ 24h (00 - 23) -->
+              <select :value="getScheduleHour24(singleTaskForm.schedule_time)"
+                      @change="onScheduleHour24Change('single', $event.target.value)"
+                      class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+                <option value="">-- Giờ (24h) --</option>
+                <option v-for="h in hours24List" :key="h" :value="h">
+                  {{ h }}h ({{ Number(h) >= 12 ? 'CH / PM' : 'SA / AM' }})
+                </option>
+              </select>
+              <span class="text-slate-400 font-bold">:</span>
+              <!-- Chọn Phút (00 - 59) -->
+              <select :value="getScheduleMinute24(singleTaskForm.schedule_time)"
+                      @change="onScheduleMinute24Change('single', $event.target.value)"
+                      class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+                <option value="">-- Phút --</option>
+                <option v-for="m in minutes60List" :key="m" :value="m">
+                  {{ m }} phút
+                </option>
+              </select>
+
+              <!-- Ô nhập trực tiếp 24h hoặc gõ kèm SA/CH/AM/PM -->
+              <div class="relative flex-1 min-w-[150px]">
+                <input type="text"
+                       v-model="singleTaskForm.schedule_time"
+                       @blur="normalizeScheduleTimeField('single')"
+                       @keydown.enter.prevent="normalizeScheduleTimeField('single')"
+                       placeholder="Nhập 24h: VD 12:16, 14:30 hoặc 2:30 CH"
+                       class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 pr-7 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+                <button v-if="singleTaskForm.schedule_time"
+                        type="button"
+                        @click="singleTaskForm.schedule_time = ''"
+                        class="absolute right-2 top-1.5 text-slate-500 hover:text-slate-300 text-xs font-bold"
+                        title="Xóa giờ hẹn">&times;</button>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between text-[11px] pt-0.5">
+              <span v-if="singleTaskForm.schedule_time" class="text-cyan-300 font-mono font-semibold">
+                🕒 {{ describeTime24h(singleTaskForm.schedule_time, singleTaskForm.schedule_date) }}
+              </span>
+              <span v-else class="text-slate-500">
+                Hệ thống dùng chuẩn 24 tiếng (00:00 – 23:59) và tự nhận diện SA / CH / AM / PM.
+              </span>
+            </div>
           </div>
 
           <div class="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
@@ -1239,14 +1285,47 @@
             <input type="text" v-model="editTaskForm.comment_text" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
           </div>
 
-          <div class="grid grid-cols-2 gap-3">
+          <div class="space-y-3 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
             <div>
-              <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày đăng:</label>
-              <input type="date" v-model="editTaskForm.schedule_date" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày đăng (Để trống nếu muốn Đăng ngay):</label>
+              <input type="date" v-model="editTaskForm.schedule_date" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
             </div>
-            <div>
-              <label class="block text-xs font-semibold text-slate-300 mb-1">Giờ đăng:</label>
-              <input type="time" v-model="editTaskForm.schedule_time" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between">
+                <label class="block text-xs font-semibold text-slate-300">Giờ đăng (24 tiếng - HH:MM):</label>
+                <div class="flex items-center gap-1">
+                  <button type="button" @click="setRelativeTimePreset(5, 'edit')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[10px] text-emerald-300 font-bold border border-emerald-700/60 transition">[+5 phút]</button>
+                  <button type="button" @click="setRelativeTimePreset(15, 'edit')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[10px] text-emerald-300 font-bold border border-emerald-700/60 transition">[+15 phút]</button>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <select :value="getScheduleHour24(editTaskForm.schedule_time)"
+                        @change="onScheduleHour24Change('edit', $event.target.value)"
+                        class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+                  <option value="">-- Giờ (24h) --</option>
+                  <option v-for="h in hours24List" :key="h" :value="h">
+                    {{ h }}h ({{ Number(h) >= 12 ? 'CH / PM' : 'SA / AM' }})
+                  </option>
+                </select>
+                <span class="text-slate-400 font-bold">:</span>
+                <select :value="getScheduleMinute24(editTaskForm.schedule_time)"
+                        @change="onScheduleMinute24Change('edit', $event.target.value)"
+                        class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+                  <option value="">-- Phút --</option>
+                  <option v-for="m in minutes60List" :key="m" :value="m">
+                    {{ m }} phút
+                  </option>
+                </select>
+                <input type="text"
+                       v-model="editTaskForm.schedule_time"
+                       @blur="normalizeScheduleTimeField('edit')"
+                       @keydown.enter.prevent="normalizeScheduleTimeField('edit')"
+                       placeholder="HH:MM (24h)"
+                       class="flex-1 min-w-[110px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              </div>
+              <div v-if="editTaskForm.schedule_time" class="text-[11px] text-cyan-300 font-mono font-semibold">
+                🕒 {{ describeTime24h(editTaskForm.schedule_time, editTaskForm.schedule_date) }}
+              </div>
             </div>
           </div>
 

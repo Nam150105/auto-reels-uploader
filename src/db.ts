@@ -2106,6 +2106,8 @@ export async function addTask(
     throw new Error(parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.");
   }
   const scheduledAt = parsedSchedule.scheduledAtUtc;
+  const finalScheduleDate = parsedSchedule.normalizedDate ?? (params.scheduleDate || "");
+  const finalScheduleTime = parsedSchedule.normalizedTime ?? (params.scheduleTime || "");
   const status = params.status || "pending";
   const idempotencyKey = `task_${params.ownerUserId}_${pageId || "unassigned"}_${randomHex(8)}`;
   const cleanComment = (params.commentText || "").trim();
@@ -2128,8 +2130,8 @@ export async function addTask(
     params.videoPath.trim(),
     params.caption || "",
     params.commentText || "",
-    params.scheduleDate || "",
-    params.scheduleTime || "",
+    finalScheduleDate,
+    finalScheduleTime,
     scheduledAt,
     status,
     idempotencyKey,
@@ -2160,7 +2162,7 @@ export async function addTask(
       "INFO",
       "created",
       scheduledAt
-        ? `Tạo tác vụ hẹn lịch đăng lúc ${params.scheduleDate} ${params.scheduleTime} (Asia/Ho_Chi_Minh -> UTC ${scheduledAt}).`
+        ? `Tạo tác vụ hẹn lịch đăng lúc ${finalScheduleDate} ${finalScheduleTime} (24h Asia/Ho_Chi_Minh -> UTC ${scheduledAt}).`
         : "Tạo tác vụ đăng Reels mới."
     );
   }
@@ -2388,6 +2390,8 @@ export async function updateTask(
   if (!parsedSchedule.isValid) {
     throw new Error(parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.");
   }
+  const finalScheduleDate = parsedSchedule.normalizedDate ?? newDate;
+  const finalScheduleTime = parsedSchedule.normalizedTime ?? newTime;
   const now = new Date().toISOString();
 
   let newCommentStatus = existing.comment_status || "none";
@@ -2425,8 +2429,8 @@ export async function updateTask(
       newCaption,
       newComment,
       newCommentStatus,
-      newDate,
-      newTime,
+      finalScheduleDate,
+      finalScheduleTime,
       parsedSchedule.scheduledAtUtc,
       now,
       taskId,
