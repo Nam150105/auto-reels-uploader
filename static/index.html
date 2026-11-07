@@ -75,7 +75,7 @@
               <button @click="setMainView('workspace')"
                       class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
                       :class="mainView === 'workspace' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
-                <span>📢 Quản lý &amp; Lịch Reels</span>
+                <span>📢 Quản Lý Fanpage &amp; Bài Viết</span>
               </button>
               <button @click="setMainView('insights')"
                       class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
@@ -404,8 +404,12 @@
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </button>
 
-                    <!-- Thêm Task Cho Page Này (Tối đa 4 task, chia đều sau X tiếng) -->
-                    <button @click.stop="openPageTasksModal(p)" class="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded transition" title="Lên lịch đăng cho Fanpage này (Tối đa 4 bài, chia đều sau X tiếng)">
+                    <!-- Lấy bài viết cũ từ Fanpage -->
+                    <button @click.stop="syncPagePosts(p)" :disabled="isSyncingPagePosts" class="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded transition" title="Đồng bộ bài viết từ Fanpage">
+                      <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                    </button>
+                    <!-- Tạo bài viết cho Page này -->
+                    <button @click.stop="openPageTasksModal(p)" class="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded transition" title="Lên lịch đăng bài cho Fanpage này">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
                     </button>
 
@@ -581,7 +585,7 @@
             <tbody class="divide-y divide-slate-800/60 text-xs font-normal">
               <tr v-if="tasks.length === 0">
                 <td colspan="8" class="text-center py-20 text-slate-500">
-                  Chưa có task nào.<br>Bấm <b>Thêm Task Đơn Lẻ</b> hoặc <b>Nhập Nhanh Từ Excel</b> để tạo lịch đăng.
+                  Chưa có bài viết nào.<br>Bấm <b>Tạo Bài Viết Mới</b> hoặc <b>Đăng Bài Từ Excel</b> để bắt đầu.
                 </td>
               </tr>
 
@@ -693,8 +697,7 @@
                       ✏️
                     </button>
                     <!-- Xóa task (Khi chưa đăng) -->
-                    <button v-if="!isTaskLocked(t)"
-                            @click="handleDeleteTask(t.id)"
+                    <button @click="handleDeleteTask(t.id)"
                             :disabled="isTaskInFlight(t)"
                             title="Xóa task"
                             class="p-1.5 text-rose-400 hover:bg-rose-950/60 rounded-lg transition disabled:opacity-30">
@@ -715,7 +718,7 @@
 
         <!-- Footer -->
         <div class="px-4 py-2 border-t border-slate-800 bg-slate-950/70 flex items-center justify-between text-xs text-slate-400 shrink-0">
-          <span>Tổng cộng: <b class="text-white">{{ tasks.length }}</b> tasks</span>
+          <span>Tổng cộng: <b class="text-white">{{ tasks.length }}</b> bài viết</span>
           <span class="text-[11px] text-slate-500">By Nam Năng Nổ</span>
         </div>
 
@@ -731,9 +734,9 @@
           <div class="flex items-center gap-2.5">
             <span class="text-lg">📊</span>
             <div>
-              <h2 class="font-extrabold text-white text-sm">Thống Kê Hiệu Suất Facebook Reels (Meta Graph API v27.0)</h2>
+              <h2 class="font-extrabold text-white text-sm">Thống Kê Hiệu Suất Facebook Reels </h2>
               <p class="text-[11px] text-slate-400">
-                Số liệu thực tế từ Meta Insights • Múi giờ: <span class="font-mono text-slate-300">Asia/Ho_Chi_Minh</span>
+                Số liệu thực tế từ Meta Insights • Múi giờ: <span class="font-mono text-slate-300">Giờ Việt Nam</span>
                 <span v-if="insightsData.last_synced_at" class="ml-2 text-emerald-400">
                   • Cập nhật gần nhất: <b>{{ formatVnDateTime(insightsData.last_synced_at) }}</b>
                 </span>
@@ -1520,7 +1523,7 @@
           <!-- Video Path / URL + Cloud Upload Button + Drag & Drop -->
           <div class="space-y-2">
             <label class="block text-xs font-semibold text-slate-300 mb-1">
-              Video lưu trên Cloudflare R2 hoặc URL Video (.mp4): <span class="text-rose-500">*</span>
+              Video lưu trên Bộ nhớ hoặc URL Video (.mp4): <span class="text-rose-500">*</span>
             </label>
             <div class="flex items-center gap-2" @dragover.prevent @drop.prevent="handleFileDropSingleTask">
               <input type="text" v-model="singleTaskForm.video_path" required placeholder="r2://med_... hoặc bấm Chọn / Tải Video lên R2" class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
@@ -1535,7 +1538,7 @@
             <!-- Trạng thái tải lên R2 -->
             <div v-if="isUploadingVideo" class="p-2.5 rounded-xl bg-blue-950/60 border border-blue-800/60 text-xs text-blue-200 flex items-center gap-2">
               <svg class="animate-spin w-4 h-4 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-              <span>Đang tải và xác minh file video trên Cloudflare R2 (`auto-reels-media`)... Vui lòng chờ hoàn tất trước khi lưu Task.</span>
+              <span>Đang tải và xác minh file video trên Bộ nhớ (`auto-reels-media`)... Vui lòng chờ hoàn tất trước khi lưu Task.</span>
             </div>
 
             <div v-else-if="uploadedMediaInfo" class="p-2.5 rounded-xl bg-emerald-950/50 border border-emerald-800/60 text-xs text-emerald-200 flex items-center justify-between gap-2">
@@ -1569,7 +1572,7 @@
               </div>
             </div>
 
-            <p class="text-[11px] text-slate-500">Video sẽ được tải lên và xác minh trên Cloudflare R2 trước khi tạo Task hoặc đăng lên Facebook.</p>
+            <p class="text-[11px] text-slate-500">Video sẽ được tải lên và xác minh trên Bộ nhớ trước khi tạo Task hoặc đăng lên Facebook.</p>
           </div>
 
           <!-- Caption -->
@@ -1585,97 +1588,17 @@
             <p class="text-[11px] text-slate-500 mt-1 italic">Nếu để trống, hệ thống sẽ bỏ qua bước bình luận.</p>
           </div>
 
-          <!-- Ngày lên lịch bắt buộc + Presets thông minh -->
-          <div class="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border" :class="singleScheduleErrors.schedule_date ? 'border-rose-500/80' : 'border-slate-800'">
-            <div class="flex items-center justify-between">
-              <label class="text-xs font-semibold text-slate-300">Ngày đăng bắt buộc (YYYY-MM-DD): <span class="text-rose-400">*</span></label>
-              <div class="flex items-center gap-1.5">
-                <button type="button" @click="setDatePreset(0)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[Hôm nay]</button>
-                <button type="button" @click="setDatePreset(1)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[Ngày mai]</button>
-                <button type="button" @click="setDatePreset(2)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[+2 ngày]</button>
-              </div>
+          <!-- Ngày & Giờ đăng đơn giản, không rối mắt -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày đăng: *</label>
+              <input type="date" v-model="singleTaskForm.schedule_date" @change="clearSingleScheduleErrors" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              <p v-if="singleScheduleErrors.schedule_date" class="text-[11px] text-rose-400 mt-1">⚠️ {{ singleScheduleErrors.schedule_date }}</p>
             </div>
-            <input type="date" v-model="singleTaskForm.schedule_date" @change="clearSingleScheduleErrors" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
-            <p v-if="singleScheduleErrors.schedule_date" class="text-[11px] text-rose-400 font-semibold">⚠️ {{ singleScheduleErrors.schedule_date }}</p>
-          </div>
-
-          <!-- Giờ đăng 24 tiếng đơn giản hóa + Presets thông minh & Nhận biết quá khứ -->
-          <div class="space-y-2 p-3.5 rounded-xl bg-slate-950/60 border" :class="singleScheduleErrors.schedule_time || singleScheduleErrors.general ? 'border-rose-500/80' : 'border-slate-800'">
-            <div class="flex items-center justify-between flex-wrap gap-1.5">
-              <label class="text-xs font-semibold text-slate-300">Giờ đăng (24 Tiếng - HH:MM): <span class="text-rose-400">*</span></label>
-              <div class="flex items-center gap-1 flex-wrap">
-                <button type="button" @click="setEarliestSchedule('single')" class="px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-[11px] text-emerald-300 font-bold border border-emerald-700/60 transition" title="Đặt sớm nhất có thể theo Meta (+25 phút)">[+25 phút (Sớm nhất)]</button>
-                <button type="button" @click="setQuickTomorrow0001('single')" class="px-2 py-0.5 rounded bg-purple-950/80 hover:bg-purple-900 text-[11px] text-purple-300 font-bold border border-purple-700/60 transition" title="Đặt 00:01 sáng mai">[00:01 Sáng mai]</button>
-                <button type="button" @click="setTimePreset('07:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[07:00]</button>
-                <button type="button" @click="setTimePreset('11:30')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[11:30]</button>
-                <button type="button" @click="setTimePreset('14:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[14:00]</button>
-                <button type="button" @click="setTimePreset('17:30')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[17:30]</button>
-                <button type="button" @click="setTimePreset('20:00')" class="px-2 py-0.5 rounded bg-indigo-950/50 hover:bg-indigo-900/60 text-[11px] text-indigo-300 font-bold border border-indigo-800/60 transition">[20:00]</button>
-              </div>
-            </div>
-
-            <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-              <!-- Ô chọn Giờ 24h nhanh (00 - 23) -->
-              <select :value="getScheduleHour24(singleTaskForm.schedule_time)"
-                      @change="onScheduleHour24Change('single', $event.target.value)"
-                      class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
-                <option value="">-- Giờ (24h) --</option>
-                <option v-for="h in hours24List" :key="h" :value="h">
-                  {{ h }}h {{ Number(h) === 0 ? '(Nửa đêm)' : (Number(h) < 12 ? '(Sáng)' : (Number(h) === 12 ? '(Trưa)' : (Number(h) < 18 ? '(Chiều)' : '(Tối)'))) }}
-                </option>
-              </select>
-              <span class="text-slate-400 font-bold">:</span>
-              <!-- Ô chọn Phút (00 - 59) -->
-              <select :value="getScheduleMinute24(singleTaskForm.schedule_time)"
-                      @change="onScheduleMinute24Change('single', $event.target.value)"
-                      class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
-                <option value="">-- Phút --</option>
-                <option v-for="m in minutes60List" :key="m" :value="m">
-                  {{ m }} phút
-                </option>
-              </select>
-
-              <!-- Ô nhập trực tiếp dạng 24h hoặc SA/CH -->
-              <div class="relative flex-1 min-w-[160px]">
-                <input type="text"
-                       v-model="singleTaskForm.schedule_time"
-                       @input="clearSingleScheduleErrors"
-                       @blur="normalizeScheduleTimeField('single')"
-                       @keydown.enter.prevent="normalizeScheduleTimeField('single')"
-                       placeholder="Ví dụ: 00:01, 14:30, 20:00"
-                       class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 pr-7 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
-                <button v-if="singleTaskForm.schedule_time"
-                        type="button"
-                        @click="singleTaskForm.schedule_time = ''"
-                        class="absolute right-2 top-1.5 text-slate-500 hover:text-slate-300 text-xs font-bold"
-                        title="Xóa giờ">&times;</button>
-              </div>
-            </div>
-
-            <!-- Cảnh báo nếu người dùng chọn giờ trong quá khứ của ngày hôm nay -->
-            <div v-if="isTimeInPastToday(singleTaskForm.schedule_time, singleTaskForm.schedule_date)"
-                 class="p-2.5 rounded-lg bg-amber-950/70 border border-amber-600/50 text-[11px] text-amber-200 flex items-center justify-between gap-2">
-              <span>⚠️ Mốc {{ singleTaskForm.schedule_time }} trong ngày hôm nay đã trôi qua!</span>
-              <button type="button" @click="shiftToTomorrow('single')" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold shrink-0 text-[10px] transition">
-                👉 Đổi sang Ngày mai ({{ getVnDateString(1) }})
-              </button>
-            </div>
-
-            <p v-if="singleScheduleErrors.schedule_time" class="text-[11px] text-rose-400 font-semibold">⚠️ {{ singleScheduleErrors.schedule_time }}</p>
-            <div v-if="singleScheduleErrors.general" class="p-2.5 rounded-lg bg-amber-950/60 border border-amber-600/50 text-[11px] text-amber-200 flex items-center justify-between gap-2">
-              <span>⚠️ {{ singleScheduleErrors.general }}</span>
-              <button type="button" @click="setEarliestSchedule('single')" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold shrink-0 text-[10px]">
-                Đặt sớm nhất (+25 phút)
-              </button>
-            </div>
-
-            <div class="flex items-center justify-between text-[11px] pt-0.5">
-              <span v-if="singleTaskForm.schedule_time" class="text-cyan-300 font-mono font-semibold">
-                🕒 {{ describeTime24h(singleTaskForm.schedule_time, singleTaskForm.schedule_date) }}
-              </span>
-              <span v-else class="text-slate-500">
-                Bắt buộc chọn Ngày và Giờ đăng dạng 24 tiếng (HH:MM).
-              </span>
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Giờ đăng (24h): *</label>
+              <input type="time" v-model="singleTaskForm.schedule_time" @change="clearSingleScheduleErrors" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              <p v-if="singleScheduleErrors.schedule_time" class="text-[11px] text-rose-400 mt-1">⚠️ {{ singleScheduleErrors.schedule_time }}</p>
             </div>
           </div>
 
@@ -1690,6 +1613,115 @@
     </div>
 
     <!-- ================= MODAL: NHẬP NHANH TỪ EXCEL (BULK) & LIVE PREVIEW ================= -->
+    <!-- ================= MODAL: LÊN LỊCH ĐĂNG CHO FANPAGE (1 ĐẾN 4 BÀI) ================= -->
+    <div v-if="showPageTasksModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        <!-- Header -->
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div>
+            <h3 class="font-bold text-white text-base">Lên Lịch Đăng Cho Fanpage: {{ pageTaskTargetPage ? pageTaskTargetPage.name : '' }}</h3>
+            <p class="text-xs text-slate-400">Tối đa 4 bài đăng • Tự động chia đều sau mỗi khoảng thời gian</p>
+          </div>
+          <button @click="showPageTasksModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <form @submit.prevent="handlePageTasksSubmit" class="p-5 space-y-4 overflow-y-auto flex-1 flex flex-col">
+          <!-- Cài đặt thời gian bắt đầu & Khoảng cách (ĐƠN GIẢN, KHÔNG GỢI Ý RƯỜM RÀ) -->
+          <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+              <span>⏰</span> Cài Đặt Lịch Đăng:
+            </span>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày bắt đầu đăng: *</label>
+                <input type="date" v-model="pageScheduleConfig.start_date" @change="recalculatePageSlotTimes" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Giờ bắt đầu đăng: *</label>
+                <input type="time" v-model="pageScheduleConfig.start_time" @change="recalculatePageSlotTimes" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1.5">Khoảng cách giữa các bài:</label>
+              <div class="grid grid-cols-5 gap-2">
+                <button type="button"
+                        v-for="hrs in [2, 3, 4, 6, 8]"
+                        :key="hrs"
+                        @click="setPageScheduleIntervalHours(hrs)"
+                        class="py-1.5 px-2 rounded-lg font-mono text-xs font-bold border transition text-center"
+                        :class="pageScheduleConfig.interval_hours === hrs ? 'bg-blue-600 text-white border-blue-400' : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'">
+                  Cách {{ hrs }} tiếng
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Danh sách bài đăng (1 đến 4 bài) -->
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-300">Danh sách bài đăng ({{ pageSlots.length }}/4 bài):</span>
+              <button type="button"
+                      v-if="pageSlots.length < 4"
+                      @click="addPageSlot"
+                      class="px-2.5 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-xs font-bold transition">
+                + Thêm bài đăng
+              </button>
+            </div>
+
+            <!-- Hidden input file -->
+            <input type="file" id="page-slot-file-input" class="hidden" accept="video/mp4,video/*" @change="handlePageSlotFileSelected">
+
+            <div v-for="(slot, idx) in pageSlots" :key="slot.id" class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2.5">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="w-5 h-5 rounded-full bg-blue-600/30 text-blue-300 flex items-center justify-center font-bold text-xs">#{{ idx + 1 }}</span>
+                  <span class="text-xs font-bold text-white">Bài {{ idx + 1 }}</span>
+                  <span class="text-xs text-cyan-300 font-mono">🕒 {{ slot.display_time }}</span>
+                </div>
+                <button type="button" v-if="pageSlots.length > 1" @click="removePageSlot(idx)" class="text-slate-400 hover:text-rose-400 text-sm font-bold">&times; Xóa bài này</button>
+              </div>
+
+              <!-- Chọn video -->
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <label class="text-xs font-semibold text-slate-300">Video: *</label>
+                  <button type="button" @click="triggerPageSlotFilePicker(idx)" class="text-xs text-blue-400 hover:underline">
+                    📁 Chọn file video từ máy tính
+                  </button>
+                </div>
+                <input type="text" v-model="slot.video_path" placeholder="Đường dẫn file video hoặc chọn từ máy..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              </div>
+
+              <!-- Caption -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Caption:</label>
+                <textarea v-model="slot.caption" rows="2" placeholder="Nội dung caption bài viết..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500"></textarea>
+              </div>
+
+              <!-- Bình luận -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Bình luận (tùy chọn):</label>
+                <input type="text" v-model="slot.comment_text" placeholder="Bình luận tự động sau khi đăng..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="pt-3 border-t border-slate-800 flex items-center justify-between">
+            <span class="text-xs text-slate-400">Tổng cộng: <strong class="text-white">{{ pageSlots.length }}</strong> bài đăng</span>
+            <div class="flex items-center gap-2">
+              <button type="button" @click="showPageTasksModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">Hủy</button>
+              <button type="submit" :disabled="isSubmittingPageTasks" class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold transition">
+                {{ isSubmittingPageTasks ? 'Đang tạo...' : ('Lên Lịch ' + pageSlots.length + ' Bài Đăng') }}
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div v-if="showBulkTaskModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh]">
         <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
@@ -1707,7 +1739,7 @@
               <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
                 <span>⏰</span> Bước 1: Chọn 1 mốc thời gian đăng chung (Dùng cho toàn bộ task):
               </span>
-              <span class="text-[11px] text-cyan-400 font-mono">Asia/Ho_Chi_Minh (24h)</span>
+              <span class="text-[11px] text-cyan-400 font-mono"></span>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1810,7 +1842,7 @@
             <div>
               <div class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
                 <span>📁</span>
-                <span>Bước 4: Nạp video từ máy tính lên Cloudflare R2:</span>
+                <span>Bước 4: Nạp video từ máy tính lên Bộ nhớ:</span>
               </div>
               <p class="text-[11px] text-slate-400 mt-0.5">
                 Nếu đường dẫn ở Cột 1 là file từ máy tính (ví dụ video01.mp4), bấm nút bên cạnh chọn các file đó để nạp lên R2. Hệ thống sẽ tự động so khớp theo tên file!
@@ -1926,7 +1958,7 @@
                 <span v-if="errorBulkRowCount > 0">Chưa có video R2: <strong class="text-amber-400">{{ errorBulkRowCount }}</strong></span>
               </div>
               <div v-if="bulkScheduleForm.schedule_date && bulkScheduleForm.schedule_time" class="text-[11px] text-slate-400 font-sans">
-                Lịch đăng chung: <strong class="text-cyan-300">{{ bulkScheduleForm.schedule_date }} {{ bulkScheduleForm.schedule_time }}</strong> (Asia/Ho_Chi_Minh)
+                Lịch đăng chung: <strong class="text-cyan-300">{{ bulkScheduleForm.schedule_date }} {{ bulkScheduleForm.schedule_time }}</strong> (Giờ Việt Nam)
               </div>
             </div>
 
@@ -2319,6 +2351,23 @@
             </div>
           </div>
 
+          <!-- Thêm bình luận mới trực tiếp lên Facebook cho bài viết này -->
+          <div v-if="currentLogTask.status === 'success'" class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+            <label class="block text-xs font-bold text-white">Thêm bình luận mới vào bài viết này:</label>
+            <div class="flex items-center gap-2">
+              <input type="text"
+                     v-model="newCommentInput"
+                     @keydown.enter.prevent="handleSendNewComment(currentLogTask)"
+                     placeholder="Nhập nội dung bình luận cần đăng lên Facebook..."
+                     class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+              <button @click="handleSendNewComment(currentLogTask)"
+                      :disabled="isSendingNewComment || !newCommentInput.trim()"
+                      class="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white font-bold text-xs rounded-lg transition shrink-0">
+                {{ isSendingNewComment ? 'Đang gửi...' : 'Gửi Bình Luận' }}
+              </button>
+            </div>
+          </div>
+
           <!-- 7. Logs hệ thống / Chi tiết kỹ thuật -->
           <div>
             <label class="block text-xs font-semibold text-slate-400 mb-1">Chi tiết kỹ thuật (Logs):</label>
@@ -2346,7 +2395,7 @@
                 <span v-if="reelInsightDetail.task" class="text-indigo-400 font-semibold">— {{ reelInsightDetail.task.page_name }}</span>
               </h3>
               <p class="text-[11px] text-slate-400">
-                Dữ liệu Meta Graph API v27.0 • Tách biệt riêng Video ID (Insights) và Post ID (Bình luận)
+                Dữ liệu Facebook Insights • Tách biệt riêng Video ID (Insights) và Post ID (Bình luận)
               </p>
             </div>
           </div>
@@ -2466,7 +2515,7 @@
             <!-- 3. Trạng thái chi tiết từng Metric từ Meta API v27.0 -->
             <div v-if="reelInsightDetail.metric_items && reelInsightDetail.metric_items.length > 0"
                  class="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
-              <h4 class="text-xs font-bold text-white uppercase tracking-wider">Chi tiết từng Metric từ Meta Graph API v27.0</h4>
+              <h4 class="text-xs font-bold text-white uppercase tracking-wider">Chi tiết từng Metric từ Facebook Insights</h4>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <div v-for="mItem in reelInsightDetail.metric_items" :key="mItem.metric_name"
                      class="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-2 text-xs">

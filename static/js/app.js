@@ -2753,25 +2753,98 @@ function setDatePreset(offsetDays) {
       }
     }
 
-    async function handleDeleteTask(taskId) {
-      const targetTask = tasks.value.find(x => x.id === taskId);
-      if (targetTask && isTaskLocked(targetTask)) {
-        showToast("Task đã đăng Reels thành công và đã khóa để bảo toàn lịch sử, không thể xóa.", "warning");
-        return;
-      }
-      if (!confirm(`Bạn có chắc chắn muốn xóa Task #${taskId} không?`)) return;
+        const isSyncingPagePosts = ref(false);
+    const newCommentInput = ref('');
+    const isSendingNewComment = ref(false);
+
+    async function syncPagePosts(page) {
+      if (!page || !page.facebook_page_id) return;
+      if (isSyncingPagePosts.value) return;
+      isSyncingPagePosts.value = true;
       try {
-        const res = await apiFetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
-        const data = await res.json();
+        const res = await apiFetch(`/api/pages/${encodeURIComponent(page.facebook_page_id)}/sync-posts`, {
+          method: 'POST'
+        });
+        const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          showToast("Đã xóa task.", "success");
-          selectedTaskIds.value = selectedTaskIds.value.filter(id => id !== taskId);
-          await loadAll();
+          showToast(`Đã đồng bộ thành công ${data.synced_count || 0} bài viết từ Fanpage ${page.name}!`, 'success');
+          await loadTasks();
         } else {
-          showToast(data.detail || "Không thể xóa task.", "error");
+          showToast(data.detail || 'Không thể đồng bộ bài viết từ Fanpage.', 'error');
         }
       } catch (err) {
-        showToast("Lỗi xóa task: " + err.message, "error");
+        showToast('Lỗi kết nối khi đồng bộ bài viết.', 'error');
+      } finally {
+        isSyncingPagePosts.value = false;
+      }
+    }
+
+    async function handleSendNewComment(task) {
+      if (!task || !task.id) return;
+      const msg = (newCommentInput.value || '').trim();
+      if (!msg) {
+        showToast('Vui lòng nhập nội dung bình luận!', 'warning');
+        return;
+      }
+      isSendingNewComment.value = true;
+      try {
+        const res = await apiFetch(`/api/tasks/${task.id}/comment`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          showToast('Đã đăng bình luận thành công lên bài viết Facebook!', 'success');
+          task.comment_text = msg;
+          task.comment_status = 'success';
+          task.comment_id = data.comment_id;
+          newCommentInput.value = '';
+          await loadTasks();
+        } else {
+          showToast(data.detail || 'Không thể gửi bình luận lên Facebook.', 'error');
+        }
+      } catch (err) {
+        showToast('Lỗi kết nối khi gửi bình luận.', 'error');
+      } finally {
+        isSendingNewComment.value = false;
+      }
+    }
+
+async function handleDeleteTask(taskId) {
+      const targetTask = tasks.value.find(x => x.id === taskId);
+      if (targetTask && isTaskInFlight(targetTask)) {
+        showToast("Bài viết đang được đăng lên Facebook. Vui lòng chờ hoàn tất!", "warning");
+        return;
+      }
+
+      let deleteFb = false;
+      if (targetTask && targetTask.status === 'success' && (targetTask.video_id || targetTask.post_id)) {
+        const ok = confirm("Bài viết này đã được đăng lên Facebook.\n\n• Bấm OK: Xóa bài viết trên Facebook VÀ xóa khỏi hệ thống.\n• Bấm Cancel (Hủy): Không xóa.");
+        if (!ok) return;
+        deleteFb = true;
+      } else {
+        if (!confirm("Bạn có chắc chắn muốn xóa bài viết này không?")) return;
+      }
+
+      try {
+        const delUrl = deleteFb ? `/api/tasks/${taskId}?delete_facebook=true` : `/api/tasks/${taskId}?force=true`;
+        const res = await apiFetch(delUrl, { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const msg = deleteFb ? "Đã xóa bài viết trên Facebook và khỏi hệ thống!" : "Đã xóa bài viết thành công!";
+          showToast(msg, "success");
+          selectedTaskIds.value = selectedTaskIds.value.filter(id => id !== taskId);
+          if (showLogModal.value && currentLogTask.value && currentLogTask.value.id === taskId) {
+            showLogModal.value = false;
+          }
+          await loadTasks();
+          await loadStats();
+        } else {
+          showToast(data.detail || "Không thể xóa bài viết.", "error");
+        }
+      } catch (err) {
+        showToast("Lỗi xóa bài viết: " + (err.message || err), "error");
       }
     }
 
@@ -3407,6 +3480,12 @@ function setDatePreset(offsetDays) {
     });
 
     return {
+      syncPagePosts,
+      isSyncingPagePosts,
+      newCommentInput,
+      isSendingNewComment,
+      handleSendNewComment,
+
       selectedPages,
       setQuickTomorrow0001,
       setEarliestSchedule,

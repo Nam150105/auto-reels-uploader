@@ -2409,3 +2409,143 @@ export async function postReelCommentViaGraphApi(
 
   return result;
 }
+
+/**
+ * Xóa video / post trên Facebook qua Meta Graph API
+ * DELETE /{post_id || video_id}?access_token={token}
+ */
+export async function deleteFacebookReelOrPost(
+  db: D1Database,
+  env: Env,
+  options: {
+    pageId: string;
+    videoId?: string | null;
+    postId?: string | null;
+    ownerUserId: string;
+  }
+): Promise<{ success: boolean; deleted_id?: string; error?: string }> {
+  const cfg = getMetaConfig(env);
+  const { pageId, videoId, postId, ownerUserId } = options;
+  if (!pageId) return { success: false, error: "Thiếu Page ID." };
+
+  const pages = await getFacebookPages(db, cfg.encryptionKey, ownerUserId);
+  const page = pages.find((p) => p.facebook_page_id === pageId);
+  if (!page || !page.access_token) {
+    return { success: false, error: "Không tìm thấy token hợp lệ của Fanpage." };
+  }
+
+  const token = page.access_token;
+  const targetIds = [videoId, postId].filter((id): id is string => Boolean(id && id.trim().length > 0));
+  if (targetIds.length === 0) {
+    return { success: true };
+  }
+
+  let deletedAny = false;
+  let lastErr = "";
+
+  for (const tid of targetIds) {
+    try {
+      const resp = await fetch(`${cfg.graphBase}/${tid}?access_token=${encodeURIComponent(token)}`, {
+        method: "DELETE"
+      });
+      if (resp.ok) {
+        deletedAny = true;
+      } else {
+        const errJson = (await resp.json().catch(() => ({}))) as any;
+        const msg = errJson?.error?.message || resp.statusText;
+        if (resp.status === 404 || errJson?.error?.code === 100 || (msg && msg.toLowerCase().includes("does not exist"))) {
+          deletedAny = true;
+        } else {
+          lastErr = msg;
+        }
+      }
+    } catch (e: any) {
+      lastErr = e?.message || "Lỗi mạng khi xóa video trên Facebook";
+    }
+  }
+
+  return { success: deletedAny, error: deletedAny ? undefined : lastErr };
+}
+
+/**
+ * Lấy danh sách video Reels đã đăng từ Fanpage về hệ thống
+ * GET /{page_id}/videos?fields=id,description,created_time,permalink_url&limit=25
+ */
+export async function syncRecentPageVideos(
+  db: D1Database,
+  env: Env,
+  options: {
+    pageId: string;
+    ownerUserId: string;
+    limit?: number;
+  }
+): Promise<{ success: boolean; synced_count: number; total_remote: number; error?: string }> {
+  const cfg = getMetaConfig(env);
+  const { pageId, ownerUserId, limit = 25 } = options;
+
+  const pages = await getFacebookPages(db, cfg.encryptionKey, ownerUserId);
+  const page = pages.find((p) => p.facebook_page_id === pageId);
+  if (!page || !page.access_token) {
+    return { success: false, synced_count: 0, total_remote: 0, error: "Không tìm thấy token Fanpage." };
+  }
+
+  const token = page.access_token;
+  try {
+    const resp = await fetch(
+      `${cfg.graphBase}/${pageId}/videos?fields=id,description,created_time,permalink_url&limit=${limit}&access_token=${encodeURIComponent(token)}`
+    );
+    if (!resp.ok) {
+      const errJson = (await resp.json().catch(() => ({}))) as any;
+      return { success: false, synced_count: 0, total_remote: 0, error: errJson?.error?.message || "Không thể lấy danh sách video từ Facebook." };
+    }
+
+    const data = (await resp.json()) as { data?: Array<{ id: string; description?: string; created_time?: string; permalink_url?: string }> };
+    const list = Array.isArray(data.data) ? data.data : [];
+    let syncedCount = 0;
+
+    for (const v of list) {
+      if (!v.id) continue;
+      const existing = await db
+        .prepare("SELECT id FROM tasks WHERE (video_id = ? OR post_id = ?) AND owner_user_id = ?")
+        .bind(v.id, v.id, ownerUserId)
+        .first<{ id: number }>();
+
+      if (!existing) {
+        const now = new Date().toISOString();
+        const createdIso = v.created_time || now;
+        const sDate = createdIso.slice(0, 10);
+        const sTime = createdIso.slice(11, 16);
+
+        await db
+          .prepare(
+            `INSERT INTO tasks (
+              owner_user_id, facebook_page_id, video_path, caption,
+              video_id, post_id, video_url, status, publish_status,
+              schedule_date, schedule_time, schedule_publish_time,
+              created_at, updated_at, is_locked
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'success', 'published', ?, ?, ?, ?, ?, 0)`
+          )
+          .bind(
+            ownerUserId,
+            pageId,
+            v.permalink_url || `https://www.facebook.com/${v.id}`,
+            v.description || "",
+            v.id,
+            v.id,
+            v.permalink_url || `https://www.facebook.com/${v.id}`,
+            sDate,
+            sTime,
+            Math.floor(new Date(createdIso).getTime() / 1000),
+            createdIso,
+            now
+          )
+          .run();
+        syncedCount++;
+      }
+    }
+
+    return { success: true, synced_count: syncedCount, total_remote: list.length };
+  } catch (err: any) {
+    return { success: false, synced_count: 0, total_remote: 0, error: err?.message || "Lỗi đồng bộ video." };
+  }
+}

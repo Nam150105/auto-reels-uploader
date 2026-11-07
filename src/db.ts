@@ -4036,24 +4036,29 @@ export async function cancelTasksBulk(
 export async function deleteTask(
   db: D1Database,
   taskId: number,
-  ownerUserId: string
+  ownerUserId: string,
+  options?: { allowPublished?: boolean }
 ): Promise<{ deleted: boolean; orphanMediaId?: string | null }> {
   const existing = await getTask(db, taskId, ownerUserId);
   if (!existing) return { deleted: false };
 
-  // Khóa không cho xóa task đã đăng thành công hoặc đang chạy (Mục 1.2 & 1.5)
-  assertTaskMutable(existing, "xóa");
+  if (options?.allowPublished) {
+    if (isTaskCurrentlyRunning(existing)) {
+      throw new TaskLockError(
+        "TASK_CURRENTLY_RUNNING",
+        "TASK_CURRENTLY_RUNNING: Bài viết đang trong quá trình xuất bản, không thể xóa lúc này.",
+        409
+      );
+    }
+  } else {
+    assertTaskMutable(existing, "xóa");
+  }
 
-  const res = await db
-    .prepare(
-      `DELETE FROM tasks
-       WHERE id = ?
-         AND owner_user_id = ?
-         AND status != 'success'
-         AND COALESCE(is_locked, 0) = 0`
-    )
-    .bind(taskId, ownerUserId)
-    .run();
+  const deleteSql = options?.allowPublished
+    ? `DELETE FROM tasks WHERE id = ? AND owner_user_id = ? AND (status != 'running' OR status IS NULL)`
+    : `DELETE FROM tasks WHERE id = ? AND owner_user_id = ? AND status != 'success' AND COALESCE(is_locked, 0) = 0`;
+
+  const res = await db.prepare(deleteSql).bind(taskId, ownerUserId).run();
 
   if ((res.meta?.changes || 0) === 0) {
     const recheck = await getTask(db, taskId, ownerUserId);

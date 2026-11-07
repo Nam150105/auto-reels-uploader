@@ -70,7 +70,9 @@ import {
   runDiagnosticTest,
   connectFacebookWithAccessToken,
   postReelCommentViaGraphApi,
-  getMetaApiTelemetrySummary
+  getMetaApiTelemetrySummary,
+  deleteFacebookReelOrPost,
+  syncRecentPageVideos
 } from "./services/metaGraphService.ts";
 import { deleteUserVideo, getR2Bucket, cleanupExpiredR2Media } from "./services/r2MediaService.ts";
 import {
@@ -1533,18 +1535,40 @@ export async function handleWorkerRequest(
 
     if (taskItemMatch && method === "DELETE") {
       const taskId = parseInt(taskItemMatch[1], 10);
+      const deleteFb = url.searchParams.get("delete_facebook") === "true";
+      const forceDelete = deleteFb || url.searchParams.get("force") === "true";
       try {
-        const delRes = await deleteTask(db, taskId, ownerUserId);
-        if (!delRes.deleted) {
-          return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+        const existing = await getTask(db, taskId, ownerUserId);
+        if (!existing) {
+          return jsonResponse({ detail: "Không tìm thấy bài viết thuộc quyền sở hữu của bạn." }, 404);
         }
-        // Tự động xóa video tạm trên R2 nếu không còn task nào khác tham chiếu
+
+        // Nếu người dùng chọn xóa cả bài viết trên Facebook
+        let fbDeleted = false;
+        if (deleteFb && (existing.video_id || existing.post_id)) {
+          const fbRes = await deleteFacebookReelOrPost(db, env, {
+            pageId: existing.facebook_page_id,
+            videoId: existing.video_id,
+            postId: existing.post_id,
+            ownerUserId
+          });
+          fbDeleted = fbRes.success;
+        }
+
+        const delRes = await deleteTask(db, taskId, ownerUserId, { allowPublished: forceDelete });
+        if (!delRes.deleted) {
+          return jsonResponse({ detail: "Không tìm thấy bài viết thuộc quyền sở hữu của bạn." }, 404);
+        }
+
+        // Tự động xóa video trên R2 nếu không còn bài viết nào khác tham chiếu
         if (delRes.orphanMediaId) {
           await deleteUserVideo(db, env, delRes.orphanMediaId, ownerUserId);
         }
+
         return jsonResponse({
           success: true,
           deleted_id: taskId,
+          deleted_facebook: fbDeleted,
           cleaned_orphan_media_id: delRes.orphanMediaId || null
         });
       } catch (err: any) {
@@ -1559,7 +1583,7 @@ export async function handleWorkerRequest(
             err.httpStatus
           );
         }
-        return jsonResponse({ detail: err?.message || "Không thể xóa tác vụ." }, 400);
+        return jsonResponse({ detail: err?.message || "Không thể xóa bài viết." }, 400);
       }
     }
 
@@ -1576,7 +1600,8 @@ export async function handleWorkerRequest(
         return jsonResponse({ detail: "Vui lòng chọn ít nhất một tác vụ để xóa." }, 400);
       }
       try {
-        const bulkRes = await deleteTasksBulk(db, taskIds, ownerUserId);
+        const forceBulk = url.searchParams.get("force") === "true";
+        const bulkRes = await deleteTasksBulk(db, taskIds, ownerUserId, { allowPublished: forceBulk });
         for (const mId of bulkRes.orphanMediaIds) {
           await deleteUserVideo(db, env, mId, ownerUserId);
         }
@@ -1600,6 +1625,78 @@ export async function handleWorkerRequest(
           );
         }
         return jsonResponse({ detail: err?.message || "Không thể xóa tác vụ." }, 400);
+      }
+    }
+
+
+    // ------------------------------------------
+    // 6.4E. THÊM BÌNH LUẬN TRỰC TIẾP VÀO BÀI VIẾT ĐÃ ĐĂNG (/api/tasks/:id/comment)
+    // ------------------------------------------
+    const taskNewCommentMatch = /^\/api\/tasks\/(\d+)\/comment$/.exec(pathname);
+    if (taskNewCommentMatch && method === "POST") {
+      const taskId = parseInt(taskNewCommentMatch[1], 10);
+      const body = (await request.json().catch(() => ({}))) as { message?: string };
+      const msg = (body.message || "").trim();
+      if (!msg) {
+        return jsonResponse({ detail: "Nội dung bình luận không được để trống." }, 400);
+      }
+
+      const task = await getTask(db, taskId, ownerUserId);
+      if (!task) {
+        return jsonResponse({ detail: "Không tìm thấy bài viết." }, 404);
+      }
+      if (task.status !== "success" || (!task.post_id && !task.video_id)) {
+        return jsonResponse({ detail: "Bài viết này chưa được xuất bản lên Facebook nên chưa thể thêm bình luận." }, 400);
+      }
+
+      const cmtRes = await postReelCommentViaGraphApi(db, env, task, msg, {
+        isRetry: true,
+        skipInitialDuplicateCheck: true,
+        ownerUserId
+      });
+
+      if (cmtRes.success) {
+        await updateTaskCommentState(db, taskId, ownerUserId, {
+          comment_status: "success",
+          comment_id: cmtRes.comment_id,
+          comment_text: msg
+        });
+        return jsonResponse({
+          success: true,
+          comment_id: cmtRes.comment_id,
+          message: "Đã đăng bình luận thành công lên bài viết Facebook."
+        });
+      } else {
+        return jsonResponse({
+          success: false,
+          detail: cmtRes.message || "Không thể đăng bình luận lên Facebook."
+        }, 400);
+      }
+    }
+
+    // ------------------------------------------
+    // 6.4F. ĐỒNG BỘ BÀI VIẾT CŨ TỪ FANPAGE VỀ HỆ THỐNG (/api/pages/:id/sync-posts)
+    // ------------------------------------------
+    const pageSyncPostsMatch = /^\/api\/pages\/([^\/]+)\/sync-posts$/.exec(pathname);
+    if (pageSyncPostsMatch && method === "POST") {
+      const pageId = decodeURIComponent(pageSyncPostsMatch[1]);
+      const syncRes = await syncRecentPageVideos(db, env, {
+        pageId,
+        ownerUserId,
+        limit: 30
+      });
+      if (syncRes.success) {
+        return jsonResponse({
+          success: true,
+          synced_count: syncRes.synced_count,
+          total_remote: syncRes.total_remote,
+          message: `Đã đồng bộ thành công ${syncRes.synced_count} bài viết từ Fanpage.`
+        });
+      } else {
+        return jsonResponse({
+          success: false,
+          detail: syncRes.error || "Không thể đồng bộ bài viết từ Fanpage."
+        }, 400);
       }
     }
 
