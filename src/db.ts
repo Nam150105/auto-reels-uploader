@@ -199,6 +199,15 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
     if (!existing.has("trigger_source")) {
       try { await db.exec("ALTER TABLE tasks ADD COLUMN trigger_source TEXT DEFAULT 'scheduled'"); } catch {}
     }
+
+    const pageInfo = await db.prepare("PRAGMA table_info(facebook_pages)").all<{ name: string }>();
+    const pageExisting = new Set((pageInfo.results || []).map((c) => c.name));
+    if (!pageExisting.has("followers_count")) {
+      try { await db.exec("ALTER TABLE facebook_pages ADD COLUMN followers_count INTEGER DEFAULT 0"); } catch {}
+    }
+    if (!pageExisting.has("fan_count")) {
+      try { await db.exec("ALTER TABLE facebook_pages ADD COLUMN fan_count INTEGER DEFAULT 0"); } catch {}
+    }
   } catch {
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT ''"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none'"); } catch {}

@@ -92,6 +92,67 @@
     const tempCommentDelay = ref(0);
 
     // ==========================================
+    // SO9 LAB COMPOSER: ĐĂNG THƯỜNG & ĐĂNG HÀNG LOẠT
+    // ==========================================
+    const composerSubMode = ref('single'); // 'single' | 'bulk'
+    const singleComposerSearch = ref('');
+
+    // State cho Đăng hàng loạt (Bulk Composer Rows)
+    const bulkComposerRows = ref([
+      {
+        id: 1,
+        selectedPageIds: [],
+        caption: '',
+        media_filename: '',
+        media_id: '',
+        object_key: '',
+        video_path: '',
+        media_size_mb: 0,
+        media_type: 'video',
+        is_uploading: false,
+        upload_progress: 0,
+        schedule_date: '',
+        schedule_time: '',
+        schedule_display: '',
+        comment_text: '',
+        comment_delay_minutes: 0,
+        has_comment: false
+      }
+    ]);
+
+    // Modals và Toolbar của Đăng hàng loạt
+    const showBulkToolbarChannelModal = ref(false);
+    const showBulkToolbarScheduleModal = ref(false);
+    const showBulkToolbarCommentModal = ref(false);
+    const bulkToolbarSelectedPageIds = ref([]);
+    const bulkToolbarScheduleForm = ref({
+      start_date: '',
+      start_time: '',
+      interval_minutes: 30
+    });
+    const bulkToolbarCommentForm = ref({
+      text: '',
+      delay: 0
+    });
+
+    const targetBulkRowForChannel = ref(null);
+    const showRowChannelModal = ref(false);
+    const targetBulkRowForComment = ref(null);
+    const showRowCommentModal = ref(false);
+    const rowCommentTempText = ref('');
+    const rowCommentTempDelay = ref(0);
+
+    // Calendar & Time Picker Popover State
+    const showCalendarPicker = ref(false);
+    const calendarTarget = ref('single'); // 'single' | 'bulk_row'
+    const calendarTargetRow = ref(null);
+    const calendarYear = ref(2026);
+    const calendarMonth = ref(10); // 0-based: 10 = Nov
+    const calendarSelectedDay = ref(8);
+    const calendarSelectedHour = ref('12');
+    const calendarSelectedMinute = ref('00');
+
+    // ==========================================
     // FACEBOOK POSTS & COMMENTS MANAGER STATE
     // ==========================================
     const posts = ref([]);
@@ -4196,6 +4257,9 @@ async function handleDeleteTask(taskId) {
       if (pages.value.length > 0 && composerForm.value.selectedPageIds.length === 0) {
         composerForm.value.selectedPageIds = [pages.value[0].facebook_page_id];
       }
+      if (bulkComposerRows.value.length === 0 || !bulkComposerRows.value[0].schedule_date) {
+        initBulkComposerRows();
+      }
     }
 
     function toggleComposerPage(pageId) {
@@ -4408,6 +4472,440 @@ async function handleDeleteTask(taskId) {
       } catch (err) {
         showToast("Lỗi kết nối: " + (err.message || 'Mạng không ổn định'), "error");
       }
+    }
+
+    // ==========================================
+    // SO9 LAB COMPOSER & CALENDAR PICKER METHODS
+    // ==========================================
+    const filteredSingleComposerPages = computed(() => {
+      const q = (singleComposerSearch.value || '').trim().toLowerCase();
+      if (!q) return pages.value || [];
+      return (pages.value || []).filter(p =>
+        (p.name || p.page_name || '').toLowerCase().includes(q) ||
+        (p.facebook_page_id || '').includes(q)
+      );
+    });
+
+    const isAllSingleComposerPagesSelected = computed(() => {
+      const list = filteredSingleComposerPages.value;
+      if (list.length === 0) return false;
+      return list.every(p => composerForm.value.selectedPageIds.includes(p.facebook_page_id));
+    });
+
+    function toggleSelectAllSingleComposerPages() {
+      const list = filteredSingleComposerPages.value;
+      if (isAllSingleComposerPagesSelected.value) {
+        const filteredIds = new Set(list.map(p => p.facebook_page_id));
+        composerForm.value.selectedPageIds = composerForm.value.selectedPageIds.filter(id => !filteredIds.has(id));
+      } else {
+        const currentSet = new Set(composerForm.value.selectedPageIds);
+        for (const p of list) currentSet.add(p.facebook_page_id);
+        composerForm.value.selectedPageIds = Array.from(currentSet);
+      }
+    }
+
+    const previewPostPage = computed(() => {
+      if (composerForm.value.selectedPageIds.length > 0) {
+        const found = pages.value.find(p => p.facebook_page_id === composerForm.value.selectedPageIds[0]);
+        if (found) return found;
+      }
+      return pages.value[0] || { name: 'Fanpage của bạn', avatar_url: '' };
+    });
+
+    function quickAddEmoji(emoji) {
+      composerForm.value.caption = (composerForm.value.caption || '') + emoji;
+    }
+
+    function initBulkComposerRows() {
+      const defSlot = getVnNowParts(15);
+      const defaultPages = pages.value.length > 0 ? [pages.value[0].facebook_page_id] : [];
+      bulkComposerRows.value = [
+        {
+          id: Date.now(),
+          selectedPageIds: defaultPages,
+          caption: '',
+          media_filename: '',
+          media_id: '',
+          object_key: '',
+          video_path: '',
+          media_size_mb: 0,
+          media_type: 'video',
+          is_uploading: false,
+          upload_progress: 0,
+          schedule_date: defSlot.date,
+          schedule_time: defSlot.time,
+          schedule_display: `${defSlot.time} ${defSlot.date.split('-').reverse().join('/')}`,
+          comment_text: '',
+          comment_delay_minutes: 0,
+          has_comment: false
+        }
+      ];
+    }
+
+    function addBulkComposerRow() {
+      const len = bulkComposerRows.value.length;
+      const lastRow = bulkComposerRows.value[len - 1];
+      let nextDate = '';
+      let nextTime = '';
+      if (lastRow && lastRow.schedule_date && lastRow.schedule_time) {
+        const nextSlot = addMinutesToVnDateTime(lastRow.schedule_date, lastRow.schedule_time, 30);
+        nextDate = nextSlot.date;
+        nextTime = nextSlot.time;
+      } else {
+        const slot = getVnNowParts(15 + len * 30);
+        nextDate = slot.date;
+        nextTime = slot.time;
+      }
+
+      const defaultPages = lastRow && lastRow.selectedPageIds && lastRow.selectedPageIds.length > 0
+        ? [...lastRow.selectedPageIds]
+        : (composerForm.value.selectedPageIds.length > 0 ? [...composerForm.value.selectedPageIds] : (pages.value.length > 0 ? [pages.value[0].facebook_page_id] : []));
+
+      const dParts = nextDate.split('-').reverse().join('/');
+      bulkComposerRows.value.push({
+        id: Date.now() + Math.random(),
+        selectedPageIds: defaultPages,
+        caption: '',
+        media_filename: '',
+        media_id: '',
+        object_key: '',
+        video_path: '',
+        media_size_mb: 0,
+        media_type: 'video',
+        is_uploading: false,
+        upload_progress: 0,
+        schedule_date: nextDate,
+        schedule_time: nextTime,
+        schedule_display: `${nextTime} ${dParts}`,
+        comment_text: '',
+        comment_delay_minutes: 0,
+        has_comment: false
+      });
+      showToast(`Đã thêm bài đăng mới #${bulkComposerRows.value.length}!`, "info");
+    }
+
+    function removeBulkComposerRow(index) {
+      if (bulkComposerRows.value.length <= 1) {
+        const r = bulkComposerRows.value[0];
+        r.caption = '';
+        r.media_filename = '';
+        r.media_id = '';
+        r.object_key = '';
+        r.video_path = '';
+        r.has_comment = false;
+        r.comment_text = '';
+        showToast("Đã làm mới dòng bài đăng!", "info");
+        return;
+      }
+      bulkComposerRows.value.splice(index, 1);
+      showToast("Đã xóa dòng bài đăng!", "info");
+    }
+
+    async function handleBulkRowFileSelected(row, event) {
+      const file = event?.target?.files?.[0];
+      if (!file) return;
+      event.target.value = '';
+      row.is_uploading = true;
+      row.upload_progress = 0;
+      row.media_filename = file.name;
+      row.media_size_mb = Number((file.size / (1024 * 1024)).toFixed(1));
+      row.media_type = file.type && file.type.startsWith('image/') ? 'image' : 'video';
+
+      try {
+        const uploadRes = await uploadVideoToR2ViaChunks(file, (p) => {
+          row.upload_progress = p;
+        });
+        row.object_key = uploadRes.object_key;
+        row.media_id = uploadRes.media_id;
+        row.video_path = uploadRes.object_key || file.name;
+        row.is_uploading = false;
+        showToast(`Đã tải lên R2 thành công: ${file.name}!`, "success");
+      } catch (err) {
+        row.is_uploading = false;
+        row.media_filename = '';
+        showToast("Lỗi tải video lên R2: " + (err.message || 'Mạng không ổn định'), "error");
+      }
+    }
+
+    async function handleBulkComposerSubmit() {
+      const validRows = bulkComposerRows.value.filter(r => (r.caption || '').trim() || r.media_filename || r.object_key);
+      if (validRows.length === 0) {
+        showToast("Vui lòng nhập nội dung hoặc chọn video cho ít nhất một bài đăng!", "warning");
+        return;
+      }
+
+      for (let i = 0; i < validRows.length; i++) {
+        const r = validRows[i];
+        if (!r.selectedPageIds || r.selectedPageIds.length === 0) {
+          if (composerForm.value.selectedPageIds.length > 0) {
+            r.selectedPageIds = [...composerForm.value.selectedPageIds];
+          } else if (pages.value.length > 0) {
+            r.selectedPageIds = [pages.value[0].facebook_page_id];
+          } else {
+            showToast(`Bài đăng #${i + 1} chưa được chọn Fanpage!`, "warning");
+            return;
+          }
+        }
+      }
+
+      if (validRows.some(r => r.is_uploading)) {
+        showToast("Có tệp media đang được tải lên R2, vui lòng đợi hoàn tất...", "warning");
+        return;
+      }
+
+      const payloadTasks = [];
+      const defSched = getVnNowParts(15);
+
+      for (const r of validRows) {
+        let tDate = r.schedule_date || defSched.date;
+        let tTime = r.schedule_time || defSched.time;
+        const check = validateVnScheduleClient(tDate, tTime);
+        if (check.valid) {
+          tDate = check.normalizedDate;
+          tTime = check.normalizedTime;
+        }
+
+        for (const pid of r.selectedPageIds) {
+          payloadTasks.push({
+            facebook_page_id: pid,
+            video_path: r.video_path || r.media_filename || 'bulk_post_media.mp4',
+            media_id: r.media_id || '',
+            object_key: r.object_key || '',
+            caption: (r.caption || '').trim(),
+            comment_text: r.has_comment ? (r.comment_text || '').trim() : '',
+            comment_delay_minutes: r.comment_delay_minutes || 0,
+            schedule_date: tDate,
+            schedule_time: tTime
+          });
+        }
+      }
+
+      try {
+        const res = await apiFetch('/api/tasks/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tasks: payloadTasks,
+            allow_unuploaded_video: true
+          })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          const createdCount = data.created_count || payloadTasks.length;
+          showToast(`Đã lên lịch thành công ${createdCount} công việc đăng bài hàng loạt!`, "success");
+          initBulkComposerRows();
+          setMainView('schedule');
+          await Promise.allSettled([loadTasks(), loadStats(), loadPages()]);
+        } else {
+          showToast(data.detail || "Không thể tạo công việc đăng bài hàng loạt.", "error");
+        }
+      } catch (err) {
+        showToast("Lỗi kết nối: " + (err.message || 'Mạng không ổn định'), "error");
+      }
+    }
+
+    function openBulkToolbarChannelModal() {
+      bulkToolbarSelectedPageIds.value = composerForm.value.selectedPageIds.length > 0
+        ? [...composerForm.value.selectedPageIds]
+        : pages.value.map(p => p.facebook_page_id);
+      showBulkToolbarChannelModal.value = true;
+    }
+
+    function applyBulkToolbarChannels() {
+      if (bulkToolbarSelectedPageIds.value.length === 0) {
+        showToast("Vui lòng chọn ít nhất một Fanpage!", "warning");
+        return;
+      }
+      for (const r of bulkComposerRows.value) {
+        r.selectedPageIds = [...bulkToolbarSelectedPageIds.value];
+      }
+      showToast(`Đã áp dụng ${bulkToolbarSelectedPageIds.value.length} Fanpage cho tất cả bài đăng!`, "success");
+      showBulkToolbarChannelModal.value = false;
+    }
+
+    function openBulkToolbarScheduleModal() {
+      const defSlot = getVnNowParts(15);
+      bulkToolbarScheduleForm.value.start_date = defSlot.date;
+      bulkToolbarScheduleForm.value.start_time = defSlot.time;
+      bulkToolbarScheduleForm.value.interval_minutes = 30;
+      showBulkToolbarScheduleModal.value = true;
+    }
+
+    function applyBulkToolbarSchedule() {
+      const sDate = bulkToolbarScheduleForm.value.start_date;
+      const sTime = bulkToolbarScheduleForm.value.start_time;
+      const interval = Math.max(0, Number(bulkToolbarScheduleForm.value.interval_minutes) || 30);
+      if (!sDate || !sTime) {
+        showToast("Vui lòng chọn ngày và giờ bắt đầu!", "warning");
+        return;
+      }
+
+      for (let i = 0; i < bulkComposerRows.value.length; i++) {
+        const slot = addMinutesToVnDateTime(sDate, sTime, i * interval);
+        const r = bulkComposerRows.value[i];
+        r.schedule_date = slot.date;
+        r.schedule_time = slot.time;
+        r.schedule_display = `${slot.time} ${slot.date.split('-').reverse().join('/')}`;
+      }
+      showToast(`Đã tự động cài đặt thời gian (cách nhau ${interval} phút) cho ${bulkComposerRows.value.length} bài đăng!`, "success");
+      showBulkToolbarScheduleModal.value = false;
+    }
+
+    function openBulkToolbarCommentModal() {
+      bulkToolbarCommentForm.value.text = '';
+      bulkToolbarCommentForm.value.delay = 0;
+      showBulkToolbarCommentModal.value = true;
+    }
+
+    function applyBulkToolbarComment() {
+      const txt = (bulkToolbarCommentForm.value.text || '').trim();
+      const delay = Number(bulkToolbarCommentForm.value.delay) || 0;
+      for (const r of bulkComposerRows.value) {
+        r.has_comment = Boolean(txt);
+        r.comment_text = txt;
+        r.comment_delay_minutes = delay;
+      }
+      showToast("Đã áp dụng bình luận hàng loạt cho tất cả bài đăng!", "success");
+      showBulkToolbarCommentModal.value = false;
+    }
+
+    function openRowChannelModal(row) {
+      targetBulkRowForChannel.value = row;
+      showRowChannelModal.value = true;
+    }
+
+    function toggleRowChannel(row, pageId) {
+      if (!row || !pageId) return;
+      if (!Array.isArray(row.selectedPageIds)) row.selectedPageIds = [];
+      const idx = row.selectedPageIds.indexOf(pageId);
+      if (idx >= 0) {
+        row.selectedPageIds.splice(idx, 1);
+      } else {
+        row.selectedPageIds.push(pageId);
+      }
+    }
+
+    function openRowCommentModal(row) {
+      targetBulkRowForComment.value = row;
+      rowCommentTempText.value = row.comment_text || '';
+      rowCommentTempDelay.value = row.comment_delay_minutes || 0;
+      showRowCommentModal.value = true;
+    }
+
+    function saveRowComment() {
+      if (targetBulkRowForComment.value) {
+        targetBulkRowForComment.value.comment_text = (rowCommentTempText.value || '').trim();
+        targetBulkRowForComment.value.comment_delay_minutes = Number(rowCommentTempDelay.value) || 0;
+        targetBulkRowForComment.value.has_comment = Boolean(targetBulkRowForComment.value.comment_text);
+      }
+      showRowCommentModal.value = false;
+      showToast("Đã lưu bình luận cho bài đăng!", "success");
+    }
+
+    // Calendar Popover Methods (Matching SO9 LAB)
+    const calendarMonthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const calendarMonthDisplay = computed(() => {
+      return `${calendarMonthNames[calendarMonth.value]} ${calendarYear.value}`;
+    });
+
+    const calendarGridDays = computed(() => {
+      const year = calendarYear.value;
+      const month = calendarMonth.value;
+      const firstDayOfWeek = new Date(year, month, 1).getDay();
+      const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+      const prevMonthDays = new Date(year, month, 0).getDate();
+
+      const days = [];
+      for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+        days.push({ day: prevMonthDays - i, isCurrentMonth: false });
+      }
+      for (let d = 1; d <= totalDaysInMonth; d++) {
+        days.push({ day: d, isCurrentMonth: true });
+      }
+      const remaining = 42 - days.length;
+      for (let d = 1; d <= remaining && days.length < 42; d++) {
+        days.push({ day: d, isCurrentMonth: false });
+      }
+      return days;
+    });
+
+    function openCalendarPickerForSingle() {
+      calendarTarget.value = 'single';
+      calendarTargetRow.value = null;
+      syncCalendarFromDateStr(composerForm.value.schedule_date, composerForm.value.schedule_time);
+      showCalendarPicker.value = true;
+    }
+
+    function openCalendarPickerForRow(row) {
+      calendarTarget.value = 'bulk_row';
+      calendarTargetRow.value = row;
+      syncCalendarFromDateStr(row.schedule_date, row.schedule_time);
+      showCalendarPicker.value = true;
+    }
+
+    function syncCalendarFromDateStr(dateStr, timeStr) {
+      const def = getVnNowParts(15);
+      const d = dateStr || def.date;
+      const t = timeStr || def.time;
+      const parts = d.split('-');
+      if (parts.length === 3) {
+        calendarYear.value = Number(parts[0]) || 2026;
+        calendarMonth.value = (Number(parts[1]) || 11) - 1;
+        calendarSelectedDay.value = Number(parts[2]) || 8;
+      }
+      const tParts = t.split(':');
+      if (tParts.length >= 2) {
+        calendarSelectedHour.value = String(tParts[0]).padStart(2, '0');
+        calendarSelectedMinute.value = String(tParts[1]).padStart(2, '0');
+      }
+    }
+
+    function prevCalendarMonth() {
+      if (calendarMonth.value === 0) {
+        calendarMonth.value = 11;
+        calendarYear.value--;
+      } else {
+        calendarMonth.value--;
+      }
+    }
+
+    function nextCalendarMonth() {
+      if (calendarMonth.value === 11) {
+        calendarMonth.value = 0;
+        calendarYear.value++;
+      } else {
+        calendarMonth.value++;
+      }
+    }
+
+    function selectCalendarDay(dayObj) {
+      if (!dayObj.isCurrentMonth) return;
+      calendarSelectedDay.value = dayObj.day;
+    }
+
+    function setCalendarPickerNow() {
+      const now = getVnNowParts(0);
+      syncCalendarFromDateStr(now.date, now.time);
+    }
+
+    function confirmCalendarPicker() {
+      const y = calendarYear.value;
+      const m = String(calendarMonth.value + 1).padStart(2, '0');
+      const d = String(calendarSelectedDay.value).padStart(2, '0');
+      const dateStr = `${y}-${m}-${d}`;
+      const timeStr = `${String(calendarSelectedHour.value).padStart(2, '0')}:${String(calendarSelectedMinute.value).padStart(2, '0')}`;
+      const displayStr = `${timeStr} ${d}/${m}/${y}`;
+
+      if (calendarTarget.value === 'single') {
+        composerForm.value.schedule_date = dateStr;
+        composerForm.value.schedule_time = timeStr;
+        composerForm.value.publish_mode = 'schedule';
+      } else if (calendarTargetRow.value) {
+        calendarTargetRow.value.schedule_date = dateStr;
+        calendarTargetRow.value.schedule_time = timeStr;
+        calendarTargetRow.value.schedule_display = displayStr;
+      }
+      showCalendarPicker.value = false;
     }
 
     async function onPageShow(event) {
@@ -4839,6 +5337,60 @@ async function handleDeleteTask(taskId) {
       openComposerCommentModal,
       saveComposerComment,
       handleComposerSubmit,
+
+      // SO9 LAB Composer: Single & Bulk & Calendar Picker
+      composerSubMode,
+      singleComposerSearch,
+      filteredSingleComposerPages,
+      isAllSingleComposerPagesSelected,
+      toggleSelectAllSingleComposerPages,
+      previewPostPage,
+      quickAddEmoji,
+      bulkComposerRows,
+      initBulkComposerRows,
+      addBulkComposerRow,
+      removeBulkComposerRow,
+      handleBulkRowFileSelected,
+      handleBulkComposerSubmit,
+      showBulkToolbarChannelModal,
+      showBulkToolbarScheduleModal,
+      showBulkToolbarCommentModal,
+      bulkToolbarSelectedPageIds,
+      bulkToolbarScheduleForm,
+      bulkToolbarCommentForm,
+      openBulkToolbarChannelModal,
+      applyBulkToolbarChannels,
+      openBulkToolbarScheduleModal,
+      applyBulkToolbarSchedule,
+      openBulkToolbarCommentModal,
+      applyBulkToolbarComment,
+      targetBulkRowForChannel,
+      showRowChannelModal,
+      openRowChannelModal,
+      toggleRowChannel,
+      targetBulkRowForComment,
+      showRowCommentModal,
+      rowCommentTempText,
+      rowCommentTempDelay,
+      openRowCommentModal,
+      saveRowComment,
+      showCalendarPicker,
+      calendarTarget,
+      calendarTargetRow,
+      calendarYear,
+      calendarMonth,
+      calendarSelectedDay,
+      calendarSelectedHour,
+      calendarSelectedMinute,
+      calendarMonthDisplay,
+      calendarGridDays,
+      openCalendarPickerForSingle,
+      openCalendarPickerForRow,
+      prevCalendarMonth,
+      nextCalendarMonth,
+      selectCalendarDay,
+      setCalendarPickerNow,
+      confirmCalendarPicker,
 
       // Helpers & Compatibility Aliases
       getPageName,
