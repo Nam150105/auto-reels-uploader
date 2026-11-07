@@ -3084,7 +3084,6 @@
       selectableTasksCount,
       singleScheduleErrors,
       clearSingleScheduleErrors,
-      autoFillBulkSchedules,
       handlePublishSingleTaskNow,
       selectAllFilteredTasks,
       openBulkPublishConfirmModal,
@@ -3253,16 +3252,38 @@
 
     app.config.errorHandler = function (err, _instance, info) {
       console.error("[Vue Render/Runtime Guard]", info, err);
+      const appRoot = document.getElementById('app');
+      if (appRoot) appRoot.removeAttribute('v-cloak');
     };
 
-    app.mount('#app');
-    clearTimeout(timeoutHintTimer);
+    try {
+      app.mount('#app');
+      clearTimeout(timeoutHintTimer);
 
-    // Ẩn màn hình loading fallback ngay khi ứng dụng mount xong
-    const loader = document.getElementById('app-loading-screen');
-    if (loader) {
-      loader.style.opacity = '0';
-      setTimeout(() => loader.remove(), 180);
+      const appRoot = document.getElementById('app');
+      if (appRoot) appRoot.removeAttribute('v-cloak');
+
+      // Ẩn màn hình loading fallback ngay khi ứng dụng mount xong
+      const loader = document.getElementById('app-loading-screen');
+      if (loader) {
+        loader.style.opacity = '0';
+        setTimeout(() => loader.remove(), 180);
+      }
+    } catch (mountErr) {
+      console.error("[Vue Mount Fatal Error]", mountErr);
+      const appRoot = document.getElementById('app');
+      if (appRoot) appRoot.removeAttribute('v-cloak');
+      const hint = document.getElementById('app-timeout-hint');
+      if (hint) {
+        hint.classList.remove('hidden');
+        hint.innerHTML = `
+          <div class="p-3 bg-rose-950/80 border border-rose-800 rounded-xl text-rose-200 text-xs">
+            <p class="font-bold mb-1">Khởi tạo ứng dụng gặp lỗi:</p>
+            <p class="font-mono text-[11px] text-rose-300 break-all">${mountErr && mountErr.message ? mountErr.message : mountErr}</p>
+            <button onclick="window.location.reload()" class="mt-3 px-3 py-1 bg-rose-700 hover:bg-rose-600 text-white rounded font-bold transition">Tải Lại Trang</button>
+          </div>
+        `;
+      }
     }
   }
 
