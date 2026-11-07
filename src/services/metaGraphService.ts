@@ -25,6 +25,7 @@ export { getMetaConfig, REQUIRED_SCOPES };
 import { openVideoFromStorage, validateVideoMetadata } from "./r2MediaService.ts";
 import { sanitizeSensitiveText } from "../utils/sanitize.ts";
 import { parseVnScheduleToUtc } from "../utils/timezone.ts";
+import { encryptToken } from "../utils/crypto.ts";
 
 // ==========================================
 // 1. SYNC FANPAGES (/me/accounts PAGINATION)
@@ -1288,26 +1289,26 @@ export async function postReelCommentViaGraphApi(
   }
 
   // Xây dựng danh sách target ID theo thứ tự ưu tiên:
-  // 1. Nếu rawPostId có dạng chuẩn {PAGE_ID}_{POST_ID} hoặc có prefix gạch dưới
-  // 2. Nếu rawPostId là số thuần không có gạch dưới, ghép {PAGE_ID}_{rawPostId}
-  // 3. Video ID trực tiếp (vì video_id trong Reels là node Video, nhận comment trực tiếp qua /{video_id}/comments)
+  // 1. rawVideoId: Trong Facebook Reels, Video ID là node Video chính thức nhận comment trực tiếp qua /{video_id}/comments
+  // 2. Nếu rawPostId có dạng chuẩn {PAGE_ID}_{POST_ID}
+  // 3. Nếu rawPostId là số thuần khác pageId và khác videoId, ghép {PAGE_ID}_{rawPostId}
   // 4. Ghép {PAGE_ID}_{VIDEO_ID}
   // 5. rawPostId đơn lẻ cuối cùng
   const candidateIds: string[] = [];
 
-  if (rawPostId && rawPostId.includes("_")) {
+  if (rawVideoId && !candidateIds.includes(rawVideoId)) {
+    candidateIds.push(rawVideoId);
+  }
+
+  if (rawPostId && rawPostId.includes("_") && !candidateIds.includes(rawPostId)) {
     candidateIds.push(rawPostId);
   }
 
-  if (rawPostId && !rawPostId.includes("_") && rawPostId !== pageId && pageId) {
+  if (rawPostId && !rawPostId.includes("_") && rawPostId !== pageId && rawPostId !== rawVideoId && pageId) {
     const prefixed = `${pageId}_${rawPostId}`;
     if (!candidateIds.includes(prefixed)) {
       candidateIds.push(prefixed);
     }
-  }
-
-  if (rawVideoId && !candidateIds.includes(rawVideoId)) {
-    candidateIds.push(rawVideoId);
   }
 
   if (pageId && rawVideoId) {
@@ -1330,140 +1331,196 @@ export async function postReelCommentViaGraphApi(
     };
   }
 
-  let lastErrResult: PostReelCommentResult | null = null;
+  let effectiveToken = options.pageAccessToken;
 
-  for (const targetId of candidateIds) {
-    // 1. CHỐNG ĐĂNG TRÙNG (IDEMPOTENCY CHECK TRÊN FACEBOOK)
+  const attemptPosting = async (token: string): Promise<PostReelCommentResult> => {
+    let lastError: PostReelCommentResult | null = null;
+
+    for (const targetId of candidateIds) {
+      // 1. CHỐNG ĐĂNG TRÙNG (IDEMPOTENCY CHECK TRÊN FACEBOOK)
+      try {
+        const chkResp = await fetch(
+          `${cfg.graphBase}/${targetId}/comments?fields=id,message,created_time&limit=10&access_token=${encodeURIComponent(token)}`
+        );
+        if (chkResp.ok) {
+          const chkData = (await chkResp.json()) as { data?: Array<{ id: string; message: string }> };
+          if (Array.isArray(chkData.data)) {
+            const existing = chkData.data.find((c) => (c.message || "").trim() === cleanComment);
+            if (existing && existing.id) {
+              return {
+                success: true,
+                comment_id: String(existing.id),
+                post_id: targetId,
+                comment_status: "success",
+                message: "Đã xác nhận bình luận đã tồn tại trên bài viết Facebook.",
+                already_posted: true
+              };
+            }
+          }
+        }
+      } catch {}
+
+      // 2. GỌI API ĐĂNG COMMENT: POST /{targetId}/comments
+      // Đảm bảo tương thích 100% với Meta Graph API:
+      // - Truyền access_token trong query parameter
+      // - Truyền Authorization: Bearer trong headers
+      // - Truyền body dạng application/x-www-form-urlencoded
+      let postResp: Response;
+      const formBody = new URLSearchParams();
+      formBody.set("message", cleanComment);
+      formBody.set("access_token", token);
+
+      try {
+        postResp = await fetch(
+          `${cfg.graphBase}/${targetId}/comments?access_token=${encodeURIComponent(token)}`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+              Authorization: `Bearer ${token}`
+            },
+            body: formBody.toString()
+          }
+        );
+      } catch (netErr) {
+        // Timeout hoặc lỗi mạng: Kiểm tra xem Facebook đã nhận comment chưa
+        try {
+          const verifyResp = await fetch(
+            `${cfg.graphBase}/${targetId}/comments?fields=id,message&limit=5&access_token=${encodeURIComponent(token)}`
+          );
+          if (verifyResp.ok) {
+            const vData = (await verifyResp.json()) as { data?: Array<{ id: string; message: string }> };
+            const found = vData.data?.find((c) => (c.message || "").trim() === cleanComment);
+            if (found && found.id) {
+              return {
+                success: true,
+                comment_id: String(found.id),
+                post_id: targetId,
+                comment_status: "success",
+                message: "Đã xác nhận bình luận xuất hiện trên bài viết Facebook sau timeout."
+              };
+            }
+          }
+        } catch {}
+
+        lastError = {
+          success: false,
+          post_id: targetId,
+          comment_status: "failed",
+          message: sanitizeSensitiveText(`Lỗi kết nối khi gửi bình luận: ${(netErr as Error).message}`)
+        };
+        continue;
+      }
+
+      // 3. XỬ LÝ PHẢN HỒI TỪ FACEBOOK
+      const postData = (await postResp.json().catch(() => ({}))) as Record<string, unknown>;
+      if (postResp.ok && postData.id) {
+        const commentId = String(postData.id);
+
+        // Xác nhận comment tồn tại trên Facebook
+        try {
+          await fetch(
+            `${cfg.graphBase}/${commentId}?fields=id&access_token=${encodeURIComponent(token)}`
+          );
+        } catch {}
+
+        return {
+          success: true,
+          comment_id: commentId,
+          post_id: targetId,
+          comment_status: "success",
+          message: "Đã đăng bình luận tự động thành công."
+        };
+      } else {
+        const err = (postData.error || {}) as Record<string, unknown>;
+        const code = Number(err.code || postResp.status);
+        const subcode = Number(err.error_subcode || 0);
+        const rawErrMsg = String(err.message || postResp.statusText || "");
+
+        let friendlyErrMsg = "";
+        if (code === 200 || code === 10 || rawErrMsg.toLowerCase().includes("permission")) {
+          friendlyErrMsg = `Lỗi Facebook (#${code}): ${rawErrMsg}. Vui lòng đảm bảo token có quyền pages_manage_engagement và tài khoản có quyền MODERATE trên Fanpage.`;
+        } else if (code === 190) {
+          friendlyErrMsg = `Phiên Facebook hết hạn (OAuthException 190: ${rawErrMsg}). Vui lòng kết nối lại tài khoản Facebook.`;
+        } else {
+          friendlyErrMsg = `Lỗi đăng bình luận: ${rawErrMsg} (Mã lỗi: ${code}${subcode ? '.' + subcode : ''})`;
+        }
+
+        lastError = {
+          success: false,
+          post_id: targetId,
+          comment_status: "failed",
+          error_code: code,
+          error_subcode: subcode || null,
+          message: sanitizeSensitiveText(friendlyErrMsg)
+        };
+
+        // Nếu mã lỗi là 190 (token user/page hoàn toàn không hợp lệ trên mọi endpoint), dừng ngay
+        if (code === 190) {
+          return lastError;
+        }
+
+        // Với lỗi 200 (Permissions error do sai đối tượng / composite ID không hợp lệ / không có quyền trên node đó),
+        // tiếp tục thử các candidate IDs khác (ví dụ: Video ID)!
+        continue;
+      }
+    }
+
+    return lastError || {
+      success: false,
+      post_id: candidateIds[0] || "",
+      comment_status: "failed",
+      message: "Không thể đăng bình luận lên bài viết Reels."
+    };
+  };
+
+  // Lần thử 1: Chạy với Page Access Token hiện tại
+  let result = await attemptPosting(effectiveToken);
+
+  // Nếu thất bại do quyền hoặc token (code 200, 10, hoặc 190), thử tự động làm mới Page Access Token
+  // trực tiếp từ Facebook thông qua User Access Token của Admin đã liên kết!
+  const isAuthOrPermErr =
+    !result.success &&
+    (result.error_code === 200 ||
+      result.error_code === 10 ||
+      result.error_code === 190 ||
+      (result.message || "").includes("pages_manage_engagement"));
+
+  if (isAuthOrPermErr && options.ownerUserId && pageId) {
     try {
-      const chkResp = await fetch(
-        `${cfg.graphBase}/${targetId}/comments?fields=id,message,created_time&limit=10&access_token=${encodeURIComponent(options.pageAccessToken)}`
-      );
-      if (chkResp.ok) {
-        const chkData = (await chkResp.json()) as { data?: Array<{ id: string; message: string }> };
-        if (Array.isArray(chkData.data)) {
-          const existing = chkData.data.find((c) => (c.message || "").trim() === cleanComment);
-          if (existing && existing.id) {
-            return {
-              success: true,
-              comment_id: String(existing.id),
-              post_id: targetId,
-              comment_status: "success",
-              message: "Đã xác nhận bình luận đã tồn tại trên bài viết Facebook.",
-              already_posted: true
-            };
+      const userAccounts = await getFacebookAccounts(db, cfg.encryptionKey, true, options.ownerUserId);
+      const activeAccount = userAccounts.find((a) => a.access_token);
+      if (activeAccount && activeAccount.access_token) {
+        const pageTokenResp = await fetch(
+          `${cfg.graphBase}/${pageId}?fields=access_token,name&access_token=${encodeURIComponent(activeAccount.access_token)}`
+        );
+        if (pageTokenResp.ok) {
+          const pageTokenData = (await pageTokenResp.json()) as { access_token?: string };
+          const freshPageToken = String(pageTokenData.access_token || "").trim();
+          if (freshPageToken && freshPageToken !== effectiveToken) {
+            effectiveToken = freshPageToken;
+            const now = new Date().toISOString();
+            const encToken = await encryptToken(freshPageToken, cfg.encryptionKey, "v2");
+            await db.batch([
+              db
+                .prepare(
+                  "UPDATE facebook_pages SET page_access_token = ?, token_status = 'valid', status = 'active', updated_at = ? WHERE facebook_page_id = ? AND owner_user_id = ?"
+                )
+                .bind(encToken, now, pageId, options.ownerUserId),
+              db
+                .prepare(
+                  "UPDATE facebook_account_pages SET page_access_token = ?, token_status = 'valid', last_synced_at = ? WHERE facebook_page_id = ? AND owner_user_id = ?"
+                )
+                .bind(encToken, now, pageId, options.ownerUserId)
+            ]);
+
+            // Thử lại lần 2 với Page Access Token mới vừa làm mới từ Facebook!
+            result = await attemptPosting(effectiveToken);
           }
         }
       }
     } catch {}
-
-    // 2. GỌI API ĐĂNG COMMENT: POST /{targetId}/comments
-    let postResp: Response;
-    try {
-      postResp = await fetch(`${cfg.graphBase}/${targetId}/comments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: cleanComment,
-          access_token: options.pageAccessToken
-        })
-      });
-    } catch (netErr) {
-      // Timeout hoặc lỗi mạng: Kiểm tra xem Facebook đã nhận comment chưa
-      try {
-        const verifyResp = await fetch(
-          `${cfg.graphBase}/${targetId}/comments?fields=id,message&limit=5&access_token=${encodeURIComponent(options.pageAccessToken)}`
-        );
-        if (verifyResp.ok) {
-          const vData = (await verifyResp.json()) as { data?: Array<{ id: string; message: string }> };
-          const found = vData.data?.find((c) => (c.message || "").trim() === cleanComment);
-          if (found && found.id) {
-            return {
-              success: true,
-              comment_id: String(found.id),
-              post_id: targetId,
-              comment_status: "success",
-              message: "Đã xác nhận bình luận xuất hiện trên bài viết Facebook sau timeout."
-            };
-          }
-        }
-      } catch {}
-
-      return {
-        success: false,
-        post_id: targetId,
-        comment_status: "failed",
-        message: sanitizeSensitiveText(`Lỗi kết nối khi gửi bình luận: ${(netErr as Error).message}`)
-      };
-    }
-
-    // 3. XỬ LÝ PHẢN HỒI TỪ FACEBOOK
-    const postData = (await postResp.json()) as Record<string, unknown>;
-    if (postResp.ok && postData.id) {
-      const commentId = String(postData.id);
-
-      // Bước 6: Kiểm tra xác nhận comment thực tế xuất hiện
-      try {
-        await fetch(
-          `${cfg.graphBase}/${commentId}?fields=id&access_token=${encodeURIComponent(options.pageAccessToken)}`
-        );
-      } catch {}
-
-      return {
-        success: true,
-        comment_id: commentId,
-        post_id: targetId,
-        comment_status: "success",
-        message: "Đã đăng bình luận tự động thành công."
-      };
-    } else {
-      const err = (postData.error || {}) as Record<string, unknown>;
-      const code = Number(err.code || postResp.status);
-      const subcode = Number(err.error_subcode || 0);
-      const rawErrMsg = String(err.message || postResp.statusText || "");
-
-      // Lỗi do endpoint/ID không hợp lệ (ví dụ: singular statuses deprecated #12, object not found #100, #803)
-      const isBadTargetError =
-        code === 12 ||
-        code === 100 ||
-        code === 803 ||
-        rawErrMsg.toLowerCase().includes("statuses api is deprecated") ||
-        rawErrMsg.toLowerCase().includes("does not exist") ||
-        rawErrMsg.toLowerCase().includes("unsupported post request");
-
-      let friendlyErrMsg = "";
-      if (code === 200 || code === 10 || rawErrMsg.toLowerCase().includes("permission")) {
-        friendlyErrMsg = "Fanpage thiếu quyền pages_manage_engagement hoặc tài khoản không có quyền MODERATE trên Page.";
-      } else if (code === 190) {
-        friendlyErrMsg = "Phiên Facebook hết hạn (OAuthException 190), vui lòng kết nối lại tài khoản.";
-      } else {
-        friendlyErrMsg = `Lỗi đăng bình luận: ${rawErrMsg}`;
-      }
-
-      lastErrResult = {
-        success: false,
-        post_id: targetId,
-        comment_status: "failed",
-        error_code: code,
-        error_subcode: subcode || null,
-        message: sanitizeSensitiveText(friendlyErrMsg)
-      };
-
-      // Nếu lỗi là do format ID không hợp lệ và còn candidate khác, thử tiếp candidate tiếp theo
-      if (isBadTargetError && candidateIds.indexOf(targetId) < candidateIds.length - 1) {
-        continue;
-      }
-
-      // Nếu lỗi quyền (190, 200, permission), dừng lại ngay
-      if (code === 190 || code === 200 || code === 10 || rawErrMsg.toLowerCase().includes("permission")) {
-        return lastErrResult;
-      }
-    }
   }
 
-  return lastErrResult || {
-    success: false,
-    post_id: rawPostId || rawVideoId,
-    comment_status: "failed",
-    message: "Không thể đăng bình luận lên bài viết Reels."
-  };
+  return result;
 }

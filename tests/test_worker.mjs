@@ -741,7 +741,6 @@ async function runAll30Tests() {
         return new Response(JSON.stringify({ data: commentsCreatedOnFacebook }), { status: 200 });
       }
       if (simulateCommentPermissionError) {
-        simulateCommentPermissionError = false;
         return new Response(
           JSON.stringify({
             error: {
@@ -753,20 +752,31 @@ async function runAll30Tests() {
         );
       }
       if (simulateCommentNetworkError) {
-        simulateCommentNetworkError = false;
         throw new Error("Failed to fetch: Connection reset by peer");
       }
       if (simulateCommentTimeout) {
         simulateCommentTimeout = false;
-        let cBody = {};
-        try { cBody = JSON.parse(init?.body || "{}"); } catch {}
-        commentsCreatedOnFacebook.push({ id: "cmt_timeout_recovered", message: cBody.message || "" });
+        let cMsg = "";
+        try {
+          const parsed = JSON.parse(init?.body || "{}");
+          cMsg = parsed.message || "";
+        } catch {
+          const p = new URLSearchParams(init?.body || "");
+          cMsg = p.get("message") || "";
+        }
+        commentsCreatedOnFacebook.push({ id: "cmt_timeout_recovered", message: cMsg });
         throw new Error("Gateway timeout 504 on comment publish");
       }
-      let cBody = {};
-      try { cBody = JSON.parse(init?.body || "{}"); } catch {}
+      let cMsg = "";
+      try {
+        const parsed = JSON.parse(init?.body || "{}");
+        cMsg = parsed.message || "";
+      } catch {
+        const p = new URLSearchParams(init?.body || "");
+        cMsg = p.get("message") || "";
+      }
       const cId = `cmt_${Math.random().toString(36).substring(2, 9)}`;
-      commentsCreatedOnFacebook.push({ id: cId, message: cBody.message || "" });
+      commentsCreatedOnFacebook.push({ id: cId, message: cMsg });
       return new Response(JSON.stringify({ id: cId }), { status: 200 });
     }
 
@@ -1611,6 +1621,7 @@ async function runAll30Tests() {
   assert.equal(finishedPerm.status, "success", "Reels vẫn phải thành công khi comment thiếu quyền");
   assert.equal(finishedPerm.comment_status, "failed");
   assert.ok(finishedPerm.comment_log.includes("pages_manage_engagement") || finishedPerm.comment_log.includes("MODERATE"));
+  simulateCommentPermissionError = false;
   console.log("    ✓ [Scenario 4] Reels thành công, comment thiếu quyền: Reels giữ success, comment_status = failed");
 
   // [Kịch bản 5] Reels thành công, comment lỗi mạng
@@ -1638,6 +1649,7 @@ async function runAll30Tests() {
   const finishedNet = taskNetDb.find(t => t.id === taskNet.id);
   assert.equal(finishedNet.status, "success", "Reels vẫn phải thành công khi comment lỗi mạng");
   assert.equal(finishedNet.comment_status, "failed");
+  simulateCommentNetworkError = false;
   console.log("    ✓ [Scenario 5] Reels thành công, comment lỗi mạng: Reels giữ success, comment_status = failed");
 
   // [Kịch bản 6] Comment timeout: Khôi phục và phát hiện comment đã tồn tại trên Facebook
