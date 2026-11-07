@@ -1289,16 +1289,12 @@ export async function postReelCommentViaGraphApi(
   }
 
   // Xây dựng danh sách target ID theo thứ tự ưu tiên:
-  // 1. rawVideoId: Trong Facebook Reels, Video ID là node Video chính thức nhận comment trực tiếp qua /{video_id}/comments
-  // 2. Nếu rawPostId có dạng chuẩn {PAGE_ID}_{POST_ID}
-  // 3. Nếu rawPostId là số thuần khác pageId và khác videoId, ghép {PAGE_ID}_{rawPostId}
+  // 1. Nếu rawPostId có dạng chuẩn {PAGE_ID}_{POST_ID}
+  // 2. Ghép {PAGE_ID}_{POST_ID} nếu rawPostId là số thuần khác pageId và khác videoId (POST /{POST_ID}/comments)
+  // 3. rawVideoId: Node Video của bài Reels nhận comment trực tiếp qua /{video_id}/comments
   // 4. Ghép {PAGE_ID}_{VIDEO_ID}
   // 5. rawPostId đơn lẻ cuối cùng
   const candidateIds: string[] = [];
-
-  if (rawVideoId && !candidateIds.includes(rawVideoId)) {
-    candidateIds.push(rawVideoId);
-  }
 
   if (rawPostId && rawPostId.includes("_") && !candidateIds.includes(rawPostId)) {
     candidateIds.push(rawPostId);
@@ -1309,6 +1305,10 @@ export async function postReelCommentViaGraphApi(
     if (!candidateIds.includes(prefixed)) {
       candidateIds.push(prefixed);
     }
+  }
+
+  if (rawVideoId && !candidateIds.includes(rawVideoId)) {
+    candidateIds.push(rawVideoId);
   }
 
   if (pageId && rawVideoId) {
@@ -1332,6 +1332,77 @@ export async function postReelCommentViaGraphApi(
   }
 
   let effectiveToken = options.pageAccessToken;
+  let tokenPageId = "";
+  let tokenPageName = "";
+  let tokenDebugFailed = false;
+
+  // 1. Xác minh Page Access Token thực tế với Meta (/me) để phát hiện lệch Page ID hoặc token sai
+  try {
+    const meResp = await fetch(
+      `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(effectiveToken)}`
+    );
+    if (meResp.ok) {
+      const meData = (await meResp.json()) as { id?: string; name?: string };
+      tokenPageId = String(meData.id || "").trim();
+      tokenPageName = String(meData.name || "").trim();
+    } else {
+      tokenDebugFailed = true;
+    }
+  } catch {
+    tokenDebugFailed = true;
+  }
+
+  // 2. Nếu Token không khớp với Page ID của tác vụ hoặc token không hợp lệ:
+  // Tự động truy vấn Page Access Token chuẩn từ Facebook thông qua User Access Token của Admin
+  const isTokenMismatched = tokenPageId && pageId && tokenPageId !== pageId;
+  if ((tokenDebugFailed || isTokenMismatched || !tokenPageId) && options.ownerUserId && pageId) {
+    try {
+      const userAccounts = await getFacebookAccounts(db, cfg.encryptionKey, true, options.ownerUserId);
+      for (const acc of userAccounts) {
+        if (!acc.access_token) continue;
+        const pageResp = await fetch(
+          `${cfg.graphBase}/${pageId}?fields=access_token,name,tasks&access_token=${encodeURIComponent(acc.access_token)}`
+        );
+        if (pageResp.ok) {
+          const pageData = (await pageResp.json()) as { access_token?: string; name?: string };
+          if (pageData.access_token) {
+            effectiveToken = String(pageData.access_token).trim();
+            tokenPageId = pageId;
+            tokenPageName = String(pageData.name || tokenPageName);
+            tokenDebugFailed = false;
+
+            // Cập nhật ngay token chuẩn đã xác minh vào D1 để các lần gọi sau không bị lệch
+            const encToken = await encryptToken(effectiveToken, cfg.encryptionKey, "v2");
+            const now = new Date().toISOString();
+            await db.batch([
+              db
+                .prepare(
+                  "UPDATE facebook_pages SET page_access_token = ?, token_status = 'valid', status = 'active', updated_at = ? WHERE (facebook_page_id = ? OR id = ?) AND owner_user_id = ?"
+                )
+                .bind(encToken, now, pageId, pageId, options.ownerUserId),
+              db
+                .prepare(
+                  "UPDATE facebook_account_pages SET page_access_token = ?, token_status = 'valid', last_synced_at = ? WHERE facebook_page_id = ? AND owner_user_id = ?"
+                )
+                .bind(encToken, now, pageId, options.ownerUserId)
+            ]);
+            break;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Nếu sau khi thử khôi phục mà token vẫn lệch Page ID:
+  if (tokenPageId && pageId && tokenPageId !== pageId) {
+    return {
+      success: false,
+      post_id: rawPostId || rawVideoId,
+      comment_status: "failed",
+      error_code: 400,
+      message: `Page ID không khớp: Token thuộc Fanpage "${tokenPageName}" (${tokenPageId}), không khớp với Fanpage của tác vụ (${pageId}).`
+    };
+  }
 
   const attemptPosting = async (token: string): Promise<PostReelCommentResult> => {
     let lastError: PostReelCommentResult | null = null;
@@ -1436,14 +1507,31 @@ export async function postReelCommentViaGraphApi(
         const code = Number(err.code || postResp.status);
         const subcode = Number(err.error_subcode || 0);
         const rawErrMsg = String(err.message || postResp.statusText || "");
+        const lowerMsg = rawErrMsg.toLowerCase();
 
         let friendlyErrMsg = "";
-        if (code === 200 || code === 10 || rawErrMsg.toLowerCase().includes("permission")) {
-          friendlyErrMsg = `Lỗi Facebook (#${code}): ${rawErrMsg}. Vui lòng đảm bảo token có quyền pages_manage_engagement và tài khoản có quyền MODERATE trên Fanpage.`;
-        } else if (code === 190) {
-          friendlyErrMsg = `Phiên Facebook hết hạn (OAuthException 190: ${rawErrMsg}). Vui lòng kết nối lại tài khoản Facebook.`;
-        } else {
-          friendlyErrMsg = `Lỗi đăng bình luận: ${rawErrMsg} (Mã lỗi: ${code}${subcode ? '.' + subcode : ''})`;
+        // 1. Phân biệt lỗi Token hết hạn / không hợp lệ
+        if (code === 190 || code === 102 || lowerMsg.includes("session") || lowerMsg.includes("expired")) {
+          friendlyErrMsg = `Token Facebook đã hết hạn hoặc không hợp lệ (OAuthException ${code}: ${rawErrMsg}). Vui lòng kết nối lại tài khoản Facebook.`;
+        }
+        // 2. Phân biệt lỗi Post ID sai / bài viết không tồn tại / singular statuses deprecated
+        else if (
+          code === 12 ||
+          code === 100 ||
+          code === 803 ||
+          lowerMsg.includes("statuses api is deprecated") ||
+          lowerMsg.includes("does not exist") ||
+          lowerMsg.includes("unsupported post request")
+        ) {
+          friendlyErrMsg = `ID bài viết không tồn tại hoặc không hỗ trợ bình luận (Mã lỗi ${code}: ${rawErrMsg}).`;
+        }
+        // 3. Phân biệt lỗi thiếu quyền (permission / MODERATE)
+        else if (code === 200 || code === 10 || lowerMsg.includes("permission")) {
+          friendlyErrMsg = `Facebook từ chối cấp quyền bình luận (#${code}): ${rawErrMsg}. Vui lòng kiểm tra quyền pages_manage_engagement của token và quyền MODERATE trên Fanpage.`;
+        }
+        // 4. Lỗi khác
+        else {
+          friendlyErrMsg = `Lỗi đăng bình luận từ Facebook: ${rawErrMsg} (Mã lỗi: ${code}${subcode ? '.' + subcode : ''})`;
         }
 
         lastError = {

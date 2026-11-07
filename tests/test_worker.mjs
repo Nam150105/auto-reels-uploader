@@ -1773,7 +1773,33 @@ async function runAll30Tests() {
   assert.equal(finishedBare.comment_status, "success");
   assert.equal(finishedBare.comment_id, retryBareData.comment_id);
   console.log("    ✓ [Scenario 10] Tự động vượt qua lỗi (#12) singular statuses API deprecated: Fallback thành công 100%");
-  console.log("  ✓ [Test 31] Bổ sung API tự động Comment sau khi đăng Reels (Pass toàn bộ 10 kịch bản)");
+
+  // [Kịch bản 11] Tự động sửa lỗi token cũ và tự động đồng bộ Page Token mới nhất từ Facebook
+  const staleTokenTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task tái hiện stale token",
+      comment_text: "test cmt stale token recovery"
+    })
+  });
+  const staleTask = (await staleTokenTaskResp.json()).task;
+  await d1.prepare("UPDATE tasks SET status = 'success', video_id = '1439027771006176', post_id = '1418723557985686_122107908045520254', comment_status = 'failed', comment_log = 'Lỗi token cũ' WHERE id = ?")
+    .bind(staleTask.id).run();
+
+  const retryStaleResp = await callWorker(`/api/tasks/${staleTask.id}/retry-comment`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(retryStaleResp.status, 200);
+  const retryStaleData = await retryStaleResp.json();
+  assert.equal(retryStaleData.success, true);
+  assert.equal(retryStaleData.comment_status, "success");
+  assert.ok(retryStaleData.comment_id);
+  console.log("    ✓ [Scenario 11] Tự động xác thực và làm mới Page Access Token từ Admin: Thành công 100%");
+  console.log("  ✓ [Test 31] Bổ sung API tự động Comment sau khi đăng Reels (Pass toàn bộ 11 kịch bản)");
 
   // --------------------------------------------------------------------------
   // [TEST 32] Chọn task để xóa (Bulk Delete Tasks) & Dọn dẹp Orphan Media

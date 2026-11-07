@@ -228,7 +228,7 @@ export async function consumeSingleTaskMessage(
       if (page && page.page_access_token) {
         await updateTaskCommentState(db, existingTask.id, "processing", "Đang xử lý đăng bình luận...");
         const cmtRes = await postReelCommentViaGraphApi(db, env, {
-          facebookPageId: existingTask.facebook_page_id!,
+          facebookPageId: page.facebook_page_id || existingTask.facebook_page_id!,
           pageAccessToken: page.page_access_token,
           postId: existingTask.post_id || existingTask.video_id,
           videoId: existingTask.video_id,
@@ -420,7 +420,7 @@ export async function consumeSingleTaskMessage(
       );
 
       const cmtRes = await postReelCommentViaGraphApi(db, env, {
-        facebookPageId: claimedTask.facebook_page_id,
+        facebookPageId: page.facebook_page_id || claimedTask.facebook_page_id,
         pageAccessToken: page.page_access_token,
         postId: rawPostId,
         videoId: pubRes.video_id || claimedTask.video_id,

@@ -1574,6 +1574,7 @@ export async function getFacebookPages(
     const mergedTasksSet = new Set<string>(safeJsonParseArray(r.tasks_json as string));
     let anyCanPost = Boolean(r.can_post);
     let bestEncryptedToken = String(r.page_access_token || "");
+    let tokenFoundFromLink = false;
 
     for (const lnk of linkRows) {
       const lTasks = safeJsonParseArray(lnk.tasks_json as string);
@@ -1581,8 +1582,11 @@ export async function getFacebookPages(
       const lCanPost = Boolean(lnk.can_post);
       if (lCanPost && lnk.account_status === "connected") {
         anyCanPost = true;
-        if (lnk.page_access_token) {
+        // linkRows được sắp xếp ORDER BY fap.can_post DESC, fap.last_synced_at DESC
+        // nên hàng đầu tiên thỏa mãn là token mới nhất và hợp lệ nhất, không để hàng cũ hơn ghi đè!
+        if (lnk.page_access_token && !tokenFoundFromLink) {
           bestEncryptedToken = String(lnk.page_access_token);
+          tokenFoundFromLink = true;
         }
       }
       adminAccounts.push({

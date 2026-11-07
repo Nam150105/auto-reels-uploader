@@ -970,7 +970,7 @@ export async function handleWorkerRequest(
       );
 
       const cmtRes = await postReelCommentViaGraphApi(db, env, {
-        facebookPageId: task.facebook_page_id,
+        facebookPageId: page.facebook_page_id || task.facebook_page_id,
         pageAccessToken: page.page_access_token,
         postId: task.post_id,
         videoId: task.video_id,
