@@ -13,7 +13,9 @@ import type {
   FacebookPageRecord,
   AdminAccountLink,
   MediaFileRecord,
-  TaskRecord
+  TaskRecord,
+  TaskAuditLogRecord,
+  MetaApiTelemetryRecord
 } from "./types.ts";
 import {
   hashPassword,
@@ -23,7 +25,7 @@ import {
   detectTokenVersion,
   randomHex
 } from "./utils/crypto.ts";
-import { parseVnScheduleToUtc, nowUtcSeconds } from "./utils/timezone.ts";
+import { parseVnScheduleToUtc, formatUtcToVn, nowUtcSeconds } from "./utils/timezone.ts";
 import { sanitizeSensitiveText } from "./utils/sanitize.ts";
 
 let schemaInitialized = false;
@@ -41,6 +43,34 @@ export class TaskLockError extends Error {
   }
 }
 
+export class ScheduleValidationError extends Error {
+  public readonly code: string;
+  public readonly httpStatus: number;
+  public readonly fieldErrors: { schedule_date?: string; schedule_time?: string };
+  public readonly isPast: boolean;
+  public readonly missingDate: boolean;
+  public readonly missingTime: boolean;
+
+  constructor(params: {
+    code: string;
+    message: string;
+    httpStatus?: number;
+    fieldErrors?: { schedule_date?: string; schedule_time?: string };
+    isPast?: boolean;
+    missingDate?: boolean;
+    missingTime?: boolean;
+  }) {
+    super(params.message);
+    this.name = "ScheduleValidationError";
+    this.code = params.code;
+    this.httpStatus = params.httpStatus ?? 400;
+    this.fieldErrors = params.fieldErrors || {};
+    this.isPast = Boolean(params.isPast);
+    this.missingDate = Boolean(params.missingDate);
+    this.missingTime = Boolean(params.missingTime);
+  }
+}
+
 export function isTaskPublishedAndLocked(task: {
   status?: string | null;
   raw_status?: string | null;
@@ -54,13 +84,13 @@ export function isTaskPublishedAndLocked(task: {
   const hasPublishedIds =
     Boolean(task.video_id && String(task.video_id).trim()) &&
     Boolean(task.post_id && String(task.post_id).trim());
-  return (
-    st === "success" ||
-    st === "done" ||
-    pubSt === "success" ||
-    Boolean(task.is_locked) ||
-    hasPublishedIds
-  );
+  if (st === "success" || st === "done" || pubSt === "success" || hasPublishedIds) {
+    return true;
+  }
+  if (st === "failed" || pubSt === "failed") {
+    return false;
+  }
+  return Boolean(task.is_locked);
 }
 
 export function isTaskCurrentlyRunning(task: {
@@ -151,6 +181,24 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
     if (!existing.has("analytics_error")) {
       try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_error TEXT DEFAULT ''"); } catch {}
     }
+    if (!existing.has("original_scheduled_at")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN original_scheduled_at INTEGER"); } catch {}
+    }
+    if (!existing.has("original_schedule_date")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN original_schedule_date TEXT DEFAULT ''"); } catch {}
+    }
+    if (!existing.has("original_schedule_time")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN original_schedule_time TEXT DEFAULT ''"); } catch {}
+    }
+    if (!existing.has("manual_publish_requested_at")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN manual_publish_requested_at TEXT"); } catch {}
+    }
+    if (!existing.has("manual_publish_by_user_id")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN manual_publish_by_user_id TEXT"); } catch {}
+    }
+    if (!existing.has("trigger_source")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN trigger_source TEXT DEFAULT 'scheduled'"); } catch {}
+    }
   } catch {
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_id TEXT DEFAULT ''"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_status TEXT DEFAULT 'none'"); } catch {}
@@ -165,7 +213,21 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
     try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_status TEXT DEFAULT 'not_synced'"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_last_synced_at TEXT"); } catch {}
     try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_error TEXT DEFAULT ''"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN original_scheduled_at INTEGER"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN original_schedule_date TEXT DEFAULT ''"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN original_schedule_time TEXT DEFAULT ''"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN manual_publish_requested_at TEXT"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN manual_publish_by_user_id TEXT"); } catch {}
+    try { await db.exec("ALTER TABLE tasks ADD COLUMN trigger_source TEXT DEFAULT 'scheduled'"); } catch {}
   }
+
+  try {
+    await db
+      .prepare(
+        "UPDATE tasks SET is_locked = 0 WHERE status = 'failed' AND (post_id IS NULL OR post_id = '')"
+      )
+      .run();
+  } catch {}
 
   try {
     const accInfo = await db.prepare("PRAGMA table_info(facebook_accounts)").all<{ name: string }>();
@@ -245,7 +307,44 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
       )`),
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_reel_snapshots_owner_page ON reel_insight_snapshots(owner_user_id, facebook_page_id, sync_date)`),
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_reel_snapshots_task ON reel_insight_snapshots(task_id, sync_date)`),
-      db.prepare(`CREATE INDEX IF NOT EXISTS idx_reel_metrics_owner_task ON reel_insight_metric_items(owner_user_id, task_id)`)
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_reel_metrics_owner_task ON reel_insight_metric_items(owner_user_id, task_id)`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS task_audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        owner_user_id TEXT NOT NULL,
+        actor_user_id TEXT,
+        action TEXT NOT NULL,
+        old_scheduled_at INTEGER,
+        new_scheduled_at INTEGER,
+        old_schedule_text TEXT DEFAULT '',
+        new_schedule_text TEXT DEFAULT '',
+        old_status TEXT DEFAULT '',
+        new_status TEXT DEFAULT '',
+        reason TEXT DEFAULT '',
+        metadata_json TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL
+      )`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_task_audit_logs_task ON task_audit_logs(task_id, created_at)`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_task_audit_logs_owner ON task_audit_logs(owner_user_id, created_at)`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS meta_api_telemetry (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bucket_hour TEXT NOT NULL,
+        endpoint_group TEXT NOT NULL,
+        total_requests INTEGER NOT NULL DEFAULT 0,
+        cache_hits INTEGER NOT NULL DEFAULT 0,
+        cache_misses INTEGER NOT NULL DEFAULT 0,
+        error_requests INTEGER NOT NULL DEFAULT 0,
+        rate_limited_requests INTEGER NOT NULL DEFAULT 0,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        max_app_call_pct REAL DEFAULT 0,
+        max_page_call_pct REAL DEFAULT 0,
+        last_status_code INTEGER DEFAULT 200,
+        last_error_code INTEGER,
+        updated_at TEXT NOT NULL,
+        UNIQUE(bucket_hour, endpoint_group)
+      )`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_owner_status_sched ON tasks(owner_user_id, status, scheduled_at)`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_owner_page_status ON tasks(owner_user_id, facebook_page_id, status)`)
     ]);
   } catch {}
 
@@ -2326,13 +2425,105 @@ export async function deleteMediaFileRecord(
 // 6. TASKS, QUEUE LEASES & AUDIT LOGS
 // ==========================================
 
-function mapStatusForFrontend(status: string, scheduledAt?: number | null): string {
+export async function recordTaskAuditLog(
+  db: D1Database,
+  params: {
+    taskId: number;
+    ownerUserId: string;
+    actorUserId?: string | null;
+    action: string;
+    oldScheduledAt?: number | null;
+    newScheduledAt?: number | null;
+    oldScheduleText?: string | null;
+    newScheduleText?: string | null;
+    oldStatus?: string | null;
+    newStatus?: string | null;
+    reason?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }
+): Promise<void> {
+  const now = new Date().toISOString();
+  const cleanReason = sanitizeSensitiveText(params.reason || "");
+  const cleanMeta = sanitizeSensitiveText(JSON.stringify(params.metadata || {}));
+  const insertSql = `INSERT INTO task_audit_logs (
+    task_id, owner_user_id, actor_user_id, action,
+    old_scheduled_at, new_scheduled_at, old_schedule_text, new_schedule_text,
+    old_status, new_status, reason, metadata_json, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const bindArgs = [
+    params.taskId,
+    params.ownerUserId,
+    params.actorUserId || params.ownerUserId,
+    params.action,
+    params.oldScheduledAt ?? null,
+    params.newScheduledAt ?? null,
+    params.oldScheduleText || "",
+    params.newScheduleText || "",
+    params.oldStatus || "",
+    params.newStatus || "",
+    cleanReason,
+    cleanMeta,
+    now
+  ];
+  try {
+    await db.prepare(insertSql).bind(...bindArgs).run();
+  } catch {
+    try {
+      await ensureTaskCommentColumns(db);
+      await db.prepare(insertSql).bind(...bindArgs).run();
+    } catch {}
+  }
+}
+
+export async function getTaskAuditLogs(
+  db: D1Database,
+  taskId: number,
+  ownerUserId: string
+): Promise<TaskAuditLogRecord[]> {
+  try {
+    const { results } = await db
+      .prepare(
+        "SELECT * FROM task_audit_logs WHERE task_id = ? AND owner_user_id = ? ORDER BY id DESC LIMIT 100"
+      )
+      .bind(taskId, ownerUserId)
+      .all<TaskAuditLogRecord>();
+    return results || [];
+  } catch {
+    await ensureTaskCommentColumns(db);
+    try {
+      const { results } = await db
+        .prepare(
+          "SELECT * FROM task_audit_logs WHERE task_id = ? AND owner_user_id = ? ORDER BY id DESC LIMIT 100"
+        )
+        .bind(taskId, ownerUserId)
+        .all<TaskAuditLogRecord>();
+      return results || [];
+    } catch {
+      return [];
+    }
+  }
+}
+
+function mapStatusForFrontend(
+  status: string,
+  scheduledAt?: number | null,
+  scheduleDate?: string | null,
+  scheduleTime?: string | null
+): string {
   const now = nowUtcSeconds();
   if (status === "pending") {
-    if (scheduledAt !== null && scheduledAt !== undefined && scheduledAt > now) {
+    const hasSchedule =
+      scheduledAt !== null &&
+      scheduledAt !== undefined &&
+      Boolean(scheduleDate && String(scheduleDate).trim()) &&
+      Boolean(scheduleTime && String(scheduleTime).trim());
+    if (!hasSchedule) {
+      return "needs_schedule"; // Cần bổ sung lịch
+    }
+    if (scheduledAt > now) {
       return "scheduled"; // Đang chờ lịch
     }
-    return "pending"; // Chờ đăng
+    return "pending"; // Chờ đăng (đến giờ)
   }
   if (status === "queued") {
     return "queued"; // Trong hàng đợi
@@ -2362,17 +2553,34 @@ export async function addTask(
     allowPast?: boolean;
     minLeadSeconds?: number;
     referenceNowUtc?: number;
+    allowEmptySchedule?: boolean;
   }
 ): Promise<number> {
   const now = new Date().toISOString();
   const pageId = params.facebookPageId || params.profileId || null;
+  const requireSchedule = options?.allowEmptySchedule ? false : true;
   const parsedSchedule = parseVnScheduleToUtc(params.scheduleDate, params.scheduleTime, {
     minLeadSeconds: options?.minLeadSeconds ?? 60,
     allowPast: options?.allowPast ?? false,
-    referenceNowUtc: options?.referenceNowUtc
+    referenceNowUtc: options?.referenceNowUtc,
+    requireSchedule
   });
   if (!parsedSchedule.isValid) {
-    throw new Error(parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.");
+    const code =
+      parsedSchedule.missingDate || parsedSchedule.missingTime
+        ? "SCHEDULE_REQUIRED"
+        : parsedSchedule.isPast
+          ? "SCHEDULE_IN_PAST"
+          : "SCHEDULE_INVALID";
+    throw new ScheduleValidationError({
+      code,
+      message: parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.",
+      httpStatus: 400,
+      fieldErrors: parsedSchedule.fieldErrors,
+      isPast: parsedSchedule.isPast,
+      missingDate: parsedSchedule.missingDate,
+      missingTime: parsedSchedule.missingTime
+    });
   }
   const scheduledAt = parsedSchedule.scheduledAtUtc;
   const finalScheduleDate = parsedSchedule.normalizedDate ?? (params.scheduleDate || "");
@@ -2382,15 +2590,16 @@ export async function addTask(
   const cleanComment = (params.commentText || "").trim();
   const initialCommentStatus = cleanComment ? "pending" : "none";
 
-  const insertSql = `INSERT INTO tasks (
+  const insertSqlWithAuditCols = `INSERT INTO tasks (
          owner_user_id, profile_id, facebook_page_id, media_id, object_key,
          video_path, caption, comment_text, schedule_date, schedule_time,
-         scheduled_at, timezone, status, idempotency_key, attempt_count, max_attempts,
+         scheduled_at, original_scheduled_at, original_schedule_date, original_schedule_time,
+         trigger_source, timezone, status, publish_status, is_locked, idempotency_key, attempt_count, max_attempts,
          log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', 'Asia/Ho_Chi_Minh', ?, ?, 0, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
 
-  const insertParams = [
+  const insertParamsWithAudit = [
     params.ownerUserId,
     params.profileId || pageId,
     pageId,
@@ -2402,6 +2611,10 @@ export async function addTask(
     finalScheduleDate,
     finalScheduleTime,
     scheduledAt,
+    scheduledAt,
+    finalScheduleDate,
+    finalScheduleTime,
+    status,
     status,
     idempotencyKey,
     initialCommentStatus,
@@ -2411,14 +2624,40 @@ export async function addTask(
 
   let res: any;
   try {
-    res = await db.prepare(insertSql).bind(...insertParams).run();
+    res = await db.prepare(insertSqlWithAuditCols).bind(...insertParamsWithAudit).run();
   } catch (err: any) {
-    const errMsg = String(err?.message || err);
-    if (errMsg.includes("no column named comment_") || errMsg.includes("comment_id") || errMsg.includes("SQLITE_ERROR")) {
-      await ensureTaskCommentColumns(db);
-      res = await db.prepare(insertSql).bind(...insertParams).run();
-    } else {
-      throw err;
+    await ensureTaskCommentColumns(db);
+    try {
+      res = await db.prepare(insertSqlWithAuditCols).bind(...insertParamsWithAudit).run();
+    } catch {
+      const fallbackSql = `INSERT INTO tasks (
+             owner_user_id, profile_id, facebook_page_id, media_id, object_key,
+             video_path, caption, comment_text, schedule_date, schedule_time,
+             scheduled_at, timezone, status, idempotency_key, attempt_count, max_attempts,
+             log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
+             created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
+      res = await db
+        .prepare(fallbackSql)
+        .bind(
+          params.ownerUserId,
+          params.profileId || pageId,
+          pageId,
+          params.mediaId || null,
+          params.objectKey || null,
+          params.videoPath.trim(),
+          params.caption || "",
+          params.commentText || "",
+          finalScheduleDate,
+          finalScheduleTime,
+          scheduledAt,
+          status,
+          idempotencyKey,
+          initialCommentStatus,
+          now,
+          now
+        )
+        .run();
     }
   }
 
@@ -2434,6 +2673,20 @@ export async function addTask(
         ? `Tạo tác vụ hẹn lịch đăng lúc ${finalScheduleDate} ${finalScheduleTime} (24h Asia/Ho_Chi_Minh -> UTC ${scheduledAt}).`
         : "Tạo tác vụ đăng Reels mới."
     );
+    await recordTaskAuditLog(db, {
+      taskId,
+      ownerUserId: params.ownerUserId,
+      actorUserId: params.ownerUserId,
+      action: "create_task",
+      oldScheduledAt: null,
+      newScheduledAt: scheduledAt,
+      oldScheduleText: "",
+      newScheduleText: `${finalScheduleDate} ${finalScheduleTime}`.trim(),
+      oldStatus: "",
+      newStatus: status,
+      reason: "Khởi tạo task mới với lịch đăng bắt buộc",
+      metadata: { facebook_page_id: pageId }
+    });
   }
   return taskId;
 }
@@ -2451,7 +2704,11 @@ export async function addTasksBulk(
     object_key?: string;
   }>,
   assignPageIds: string[] | null,
-  ownerUserId: string
+  ownerUserId: string,
+  options?: {
+    allowPast?: boolean;
+    minLeadSeconds?: number;
+  }
 ): Promise<number[]> {
   if (!tasksList || tasksList.length === 0) return [];
 
@@ -2481,17 +2738,21 @@ export async function addTasksBulk(
       idx++;
     }
 
-    const tid = await addTask(db, {
-      videoPath: vPath,
-      caption: item.caption || "",
-      commentText: item.comment_text || "",
-      scheduleDate: item.schedule_date || "",
-      scheduleTime: item.schedule_time || "",
-      facebookPageId: targetPageId,
-      mediaId: item.media_id || null,
-      objectKey: item.object_key || null,
-      ownerUserId
-    });
+    const tid = await addTask(
+      db,
+      {
+        videoPath: vPath,
+        caption: item.caption || "",
+        commentText: item.comment_text || "",
+        scheduleDate: item.schedule_date || "",
+        scheduleTime: item.schedule_time || "",
+        facebookPageId: targetPageId,
+        mediaId: item.media_id || null,
+        objectKey: item.object_key || null,
+        ownerUserId
+      },
+      options
+    );
     insertedIds.push(tid);
   }
 
@@ -2505,10 +2766,13 @@ export async function getTasks(
     status?: string | null;
     search?: string | null;
     accountIds?: string[];
+    startDate?: string | null;
+    endDate?: string | null;
     ownerUserId: string;
   }
 ): Promise<TaskRecord[]> {
-  const { facebookPageId, status, search, accountIds = [], ownerUserId } = options;
+  const { facebookPageId, status, search, accountIds = [], startDate, endDate, ownerUserId } = options;
+  const nowSec = nowUtcSeconds();
 
   let sql = `
     SELECT t.*,
@@ -2537,13 +2801,30 @@ export async function getTasks(
     params.push(...accountIds, ownerUserId);
   }
 
-  if (status) {
-    if (status === "running") {
+  if (status && status !== "all") {
+    if (status === "running" || status === "processing") {
       sql += " AND t.status IN ('running', 'queued', 'processing')";
+    } else if (status === "needs_schedule") {
+      sql += " AND t.status = 'pending' AND (t.scheduled_at IS NULL OR COALESCE(t.schedule_date, '') = '' OR COALESCE(t.schedule_time, '') = '')";
+    } else if (status === "due_soon") {
+      sql += " AND t.status = 'pending' AND t.scheduled_at IS NOT NULL AND t.scheduled_at <= ?";
+      params.push(nowSec + 1800);
+    } else if (status === "scheduled" || status === "pending") {
+      sql += " AND t.status = 'pending'";
     } else {
       sql += " AND t.status = ?";
       params.push(status);
     }
+  }
+
+  if (startDate && startDate.trim()) {
+    sql += " AND t.schedule_date >= ?";
+    params.push(startDate.trim());
+  }
+
+  if (endDate && endDate.trim()) {
+    sql += " AND t.schedule_date <= ?";
+    params.push(endDate.trim());
   }
 
   if (search && search.trim()) {
@@ -2560,14 +2841,27 @@ export async function getTasks(
   return results.map((r) => {
     const rawStatus = String(r.status || "pending");
     const schedAt = r.scheduled_at !== null && r.scheduled_at !== undefined ? Number(r.scheduled_at) : null;
+    const schedDateStr = String(r.schedule_date || "");
+    const schedTimeStr = String(r.schedule_time || "");
     const videoIdStr = String(r.video_id || "");
     const postIdStr = String(r.post_id || "");
     const publishStatus = String(r.publish_status || rawStatus);
+    const hasPublishedIds = Boolean(videoIdStr.trim()) && Boolean(postIdStr.trim());
     const isLocked =
-      Boolean(r.is_locked) ||
-      rawStatus === "success" ||
-      publishStatus === "success" ||
-      (Boolean(videoIdStr.trim()) && Boolean(postIdStr.trim()));
+      rawStatus === "failed" && !hasPublishedIds
+        ? false
+        : Boolean(r.is_locked) ||
+          rawStatus === "success" ||
+          publishStatus === "success" ||
+          hasPublishedIds;
+    const mappedStatus = mapStatusForFrontend(rawStatus, schedAt, schedDateStr, schedTimeStr);
+    const needsSchedule = mappedStatus === "needs_schedule";
+    const isDueSoon =
+      rawStatus === "pending" &&
+      !needsSchedule &&
+      schedAt !== null &&
+      schedAt <= nowSec + 1800;
+
     return {
       id: Number(r.id),
       owner_user_id: (r.owner_user_id as string) || null,
@@ -2579,15 +2873,26 @@ export async function getTasks(
       video_path: String(r.video_path || ""),
       caption: String(r.caption || ""),
       comment_text: String(r.comment_text || ""),
-      schedule_date: String(r.schedule_date || ""),
-      schedule_time: String(r.schedule_time || ""),
+      schedule_date: schedDateStr,
+      schedule_time: schedTimeStr,
       scheduled_at: schedAt,
+      original_scheduled_at:
+        r.original_scheduled_at !== null && r.original_scheduled_at !== undefined
+          ? Number(r.original_scheduled_at)
+          : schedAt,
+      original_schedule_date: String(r.original_schedule_date || schedDateStr),
+      original_schedule_time: String(r.original_schedule_time || schedTimeStr),
+      manual_publish_requested_at: (r.manual_publish_requested_at as string) || null,
+      manual_publish_by_user_id: (r.manual_publish_by_user_id as string) || null,
+      trigger_source: String(r.trigger_source || "scheduled"),
       timezone: String(r.timezone || "Asia/Ho_Chi_Minh"),
-      status: mapStatusForFrontend(rawStatus, schedAt),
+      status: mappedStatus,
       raw_status: rawStatus,
       publish_status: publishStatus,
       is_locked: isLocked,
-      is_future_schedule: schedAt !== null && schedAt > nowUtcSeconds(),
+      needs_schedule: needsSchedule,
+      is_due_soon: isDueSoon,
+      is_future_schedule: schedAt !== null && schedAt > nowSec,
       idempotency_key: (r.idempotency_key as string) || null,
       attempt_count: Number(r.attempt_count || 0),
       max_attempts: Number(r.max_attempts || 3),
@@ -2652,6 +2957,7 @@ export async function updateTask(
     allowPast?: boolean;
     minLeadSeconds?: number;
     referenceNowUtc?: number;
+    allowEmptySchedule?: boolean;
   }
 ): Promise<boolean> {
   const existing = await getTask(db, taskId, params.ownerUserId);
@@ -2669,13 +2975,29 @@ export async function updateTask(
   const newTime = params.scheduleTime !== undefined ? params.scheduleTime : existing.schedule_time;
   const newMediaId = params.mediaId !== undefined ? params.mediaId : existing.media_id;
   const newObjectKey = params.objectKey !== undefined ? params.objectKey : existing.object_key;
+  const requireSchedule = options?.allowEmptySchedule ? false : true;
   const parsedSchedule = parseVnScheduleToUtc(newDate, newTime, {
     minLeadSeconds: options?.minLeadSeconds ?? 60,
     allowPast: options?.allowPast ?? false,
-    referenceNowUtc: options?.referenceNowUtc
+    referenceNowUtc: options?.referenceNowUtc,
+    requireSchedule
   });
   if (!parsedSchedule.isValid) {
-    throw new Error(parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.");
+    const code =
+      parsedSchedule.missingDate || parsedSchedule.missingTime
+        ? "SCHEDULE_REQUIRED"
+        : parsedSchedule.isPast
+          ? "SCHEDULE_IN_PAST"
+          : "SCHEDULE_INVALID";
+    throw new ScheduleValidationError({
+      code,
+      message: parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.",
+      httpStatus: 400,
+      fieldErrors: parsedSchedule.fieldErrors,
+      isPast: parsedSchedule.isPast,
+      missingDate: parsedSchedule.missingDate,
+      missingTime: parsedSchedule.missingTime
+    });
   }
   const finalScheduleDate = parsedSchedule.normalizedDate ?? newDate;
   const finalScheduleTime = parsedSchedule.normalizedTime ?? newTime;
@@ -2690,43 +3012,94 @@ export async function updateTask(
     }
   }
 
-  const res = await db
-    .prepare(
-      `UPDATE tasks
-       SET facebook_page_id = ?,
-           profile_id = ?,
-           media_id = ?,
-           object_key = ?,
-           video_path = ?,
-           caption = ?,
-           comment_text = ?,
-           comment_status = ?,
-           schedule_date = ?,
-           schedule_time = ?,
-           scheduled_at = ?,
-           updated_at = ?
-       WHERE id = ?
-         AND owner_user_id = ?
-         AND status != 'success'
-         AND COALESCE(is_locked, 0) = 0`
-    )
-    .bind(
-      newPageId,
-      newPageId,
-      newMediaId || null,
-      newObjectKey || null,
-      newVideo,
-      newCaption,
-      newComment,
-      newCommentStatus,
-      finalScheduleDate,
-      finalScheduleTime,
-      parsedSchedule.scheduledAtUtc,
-      now,
-      taskId,
-      params.ownerUserId
-    )
-    .run();
+  let res: any;
+  try {
+    res = await db
+      .prepare(
+        `UPDATE tasks
+         SET facebook_page_id = ?,
+             profile_id = ?,
+             media_id = ?,
+             object_key = ?,
+             video_path = ?,
+             caption = ?,
+             comment_text = ?,
+             comment_status = ?,
+             original_scheduled_at = COALESCE(original_scheduled_at, scheduled_at, ?),
+             original_schedule_date = CASE WHEN original_schedule_date IS NULL OR original_schedule_date = '' THEN COALESCE(NULLIF(schedule_date, ''), ?) ELSE original_schedule_date END,
+             original_schedule_time = CASE WHEN original_schedule_time IS NULL OR original_schedule_time = '' THEN COALESCE(NULLIF(schedule_time, ''), ?) ELSE original_schedule_time END,
+             schedule_date = ?,
+             schedule_time = ?,
+             scheduled_at = ?,
+             status = CASE WHEN status = 'cancelled' THEN 'pending' ELSE status END,
+             publish_status = CASE WHEN publish_status = 'cancelled' THEN 'pending' ELSE publish_status END,
+             is_locked = 0,
+             updated_at = ?
+         WHERE id = ?
+           AND owner_user_id = ?
+           AND status != 'success'
+           AND COALESCE(is_locked, 0) = 0`
+      )
+      .bind(
+        newPageId,
+        newPageId,
+        newMediaId || null,
+        newObjectKey || null,
+        newVideo,
+        newCaption,
+        newComment,
+        newCommentStatus,
+        parsedSchedule.scheduledAtUtc,
+        finalScheduleDate,
+        finalScheduleTime,
+        finalScheduleDate,
+        finalScheduleTime,
+        parsedSchedule.scheduledAtUtc,
+        now,
+        taskId,
+        params.ownerUserId
+      )
+      .run();
+  } catch {
+    await ensureTaskCommentColumns(db);
+    res = await db
+      .prepare(
+        `UPDATE tasks
+         SET facebook_page_id = ?,
+             profile_id = ?,
+             media_id = ?,
+             object_key = ?,
+             video_path = ?,
+             caption = ?,
+             comment_text = ?,
+             comment_status = ?,
+             schedule_date = ?,
+             schedule_time = ?,
+             scheduled_at = ?,
+             updated_at = ?
+         WHERE id = ?
+           AND owner_user_id = ?
+           AND status != 'success'
+           AND COALESCE(is_locked, 0) = 0`
+      )
+      .bind(
+        newPageId,
+        newPageId,
+        newMediaId || null,
+        newObjectKey || null,
+        newVideo,
+        newCaption,
+        newComment,
+        newCommentStatus,
+        finalScheduleDate,
+        finalScheduleTime,
+        parsedSchedule.scheduledAtUtc,
+        now,
+        taskId,
+        params.ownerUserId
+      )
+      .run();
+  }
 
   if ((res.meta?.changes || 0) === 0) {
     const recheck = await getTask(db, taskId, params.ownerUserId);
@@ -2734,6 +3107,25 @@ export async function updateTask(
       assertTaskMutable(recheck, "chỉnh sửa");
     }
   }
+
+  const scheduleChanged =
+    existing.scheduled_at !== parsedSchedule.scheduledAtUtc ||
+    existing.schedule_date !== finalScheduleDate ||
+    existing.schedule_time !== finalScheduleTime;
+
+  await recordTaskAuditLog(db, {
+    taskId,
+    ownerUserId: params.ownerUserId,
+    actorUserId: params.ownerUserId,
+    action: scheduleChanged ? "reschedule" : "edit_task",
+    oldScheduledAt: existing.scheduled_at ?? null,
+    newScheduledAt: parsedSchedule.scheduledAtUtc,
+    oldScheduleText: `${existing.schedule_date || ""} ${existing.schedule_time || ""}`.trim(),
+    newScheduleText: `${finalScheduleDate} ${finalScheduleTime}`.trim(),
+    oldStatus: existing.raw_status || existing.status,
+    newStatus: existing.raw_status === "cancelled" ? "pending" : existing.raw_status || existing.status,
+    reason: scheduleChanged ? "Cập nhật lịch đăng & thông tin task" : "Cập nhật nội dung task"
+  });
 
   return true;
 }
@@ -2759,6 +3151,7 @@ export async function updateTaskExecutionState(
   const now = new Date().toISOString();
   const cleanLog = sanitizeSensitiveText(logMsg);
   const isSuccess = status === "success" || status === "done";
+  const isFailed = status === "failed";
   const publishedAtVal =
     extra?.publishedAt !== undefined
       ? extra.publishedAt
@@ -2772,7 +3165,7 @@ export async function updateTaskExecutionState(
         `UPDATE tasks
          SET status = ?,
              publish_status = ?,
-             is_locked = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(is_locked, 0) END,
+             is_locked = CASE WHEN ? = 1 THEN 1 WHEN ? = 1 THEN 0 ELSE COALESCE(is_locked, 0) END,
              analytics_status = CASE
                WHEN ? = 1 AND (analytics_status IS NULL OR analytics_status = 'not_synced') THEN 'pending'
                ELSE COALESCE(analytics_status, 'not_synced')
@@ -2797,6 +3190,7 @@ export async function updateTaskExecutionState(
         status,
         status,
         isSuccess ? 1 : 0,
+        isFailed ? 1 : 0,
         isSuccess ? 1 : 0,
         cleanLog,
         extra?.videoId ?? null,
@@ -3042,6 +3436,7 @@ export async function resetTask(
       `UPDATE tasks
        SET status = 'pending',
            publish_status = 'pending',
+           is_locked = 0,
            attempt_count = 0,
            next_retry_at = NULL,
            locked_until = NULL,
@@ -3072,7 +3467,540 @@ export async function resetTask(
       assertTaskMutable(recheck, "đặt lại trạng thái chờ đăng");
     }
   }
+
+  await recordTaskAuditLog(db, {
+    taskId,
+    ownerUserId,
+    actorUserId: ownerUserId,
+    action: "retry_task",
+    oldScheduledAt: existing.scheduled_at ?? null,
+    newScheduledAt: existing.scheduled_at ?? null,
+    oldScheduleText: `${existing.schedule_date || ""} ${existing.schedule_time || ""}`.trim(),
+    newScheduleText: `${existing.schedule_date || ""} ${existing.schedule_time || ""}`.trim(),
+    oldStatus: existing.raw_status || existing.status,
+    newStatus: "pending",
+    reason: "Người dùng đặt lại trạng thái chờ đăng / thử lại"
+  });
+
   return true;
+}
+
+export async function prepareTasksForPublishNow(
+  db: D1Database,
+  params: {
+    taskIds: number[];
+    ownerUserId: string;
+    actorUserId?: string;
+    triggerSource?: "manual_publish_now" | "bulk_publish_now";
+  }
+): Promise<{
+  eligibleTaskIds: number[];
+  eligibleTasks: TaskRecord[];
+  ineligibleTasks: Array<{ id: number; reason: string; code: string }>;
+  publishedTimestampUtc: number;
+  publishedScheduleDate: string;
+  publishedScheduleTime: string;
+}> {
+  const validIds = Array.from(
+    new Set(
+      (params.taskIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  );
+  const nowSec = nowUtcSeconds();
+  const vnNow = formatUtcToVn(nowSec);
+  const isoNow = new Date().toISOString();
+  const triggerSource = params.triggerSource || "manual_publish_now";
+  const actorUserId = params.actorUserId || params.ownerUserId;
+
+  if (validIds.length === 0) {
+    return {
+      eligibleTaskIds: [],
+      eligibleTasks: [],
+      ineligibleTasks: [],
+      publishedTimestampUtc: nowSec,
+      publishedScheduleDate: vnNow.schedule_date,
+      publishedScheduleTime: vnNow.schedule_time
+    };
+  }
+
+  await ensureTaskCommentColumns(db);
+
+  const allUserTasks = await getTasks(db, { ownerUserId: params.ownerUserId });
+  const taskMap = new Map<number, TaskRecord>();
+  for (const t of allUserTasks) {
+    taskMap.set(t.id, t);
+  }
+
+  const eligibleTaskIds: number[] = [];
+  const eligibleTasks: TaskRecord[] = [];
+  const ineligibleTasks: Array<{ id: number; reason: string; code: string }> = [];
+
+  for (const id of validIds) {
+    const task = taskMap.get(id);
+    if (!task) {
+      ineligibleTasks.push({
+        id,
+        code: "TASK_NOT_FOUND",
+        reason: "Task không tồn tại hoặc không thuộc quyền sở hữu của bạn."
+      });
+      continue;
+    }
+
+    if (isTaskPublishedAndLocked(task)) {
+      ineligibleTasks.push({
+        id,
+        code: "TASK_ALREADY_PUBLISHED",
+        reason: "Task đã đăng Reels thành công và đã khóa lịch sử."
+      });
+      continue;
+    }
+
+    if (isTaskCurrentlyRunning(task)) {
+      ineligibleTasks.push({
+        id,
+        code: "TASK_IN_PROGRESS",
+        reason: "Task đang trong quá trình xử lý đăng hoặc đã nằm trong hàng đợi."
+      });
+      continue;
+    }
+
+    if (!task.facebook_page_id || !String(task.facebook_page_id).trim()) {
+      ineligibleTasks.push({
+        id,
+        code: "MISSING_PAGE",
+        reason: "Task chưa được gắn Fanpage đích."
+      });
+      continue;
+    }
+
+    if (!task.video_path || !String(task.video_path).trim()) {
+      ineligibleTasks.push({
+        id,
+        code: "MISSING_VIDEO",
+        reason: "Task thiếu nguồn video R2 hợp lệ."
+      });
+      continue;
+    }
+
+    const oldScheduledAt = task.scheduled_at ?? null;
+    const oldScheduleText = `${task.schedule_date || ""} ${task.schedule_time || ""}`.trim();
+    const oldStatus = task.raw_status || task.status;
+
+    const updateRes = await db
+      .prepare(
+        `UPDATE tasks
+         SET original_scheduled_at = COALESCE(original_scheduled_at, scheduled_at, ?),
+             original_schedule_date = CASE WHEN original_schedule_date IS NULL OR original_schedule_date = '' THEN COALESCE(NULLIF(schedule_date, ''), ?) ELSE original_schedule_date END,
+             original_schedule_time = CASE WHEN original_schedule_time IS NULL OR original_schedule_time = '' THEN COALESCE(NULLIF(schedule_time, ''), ?) ELSE original_schedule_time END,
+             schedule_date = ?,
+             schedule_time = ?,
+             scheduled_at = ?,
+             manual_publish_requested_at = ?,
+             manual_publish_by_user_id = ?,
+             trigger_source = ?,
+             status = 'queued',
+             publish_status = 'queued',
+             is_locked = 0,
+             attempt_count = 0,
+             locked_until = NULL,
+             lease_owner = NULL,
+             next_retry_at = NULL,
+             error_code = NULL,
+             error_subcode = NULL,
+             log = ?,
+             updated_at = ?
+         WHERE id = ?
+           AND owner_user_id = ?
+           AND status NOT IN ('success', 'done', 'processing', 'running', 'queued')
+           AND COALESCE(is_locked, 0) = 0`
+      )
+      .bind(
+        nowSec,
+        vnNow.schedule_date,
+        vnNow.schedule_time,
+        vnNow.schedule_date,
+        vnNow.schedule_time,
+        nowSec,
+        isoNow,
+        actorUserId,
+        triggerSource,
+        `Đăng ngay lúc ${vnNow.schedule_date} ${vnNow.schedule_time} (lịch gốc: ${oldScheduleText || "chưa đặt"})`,
+        isoNow,
+        id,
+        params.ownerUserId
+      )
+      .run();
+
+    if ((updateRes.meta?.changes || 0) === 0) {
+      ineligibleTasks.push({
+        id,
+        code: "TASK_STATE_CHANGED",
+        reason: "Trạng thái task vừa thay đổi ở tiến trình khác (đang chạy hoặc đã khóa)."
+      });
+      continue;
+    }
+
+    await appendTaskStageLog(
+      db,
+      id,
+      params.ownerUserId,
+      "INFO",
+      "manual_publish_now",
+      `Kích hoạt Đăng ngay (${triggerSource}). Cập nhật lịch đăng từ [${oldScheduleText || "trống"}] -> [${vnNow.schedule_date} ${vnNow.schedule_time} / UTC=${nowSec}].`
+    );
+
+    await recordTaskAuditLog(db, {
+      taskId: id,
+      ownerUserId: params.ownerUserId,
+      actorUserId,
+      action: triggerSource === "bulk_publish_now" ? "bulk_publish_now" : "publish_now",
+      oldScheduledAt,
+      newScheduledAt: nowSec,
+      oldScheduleText,
+      newScheduleText: `${vnNow.schedule_date} ${vnNow.schedule_time}`,
+      oldStatus,
+      newStatus: "queued",
+      reason:
+        triggerSource === "bulk_publish_now"
+          ? "Người dùng chọn nhiều task và bấm Đăng ngay"
+          : "Người dùng bấm Đăng ngay trên task",
+      metadata: {
+        trigger_source: triggerSource,
+        facebook_page_id: task.facebook_page_id
+      }
+    });
+
+    eligibleTaskIds.push(id);
+    eligibleTasks.push({
+      ...task,
+      schedule_date: vnNow.schedule_date,
+      schedule_time: vnNow.schedule_time,
+      scheduled_at: nowSec,
+      original_scheduled_at: task.original_scheduled_at ?? oldScheduledAt ?? nowSec,
+      original_schedule_date: task.original_schedule_date || task.schedule_date || vnNow.schedule_date,
+      original_schedule_time: task.original_schedule_time || task.schedule_time || vnNow.schedule_time,
+      manual_publish_requested_at: isoNow,
+      manual_publish_by_user_id: actorUserId,
+      trigger_source: triggerSource,
+      status: "queued",
+      raw_status: "queued",
+      publish_status: "queued",
+      is_locked: false
+    });
+  }
+
+  return {
+    eligibleTaskIds,
+    eligibleTasks,
+    ineligibleTasks,
+    publishedTimestampUtc: nowSec,
+    publishedScheduleDate: vnNow.schedule_date,
+    publishedScheduleTime: vnNow.schedule_time
+  };
+}
+
+export async function rescheduleTasksBulk(
+  db: D1Database,
+  params: {
+    taskIds: number[];
+    scheduleDate: string;
+    scheduleTime: string;
+    intervalMinutes?: number;
+    allowPast?: boolean;
+    minLeadSeconds?: number;
+    ownerUserId: string;
+    actorUserId?: string;
+  }
+): Promise<{
+  updatedCount: number;
+  updatedTasks: Array<{
+    id: number;
+    schedule_date: string;
+    schedule_time: string;
+    scheduled_at: number;
+  }>;
+  skippedTasks: Array<{ id: number; reason: string; code: string }>;
+}> {
+  const parsedBase = parseVnScheduleToUtc(params.scheduleDate, params.scheduleTime, {
+    minLeadSeconds: params.minLeadSeconds ?? 60,
+    allowPast: params.allowPast ?? false,
+    requireSchedule: true
+  });
+
+  if (!parsedBase.isValid || parsedBase.scheduledAtUtc === null) {
+    const code =
+      parsedBase.missingDate || parsedBase.missingTime
+        ? "SCHEDULE_REQUIRED"
+        : parsedBase.isPast
+          ? "SCHEDULE_IN_PAST"
+          : "SCHEDULE_INVALID";
+    throw new ScheduleValidationError({
+      code,
+      message: parsedBase.error || "Thời gian đặt lịch mới không hợp lệ hoặc đã qua.",
+      httpStatus: 400,
+      fieldErrors: parsedBase.fieldErrors,
+      isPast: parsedBase.isPast,
+      missingDate: parsedBase.missingDate,
+      missingTime: parsedBase.missingTime
+    });
+  }
+
+  const validIds = Array.from(
+    new Set(
+      (params.taskIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  );
+  if (validIds.length === 0) {
+    return { updatedCount: 0, updatedTasks: [], skippedTasks: [] };
+  }
+
+  await ensureTaskCommentColumns(db);
+
+  const allUserTasks = await getTasks(db, { ownerUserId: params.ownerUserId });
+  const taskMap = new Map<number, TaskRecord>();
+  for (const t of allUserTasks) {
+    taskMap.set(t.id, t);
+  }
+
+  const intervalSec = Math.max(0, Math.floor(Number(params.intervalMinutes || 0))) * 60;
+  const baseUtc = parsedBase.scheduledAtUtc;
+  const isoNow = new Date().toISOString();
+  const actorUserId = params.actorUserId || params.ownerUserId;
+
+  const updatedTasks: Array<{
+    id: number;
+    schedule_date: string;
+    schedule_time: string;
+    scheduled_at: number;
+  }> = [];
+  const skippedTasks: Array<{ id: number; reason: string; code: string }> = [];
+
+  let eligibleIdx = 0;
+  for (const id of validIds) {
+    const task = taskMap.get(id);
+    if (!task) {
+      skippedTasks.push({
+        id,
+        code: "TASK_NOT_FOUND",
+        reason: "Task không tồn tại."
+      });
+      continue;
+    }
+
+    if (isTaskPublishedAndLocked(task)) {
+      skippedTasks.push({
+        id,
+        code: "TASK_ALREADY_PUBLISHED",
+        reason: "Task đã đăng Reels thành công (đã khóa)."
+      });
+      continue;
+    }
+
+    if (isTaskCurrentlyRunning(task)) {
+      skippedTasks.push({
+        id,
+        code: "TASK_IN_PROGRESS",
+        reason: "Task đang xử lý đăng, không thể đổi lịch."
+      });
+      continue;
+    }
+
+    const targetUtc = baseUtc + eligibleIdx * intervalSec;
+    const targetVn = formatUtcToVn(targetUtc);
+    eligibleIdx++;
+
+    const oldScheduledAt = task.scheduled_at ?? null;
+    const oldScheduleText = `${task.schedule_date || ""} ${task.schedule_time || ""}`.trim();
+    const oldStatus = task.raw_status || task.status;
+
+    const res = await db
+      .prepare(
+        `UPDATE tasks
+         SET original_scheduled_at = COALESCE(original_scheduled_at, scheduled_at, ?),
+             original_schedule_date = CASE WHEN original_schedule_date IS NULL OR original_schedule_date = '' THEN COALESCE(NULLIF(schedule_date, ''), ?) ELSE original_schedule_date END,
+             original_schedule_time = CASE WHEN original_schedule_time IS NULL OR original_schedule_time = '' THEN COALESCE(NULLIF(schedule_time, ''), ?) ELSE original_schedule_time END,
+             schedule_date = ?,
+             schedule_time = ?,
+             scheduled_at = ?,
+             status = 'pending',
+             publish_status = 'pending',
+             is_locked = 0,
+             next_retry_at = NULL,
+             locked_until = NULL,
+             lease_owner = NULL,
+             log = ?,
+             updated_at = ?
+         WHERE id = ?
+           AND owner_user_id = ?
+           AND status NOT IN ('success', 'done', 'processing', 'running', 'queued')
+           AND COALESCE(is_locked, 0) = 0`
+      )
+      .bind(
+        targetUtc,
+        targetVn.schedule_date,
+        targetVn.schedule_time,
+        targetVn.schedule_date,
+        targetVn.schedule_time,
+        targetUtc,
+        `Đã đổi lịch đăng sang ${targetVn.schedule_date} ${targetVn.schedule_time}`,
+        isoNow,
+        id,
+        params.ownerUserId
+      )
+      .run();
+
+    if ((res.meta?.changes || 0) === 0) {
+      skippedTasks.push({
+        id,
+        code: "TASK_STATE_CHANGED",
+        reason: "Không thể cập nhật do trạng thái task vừa thay đổi."
+      });
+      continue;
+    }
+
+    await recordTaskAuditLog(db, {
+      taskId: id,
+      ownerUserId: params.ownerUserId,
+      actorUserId,
+      action: "bulk_reschedule",
+      oldScheduledAt,
+      newScheduledAt: targetUtc,
+      oldScheduleText,
+      newScheduleText: `${targetVn.schedule_date} ${targetVn.schedule_time}`,
+      oldStatus,
+      newStatus: "pending",
+      reason:
+        intervalSec > 0
+          ? `Đổi lịch hàng loạt (giãn cách ${params.intervalMinutes} phút/task)`
+          : "Đổi lịch hàng loạt cùng giờ",
+      metadata: { interval_minutes: params.intervalMinutes || 0 }
+    });
+
+    updatedTasks.push({
+      id,
+      schedule_date: targetVn.schedule_date,
+      schedule_time: targetVn.schedule_time,
+      scheduled_at: targetUtc
+    });
+  }
+
+  return {
+    updatedCount: updatedTasks.length,
+    updatedTasks,
+    skippedTasks
+  };
+}
+
+export async function cancelTasksBulk(
+  db: D1Database,
+  params: {
+    taskIds: number[];
+    ownerUserId: string;
+    actorUserId?: string;
+  }
+): Promise<{
+  cancelledCount: number;
+  cancelledTaskIds: number[];
+  skippedTasks: Array<{ id: number; reason: string; code: string }>;
+}> {
+  const validIds = Array.from(
+    new Set(
+      (params.taskIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  );
+  if (validIds.length === 0) {
+    return { cancelledCount: 0, cancelledTaskIds: [], skippedTasks: [] };
+  }
+
+  await ensureTaskCommentColumns(db);
+
+  const allUserTasks = await getTasks(db, { ownerUserId: params.ownerUserId });
+  const taskMap = new Map<number, TaskRecord>();
+  for (const t of allUserTasks) {
+    taskMap.set(t.id, t);
+  }
+
+  const isoNow = new Date().toISOString();
+  const actorUserId = params.actorUserId || params.ownerUserId;
+  const cancelledTaskIds: number[] = [];
+  const skippedTasks: Array<{ id: number; reason: string; code: string }> = [];
+
+  for (const id of validIds) {
+    const task = taskMap.get(id);
+    if (!task) {
+      skippedTasks.push({ id, code: "TASK_NOT_FOUND", reason: "Task không tồn tại." });
+      continue;
+    }
+    if (isTaskPublishedAndLocked(task)) {
+      skippedTasks.push({
+        id,
+        code: "TASK_ALREADY_PUBLISHED",
+        reason: "Task đã đăng Reels thành công (đã khóa)."
+      });
+      continue;
+    }
+    if (isTaskCurrentlyRunning(task)) {
+      skippedTasks.push({
+        id,
+        code: "TASK_IN_PROGRESS",
+        reason: "Task đang xử lý đăng, không thể hủy lịch."
+      });
+      continue;
+    }
+
+    const res = await db
+      .prepare(
+        `UPDATE tasks
+         SET status = 'cancelled',
+             publish_status = 'cancelled',
+             locked_until = NULL,
+             lease_owner = NULL,
+             next_retry_at = NULL,
+             log = 'Đã hủy lịch đăng theo yêu cầu người dùng',
+             updated_at = ?
+         WHERE id = ?
+           AND owner_user_id = ?
+           AND status NOT IN ('success', 'done', 'processing', 'running', 'queued')
+           AND COALESCE(is_locked, 0) = 0`
+      )
+      .bind(isoNow, id, params.ownerUserId)
+      .run();
+
+    if ((res.meta?.changes || 0) > 0) {
+      cancelledTaskIds.push(id);
+      await recordTaskAuditLog(db, {
+        taskId: id,
+        ownerUserId: params.ownerUserId,
+        actorUserId,
+        action: "cancel_schedule",
+        oldScheduledAt: task.scheduled_at ?? null,
+        newScheduledAt: task.scheduled_at ?? null,
+        oldScheduleText: `${task.schedule_date || ""} ${task.schedule_time || ""}`.trim(),
+        newScheduleText: `${task.schedule_date || ""} ${task.schedule_time || ""}`.trim(),
+        oldStatus: task.raw_status || task.status,
+        newStatus: "cancelled",
+        reason: "Người dùng hủy lịch đăng"
+      });
+    } else {
+      skippedTasks.push({
+        id,
+        code: "TASK_STATE_CHANGED",
+        reason: "Không thể hủy lịch do trạng thái task vừa thay đổi."
+      });
+    }
+  }
+
+  return {
+    cancelledCount: cancelledTaskIds.length,
+    cancelledTaskIds,
+    skippedTasks
+  };
 }
 
 export async function deleteTask(
@@ -3103,6 +4031,20 @@ export async function deleteTask(
       assertTaskMutable(recheck, "xóa");
     }
   }
+
+  await recordTaskAuditLog(db, {
+    taskId,
+    ownerUserId,
+    actorUserId: ownerUserId,
+    action: "delete_task",
+    oldScheduledAt: existing.scheduled_at ?? null,
+    newScheduledAt: null,
+    oldScheduleText: `${existing.schedule_date || ""} ${existing.schedule_time || ""}`.trim(),
+    newScheduleText: "",
+    oldStatus: existing.raw_status || existing.status,
+    newStatus: "deleted",
+    reason: "Người dùng xóa task"
+  });
 
   let orphanMediaId: string | null = null;
   if (existing.media_id) {
@@ -3286,7 +4228,7 @@ export async function claimTaskLease(
            attempt_count = attempt_count + 1,
            updated_at = ?
        WHERE id = ?
-         AND status IN ('pending', 'queued', 'processing')
+         AND status IN ('pending', 'queued', 'processing', 'scheduled')
          AND status != 'success'
          AND status != 'cancelled'
          AND (locked_until IS NULL OR locked_until < ?)`

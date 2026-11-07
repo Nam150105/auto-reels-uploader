@@ -43,7 +43,25 @@
     const filterPageStatus = ref(''); // '' | 'can_post'
     const filterPage = ref('');
     const filterStatus = ref('');
+    const filterStartDate = ref('');
+    const filterEndDate = ref('');
     const searchTask = ref('');
+    const publishingNowTaskId = ref(null);
+    const isBulkPublishingTasks = ref(false);
+    const isBulkReschedulingTasks = ref(false);
+    const isBulkCancellingTasks = ref(false);
+    const showBulkPublishModal = ref(false);
+    const showBulkRescheduleModal = ref(false);
+    const bulkRescheduleForm = ref({
+      schedule_date: '',
+      schedule_time: '',
+      interval_minutes: 10
+    });
+    const singleScheduleErrors = ref({
+      schedule_date: '',
+      schedule_time: '',
+      general: ''
+    });
 
     // Meta Connection State
     const metaStatus = ref({
@@ -268,6 +286,10 @@
       );
     });
 
+    const expiredAccountNames = computed(() => {
+      return expiredAccounts.value.map(a => a.user_name || a.user_id).join(', ');
+    });
+
     const missingInsightsAccounts = computed(() => {
       return accounts.value.filter(a => a.status === 'connected' && !a.has_read_insights);
     });
@@ -280,9 +302,71 @@
       return pages.value.length > 0 && pages.value.every(p => p.is_selected);
     });
 
+    const selectableTasksCount = computed(() => {
+      return tasks.value.filter(t => !isTaskLocked(t) && !isTaskInFlight(t)).length;
+    });
+
     const isAllTasksSelected = computed(() => {
       const mutableTasks = tasks.value.filter(t => !isTaskLocked(t) && !isTaskInFlight(t));
       return mutableTasks.length > 0 && mutableTasks.every(t => selectedTaskIds.value.includes(t.id));
+    });
+
+    const bulkPublishPreview = computed(() => {
+      const eligible = [];
+      const ineligible = [];
+      for (const id of selectedTaskIds.value) {
+        const t = tasks.value.find(x => x.id === id);
+        if (!t) continue;
+        if (isTaskLocked(t)) {
+          ineligible.push({ id: t.id, page_name: t.page_name, reason: 'Đã đăng thành công (Đã khóa)' });
+        } else if (isTaskInFlight(t)) {
+          ineligible.push({ id: t.id, page_name: t.page_name, reason: 'Đang trong tiến trình đăng' });
+        } else if (!t.facebook_page_id) {
+          ineligible.push({ id: t.id, page_name: t.page_name, reason: 'Chưa gán Fanpage đích' });
+        } else if (!t.video_path && !t.media_id && !t.object_key) {
+          ineligible.push({ id: t.id, page_name: t.page_name, reason: 'Thiếu nguồn video trên R2' });
+        } else {
+          eligible.push(t);
+        }
+      }
+      return {
+        total: selectedTaskIds.value.length,
+        eligible,
+        ineligible
+      };
+    });
+
+    const bulkReschedulePreviewList = computed(() => {
+      const dStr = (bulkRescheduleForm.value.schedule_date || '').trim();
+      const tStr = (bulkRescheduleForm.value.schedule_time || '').trim();
+      const interval = Math.max(0, Number(bulkRescheduleForm.value.interval_minutes) || 0);
+      const parsedT = normalizeTime24hClient(tStr, dStr);
+      const dMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dStr);
+      const baseMillis = (dMatch && parsedT.valid)
+        ? Date.UTC(parseInt(dMatch[1], 10), parseInt(dMatch[2], 10) - 1, parseInt(dMatch[3], 10), parsedT.hour, parsedT.minute, 0)
+        : null;
+
+      const list = [];
+      let idx = 0;
+      for (const id of selectedTaskIds.value) {
+        const t = tasks.value.find(x => x.id === id);
+        if (!t || isTaskLocked(t) || isTaskInFlight(t)) continue;
+        let newDate = dStr || '—';
+        let newTime = parsedT.valid ? parsedT.normalizedTime : (tStr || '—');
+        if (baseMillis !== null) {
+          const itemD = new Date(baseMillis + idx * interval * 60000);
+          newDate = `${String(itemD.getUTCFullYear()).padStart(4, '0')}-${String(itemD.getUTCMonth() + 1).padStart(2, '0')}-${String(itemD.getUTCDate()).padStart(2, '0')}`;
+          newTime = `${String(itemD.getUTCHours()).padStart(2, '0')}:${String(itemD.getUTCMinutes()).padStart(2, '0')}`;
+        }
+        list.push({
+          id: t.id,
+          page_name: t.page_name || t.facebook_page_id || 'Chưa gán Page',
+          new_date: newDate,
+          new_time: newTime
+        });
+        idx++;
+      }
+      return list;
     });
 
     const maxTimeSeriesViews = computed(() => {
@@ -476,6 +560,8 @@
         const params = new URLSearchParams();
         if (filterPage.value) params.append('facebook_page_id', filterPage.value);
         if (filterStatus.value) params.append('status', filterStatus.value);
+        if (filterStartDate.value) params.append('start_date', filterStartDate.value);
+        if (filterEndDate.value) params.append('end_date', filterEndDate.value);
         if (searchTask.value.trim()) params.append('search', searchTask.value.trim());
 
         const queryStr = params.toString();
@@ -1155,7 +1241,17 @@
       };
     }
 
+    function clearSingleScheduleErrors() {
+      singleScheduleErrors.value = {
+        schedule_date: '',
+        schedule_time: '',
+        general: ''
+      };
+    }
+
     function openSingleTaskModal(pageId = '') {
+      const defSched = getVnNowParts(15);
+      clearSingleScheduleErrors();
       singleTaskForm.value = {
         facebook_page_id: pageId || (pages.value.length > 0 ? pages.value[0].facebook_page_id : ''),
         video_path: '',
@@ -1163,8 +1259,8 @@
         object_key: '',
         caption: '',
         comment_text: '',
-        schedule_date: '',
-        schedule_time: ''
+        schedule_date: defSched.date,
+        schedule_time: defSched.time
       };
       isUploadingVideo.value = false;
       uploadError.value = '';
@@ -1470,14 +1566,36 @@
       normalizeScheduleTimeField('single');
     }
 
-    function validateVnScheduleClient(scheduleDate, scheduleTime) {
+    function validateVnScheduleClient(scheduleDate, scheduleTime, requireSchedule = true) {
       let dStr = (scheduleDate || '').trim();
       const tStr = (scheduleTime || '').trim();
-      if (!dStr && !tStr) return { valid: true, normalizedDate: '', normalizedTime: '' };
+      if (!dStr && !tStr) {
+        if (!requireSchedule) {
+          return { valid: true, normalizedDate: '', normalizedTime: '' };
+        }
+        return {
+          valid: false,
+          missingDate: true,
+          missingTime: true,
+          fieldErrors: {
+            schedule_date: 'Vui lòng chọn ngày đăng (YYYY-MM-DD).',
+            schedule_time: 'Vui lòng nhập giờ đăng (HH:MM 24h).'
+          },
+          error: 'Vui lòng chọn đầy đủ Ngày đăng và Giờ đăng (24 tiếng) trước khi lưu Task.'
+        };
+      }
       if (!dStr || !tStr) {
         return {
           valid: false,
-          error: 'Phải nhập đầy đủ cả Ngày đăng (YYYY-MM-DD) và Giờ đăng (HH:MM 24h) theo giờ Việt Nam.'
+          missingDate: !dStr,
+          missingTime: !tStr,
+          fieldErrors: {
+            schedule_date: !dStr ? 'Vui lòng chọn ngày đăng (YYYY-MM-DD).' : undefined,
+            schedule_time: !tStr ? 'Vui lòng nhập giờ đăng (HH:MM 24h).' : undefined
+          },
+          error: !dStr
+            ? 'Vui lòng chọn ngày đăng (YYYY-MM-DD).'
+            : 'Vui lòng nhập giờ đăng (HH:MM 24h).'
         };
       }
       const dmyMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(dStr);
@@ -1489,6 +1607,10 @@
       if (!dMatch || !parsedTime.valid) {
         return {
           valid: false,
+          fieldErrors: {
+            schedule_date: !dMatch ? 'Ngày đăng không đúng định dạng YYYY-MM-DD.' : undefined,
+            schedule_time: !parsedTime.valid ? 'Giờ đăng không đúng định dạng 24h HH:MM.' : undefined
+          },
           error: 'Định dạng ngày giờ không hợp lệ. Ngày phải có dạng YYYY-MM-DD và giờ 24h HH:MM (hoặc kèm SA/CH/AM/PM).'
         };
       }
@@ -1503,12 +1625,20 @@
       if (schedUtcMillis <= nowUtcMillis) {
         return {
           valid: false,
+          isPast: true,
+          fieldErrors: {
+            schedule_time: `Thời gian đã chọn (${dStr} ${normTime}) nằm trong quá khứ.`
+          },
           error: `Thời gian đặt lịch (${dStr} ${normTime} giờ VN - 24h) đã qua hoặc trùng với thời điểm hiện tại. Vui lòng chọn thời gian trong tương lai!`
         };
       }
       if (schedUtcMillis < nowUtcMillis + 60000) {
         return {
           valid: false,
+          isPast: true,
+          fieldErrors: {
+            schedule_time: 'Thời gian đặt lịch phải cách hiện tại tối thiểu 1 phút.'
+          },
           error: `Thời gian đặt lịch (${dStr} ${normTime} giờ VN - 24h) phải cách thời điểm hiện tại tối thiểu 1 phút!`
         };
       }
@@ -1521,6 +1651,7 @@
     }
 
     async function handleCreateSingleTaskSubmit() {
+      clearSingleScheduleErrors();
       if (isUploadingVideo.value) {
         showToast("Video đang được tải lên Cloudflare R2. Vui lòng chờ hoàn tất trước khi lưu Task!", "warning");
         return;
@@ -1534,18 +1665,23 @@
         showToast("Video chưa tải lên R2 thành công. Vui lòng nhấn 'Thử tải lại lên R2'!", "error");
         return;
       }
-      if (singleTaskForm.value.schedule_date || singleTaskForm.value.schedule_time) {
-        const val = validateVnScheduleClient(
-          singleTaskForm.value.schedule_date,
-          singleTaskForm.value.schedule_time
-        );
-        if (!val.valid) {
-          showToast(val.error, "error");
-          return;
-        }
-        singleTaskForm.value.schedule_date = val.normalizedDate;
-        singleTaskForm.value.schedule_time = val.normalizedTime;
+      const val = validateVnScheduleClient(
+        singleTaskForm.value.schedule_date,
+        singleTaskForm.value.schedule_time,
+        true
+      );
+      if (!val.valid) {
+        singleScheduleErrors.value = {
+          schedule_date: (val.fieldErrors && val.fieldErrors.schedule_date) || '',
+          schedule_time: (val.fieldErrors && val.fieldErrors.schedule_time) || '',
+          general: val.isPast ? val.error : ''
+        };
+        showToast(val.error, "error");
+        return;
       }
+      singleTaskForm.value.schedule_date = val.normalizedDate;
+      singleTaskForm.value.schedule_time = val.normalizedTime;
+
       try {
         const payload = {
           facebook_page_id: singleTaskForm.value.facebook_page_id,
@@ -1554,21 +1690,27 @@
           object_key: singleTaskForm.value.object_key || undefined,
           caption: singleTaskForm.value.caption || "",
           comment_text: singleTaskForm.value.comment_text || "",
-          schedule_date: singleTaskForm.value.schedule_date || "",
-          schedule_time: singleTaskForm.value.schedule_time || "",
-          publish_mode: (singleTaskForm.value.schedule_date || singleTaskForm.value.schedule_time) ? "scheduled" : "now"
+          schedule_date: singleTaskForm.value.schedule_date,
+          schedule_time: singleTaskForm.value.schedule_time
         };
-        const res = await fetch('/api/tasks', {
+        const res = await apiFetch('/api/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok) {
-          showToast("Đã tạo task thành công!", "success");
+          showToast("Đã tạo task hẹn lịch thành công!", "success");
           showSingleTaskModal.value = false;
           await loadAll();
         } else {
+          if (data.field_errors) {
+            singleScheduleErrors.value = {
+              schedule_date: data.field_errors.schedule_date || '',
+              schedule_time: data.field_errors.schedule_time || '',
+              general: data.is_past ? (data.detail || '') : ''
+            };
+          }
           showToast(data.detail || "Tạo task thất bại.", "error");
         }
       } catch (err) {
@@ -1650,24 +1792,35 @@
       }
     }
 
+    function autoFillBulkSchedules(intervalMinutes = 10) {
+      const step = Math.max(1, Number(intervalMinutes) || 10);
+      for (let i = 0; i < bulkParsedList.value.length; i++) {
+        const item = bulkParsedList.value[i];
+        if (!item.schedule_date || !item.schedule_time) {
+          const slot = getVnNowParts(15 + i * step);
+          item.schedule_date = slot.date;
+          item.schedule_time = slot.time;
+        }
+      }
+      showToast(`Đã tự động điền lịch đăng cách đều ${step} phút cho các dòng!`, "info");
+    }
+
     async function handleBulkSubmit() {
       if (bulkParsedList.value.length === 0) {
         showToast("Không có dòng dữ liệu hợp lệ nào để nhập!", "warning");
         return;
       }
 
-      // Kiểm tra hợp lệ lịch hẹn của từng dòng (nếu có)
+      // Kiểm tra bắt buộc lịch hẹn hợp lệ của từng dòng
       for (let i = 0; i < bulkParsedList.value.length; i++) {
         const item = bulkParsedList.value[i];
-        if (item.schedule_date || item.schedule_time) {
-          const val = validateVnScheduleClient(item.schedule_date, item.schedule_time);
-          if (!val.valid) {
-            showToast(`Dòng ${i + 1}: ${val.error}`, "error");
-            return;
-          }
-          item.schedule_date = val.normalizedDate;
-          item.schedule_time = val.normalizedTime;
+        const val = validateVnScheduleClient(item.schedule_date, item.schedule_time, true);
+        if (!val.valid) {
+          showToast(`Dòng ${i + 1}: ${val.error} (Bạn có thể bấm nút "Tự động điền lịch cách đều" ở trên bảng xem trước)`, "error");
+          return;
         }
+        item.schedule_date = val.normalizedDate;
+        item.schedule_time = val.normalizedTime;
       }
 
       // Xác định danh sách Page được gán
@@ -1698,7 +1851,7 @@
           tasks: bulkParsedList.value,
           assign_page_ids: assignPageIds
         };
-        const res = await fetch('/api/tasks/bulk', {
+        const res = await apiFetch('/api/tasks/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -1731,14 +1884,15 @@
         showToast("Task đang trong tiến trình đăng Reels, không thể chỉnh sửa lúc này.", "warning");
         return;
       }
+      const defSched = getVnNowParts(15);
       editTaskForm.value = {
         id: t.id,
         facebook_page_id: t.facebook_page_id || '',
         video_path: t.video_path || '',
         caption: t.caption || '',
         comment_text: t.comment_text || '',
-        schedule_date: t.schedule_date || '',
-        schedule_time: t.schedule_time || ''
+        schedule_date: t.schedule_date || defSched.date,
+        schedule_time: t.schedule_time || defSched.time
       };
       showEditTaskModal.value = true;
     }
@@ -1750,27 +1904,26 @@
         showEditTaskModal.value = false;
         return;
       }
-      if (editTaskForm.value.schedule_date || editTaskForm.value.schedule_time) {
-        const val = validateVnScheduleClient(
-          editTaskForm.value.schedule_date,
-          editTaskForm.value.schedule_time
-        );
-        if (!val.valid) {
-          showToast(val.error, "error");
-          return;
-        }
-        editTaskForm.value.schedule_date = val.normalizedDate;
-        editTaskForm.value.schedule_time = val.normalizedTime;
+      const val = validateVnScheduleClient(
+        editTaskForm.value.schedule_date,
+        editTaskForm.value.schedule_time,
+        true
+      );
+      if (!val.valid) {
+        showToast(val.error, "error");
+        return;
       }
+      editTaskForm.value.schedule_date = val.normalizedDate;
+      editTaskForm.value.schedule_time = val.normalizedTime;
+
       try {
         const payload = {
           facebook_page_id: editTaskForm.value.facebook_page_id,
           video_path: editTaskForm.value.video_path.trim(),
           caption: editTaskForm.value.caption || "",
           comment_text: editTaskForm.value.comment_text || "",
-          schedule_date: editTaskForm.value.schedule_date || "",
-          schedule_time: editTaskForm.value.schedule_time || "",
-          publish_mode: (editTaskForm.value.schedule_date || editTaskForm.value.schedule_time) ? "scheduled" : "now"
+          schedule_date: editTaskForm.value.schedule_date,
+          schedule_time: editTaskForm.value.schedule_time
         };
         const res = await apiFetch(`/api/tasks/${editTaskForm.value.id}`, {
           method: 'PUT',
@@ -1787,6 +1940,169 @@
         }
       } catch (err) {
         showToast("Lỗi cập nhật task: " + err.message, "error");
+      }
+    }
+
+    async function handlePublishSingleTaskNow(t) {
+      if (!t || !t.id || publishingNowTaskId.value) return;
+      if (isTaskLocked(t)) {
+        showToast("Task này đã đăng thành công và đã được khóa, không thể đăng lại.", "warning");
+        return;
+      }
+      if (isTaskInFlight(t)) {
+        showToast("Task đang trong tiến trình đăng Reels.", "warning");
+        return;
+      }
+      publishingNowTaskId.value = t.id;
+      try {
+        const res = await apiFetch(`/api/tasks/${t.id}/publish-now`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(data.message || `Đã cập nhật lịch về hiện tại và đưa Task #${t.id} vào hàng đợi xuất bản ngay!`, "success");
+          await Promise.allSettled([loadTasks(), loadStats()]);
+        } else {
+          showToast(data.detail || data.message || "Không thể đăng ngay task này.", "error");
+          await loadTasks();
+        }
+      } catch (err) {
+        showToast("Lỗi khi gửi lệnh Đăng ngay: " + err.message, "error");
+      } finally {
+        publishingNowTaskId.value = null;
+      }
+    }
+
+    function selectAllFilteredTasks() {
+      selectedTaskIds.value = tasks.value
+        .filter(t => !isTaskLocked(t) && !isTaskInFlight(t))
+        .map(t => t.id);
+    }
+
+    function openBulkPublishConfirmModal() {
+      if (selectedTaskIds.value.length === 0) {
+        showToast("Vui lòng chọn ít nhất một task để đăng ngay.", "warning");
+        return;
+      }
+      showBulkPublishModal.value = true;
+    }
+
+    async function confirmBulkPublishNow() {
+      if (isBulkPublishingTasks.value) return;
+      const eligibleIds = bulkPublishPreview.value.eligible.map(t => t.id);
+      if (eligibleIds.length === 0) {
+        showToast("Không có task nào hợp lệ để đăng ngay.", "warning");
+        showBulkPublishModal.value = false;
+        return;
+      }
+      isBulkPublishingTasks.value = true;
+      try {
+        const res = await apiFetch('/api/tasks/bulk-publish-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_ids: selectedTaskIds.value })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(data.message || `Đã đưa ${data.eligible_count} task vào hàng đợi Đăng ngay!`, "success");
+          showBulkPublishModal.value = false;
+          selectedTaskIds.value = [];
+          await Promise.allSettled([loadTasks(), loadStats()]);
+        } else {
+          showToast(data.detail || data.message || "Không thể đăng ngay các task đã chọn.", "error");
+          await loadTasks();
+        }
+      } catch (err) {
+        showToast("Lỗi khi đăng ngay hàng loạt: " + err.message, "error");
+      } finally {
+        isBulkPublishingTasks.value = false;
+      }
+    }
+
+    function openBulkRescheduleModal() {
+      if (selectedTaskIds.value.length === 0) {
+        showToast("Vui lòng chọn ít nhất một task để đổi lịch đăng.", "warning");
+        return;
+      }
+      const nextSlot = getVnNowParts(15);
+      bulkRescheduleForm.value = {
+        schedule_date: nextSlot.date,
+        schedule_time: nextSlot.time,
+        interval_minutes: selectedTaskIds.value.length > 1 ? 10 : 0
+      };
+      showBulkRescheduleModal.value = true;
+    }
+
+    function setBulkRescheduleRelativePreset(offsetMinutes = 5) {
+      const slot = getVnNowParts(offsetMinutes);
+      bulkRescheduleForm.value.schedule_date = slot.date;
+      bulkRescheduleForm.value.schedule_time = slot.time;
+    }
+
+    async function handleBulkRescheduleSubmit() {
+      if (isBulkReschedulingTasks.value) return;
+      const val = validateVnScheduleClient(
+        bulkRescheduleForm.value.schedule_date,
+        bulkRescheduleForm.value.schedule_time,
+        true
+      );
+      if (!val.valid) {
+        showToast(val.error, "error");
+        return;
+      }
+      isBulkReschedulingTasks.value = true;
+      try {
+        const res = await apiFetch('/api/tasks/bulk-reschedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_ids: selectedTaskIds.value,
+            schedule_date: val.normalizedDate,
+            schedule_time: val.normalizedTime,
+            interval_minutes: Number(bulkRescheduleForm.value.interval_minutes) || 0
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(data.message || `Đã cập nhật lịch đăng mới cho ${data.updated_count} task!`, "success");
+          showBulkRescheduleModal.value = false;
+          selectedTaskIds.value = [];
+          await Promise.allSettled([loadTasks(), loadStats()]);
+        } else {
+          showToast(data.detail || data.message || "Không thể đổi lịch các task đã chọn.", "error");
+        }
+      } catch (err) {
+        showToast("Lỗi khi đổi lịch hàng loạt: " + err.message, "error");
+      } finally {
+        isBulkReschedulingTasks.value = false;
+      }
+    }
+
+    async function handleBulkCancelSelectedTasks() {
+      if (isBulkCancellingTasks.value || selectedTaskIds.value.length === 0) return;
+      if (!confirm(`Bạn có chắc chắn muốn hủy lịch chờ đăng của ${selectedTaskIds.value.length} task đã chọn không?`)) {
+        return;
+      }
+      isBulkCancellingTasks.value = true;
+      try {
+        const res = await apiFetch('/api/tasks/bulk-cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_ids: selectedTaskIds.value })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(data.message || `Đã hủy lịch ${data.cancelled_count} task.`, "success");
+          selectedTaskIds.value = [];
+          await Promise.allSettled([loadTasks(), loadStats()]);
+        } else {
+          showToast(data.detail || data.message || "Không thể hủy lịch các task đã chọn.", "error");
+        }
+      } catch (err) {
+        showToast("Lỗi khi hủy lịch hàng loạt: " + err.message, "error");
+      } finally {
+        isBulkCancellingTasks.value = false;
       }
     }
 
@@ -1969,13 +2285,17 @@
         comment_text: t.comment_text || '',
         comment_status: t.comment_status || 'none',
         comment_id: t.comment_id || '',
-        comment_log: t.comment_log || ''
+        comment_log: t.comment_log || '',
+        audit_logs: []
       };
       showLogModal.value = true;
       try {
-        const res = await apiFetch(`/api/tasks/${t.id}/logs`);
-        if (res.ok) {
-          const data = await res.json();
+        const [logsRes, auditRes] = await Promise.allSettled([
+          apiFetch(`/api/tasks/${t.id}/logs`),
+          apiFetch(`/api/tasks/${t.id}/audit-logs`)
+        ]);
+        if (logsRes.status === 'fulfilled' && logsRes.value.ok) {
+          const data = await logsRes.value.json();
           if (Array.isArray(data.logs) && data.logs.length > 0) {
             const historyLines = data.logs.map(
               l => `[${l.created_at}] [${l.level}] (${l.stage}) ${l.message}`
@@ -1983,6 +2303,12 @@
             currentLogTask.value.log =
               `${t.log || ''}\n\n--- LỊCH SỬ GIAI ĐOẠN (QUEUE & GRAPH API) ---\n` +
               historyLines.join('\n');
+          }
+        }
+        if (auditRes.status === 'fulfilled' && auditRes.value.ok) {
+          const aData = await auditRes.value.json();
+          if (Array.isArray(aData.audit_logs)) {
+            currentLogTask.value.audit_logs = aData.audit_logs;
           }
         }
       } catch (e) {
@@ -2436,13 +2762,37 @@
       tasks,
       accounts,
       expiredAccounts,
+      expiredAccountNames,
       missingInsightsAccounts,
       selectedAdminFilterIds,
       searchPage,
       filterPageStatus,
       filterPage,
       filterStatus,
+      filterStartDate,
+      filterEndDate,
       searchTask,
+      publishingNowTaskId,
+      isBulkPublishingTasks,
+      isBulkReschedulingTasks,
+      isBulkCancellingTasks,
+      showBulkPublishModal,
+      showBulkRescheduleModal,
+      bulkRescheduleForm,
+      bulkPublishPreview,
+      bulkReschedulePreviewList,
+      selectableTasksCount,
+      singleScheduleErrors,
+      clearSingleScheduleErrors,
+      autoFillBulkSchedules,
+      handlePublishSingleTaskNow,
+      selectAllFilteredTasks,
+      openBulkPublishConfirmModal,
+      confirmBulkPublishNow,
+      openBulkRescheduleModal,
+      setBulkRescheduleRelativePreset,
+      handleBulkRescheduleSubmit,
+      handleBulkCancelSelectedTasks,
       metaStatus,
       isSyncingPages,
       isRunningTest,
@@ -2584,6 +2934,10 @@
     };
   }
 });
+
+    app.config.errorHandler = function (err, _instance, info) {
+      console.error("[Vue Render/Runtime Guard]", info, err);
+    };
 
     app.mount('#app');
     clearTimeout(timeoutHintTimer);

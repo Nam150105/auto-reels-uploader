@@ -43,7 +43,11 @@ import {
   getTaskAttempts,
   updateTaskCommentState,
   appendTaskStageLog,
-  TaskLockError
+  TaskLockError,
+  ScheduleValidationError,
+  rescheduleTasksBulk,
+  cancelTasksBulk,
+  getTaskAuditLogs
 } from "./db.ts";
 import {
   getReelsAnalyticsDashboard,
@@ -65,7 +69,8 @@ import {
   validateVideoSource,
   runDiagnosticTest,
   connectFacebookWithAccessToken,
-  postReelCommentViaGraphApi
+  postReelCommentViaGraphApi,
+  getMetaApiTelemetrySummary
 } from "./services/metaGraphService.ts";
 import { deleteUserVideo, getR2Bucket, cleanupExpiredR2Media } from "./services/r2MediaService.ts";
 import {
@@ -79,6 +84,7 @@ import {
 } from "./middleware/auth.ts";
 import {
   enqueueUserPendingTasks,
+  publishSelectedTasksNow,
   handleNativeQueueBatch
 } from "./queue/publishQueue.ts";
 import { dispatchDueScheduledTasks } from "./scheduler/cronDispatcher.ts";
@@ -805,6 +811,8 @@ export async function handleWorkerRequest(
         url.searchParams.get("profile_id");
       const status = url.searchParams.get("status");
       const search = url.searchParams.get("search");
+      const startDate = url.searchParams.get("start_date");
+      const endDate = url.searchParams.get("end_date");
       const accountIdsRaw = url.searchParams.get("account_ids") || "";
       const accountIds = accountIdsRaw
         .split(",")
@@ -815,6 +823,8 @@ export async function handleWorkerRequest(
         facebookPageId,
         status,
         search,
+        startDate,
+        endDate,
         accountIds,
         ownerUserId
       });
@@ -832,6 +842,7 @@ export async function handleWorkerRequest(
         comment_text?: string;
         schedule_date?: string;
         schedule_time?: string;
+        allow_past?: boolean;
       };
       const vPath = (body.video_path || "").trim();
       if (!vPath) {
@@ -855,14 +866,25 @@ export async function handleWorkerRequest(
         }
       }
 
-      // Kiểm tra hợp lệ lịch hẹn (nếu có nhập)
-      if (body.schedule_date || body.schedule_time) {
-        const schedCheck = parseVnScheduleToUtc(body.schedule_date, body.schedule_time, {
-          minLeadSeconds: 60
-        });
-        if (!schedCheck.isValid) {
-          return jsonResponse({ detail: schedCheck.error }, 400);
-        }
+      // BẮT BUỘC NHẬP NGÀY VÀ GIỜ ĐĂNG (Phần 1.2): Không cho phép bỏ trống, không tự động coi rỗng là đăng ngay
+      const schedCheck = parseVnScheduleToUtc(body.schedule_date, body.schedule_time, {
+        minLeadSeconds: 60,
+        requireSchedule: true,
+        allowPast: Boolean(body.allow_past)
+      });
+      if (!schedCheck.isValid) {
+        return jsonResponse(
+          {
+            error_code: schedCheck.isPast ? "PAST_SCHEDULE_TIME" : "SCHEDULE_REQUIRED",
+            detail: schedCheck.error,
+            message: schedCheck.error,
+            field_errors: schedCheck.fieldErrors,
+            is_past: Boolean(schedCheck.isPast),
+            missing_date: Boolean(schedCheck.missingDate),
+            missing_time: Boolean(schedCheck.missingTime)
+          },
+          400
+        );
       }
 
       // Tự động phân giải & xác minh media_id, object_key trên R2 trước khi cho phép tạo Task
@@ -921,19 +943,39 @@ export async function handleWorkerRequest(
 
       let taskId: number;
       try {
-        taskId = await addTask(db, {
-          videoPath: effectiveVideoPath,
-          caption: body.caption || "",
-          commentText: body.comment_text || "",
-          scheduleDate: body.schedule_date || "",
-          scheduleTime: body.schedule_time || "",
-          facebookPageId: targetPageId,
-          profileId: body.profile_id || targetPageId,
-          mediaId,
-          objectKey,
-          ownerUserId
-        });
+        taskId = await addTask(
+          db,
+          {
+            videoPath: effectiveVideoPath,
+            caption: body.caption || "",
+            commentText: body.comment_text || "",
+            scheduleDate: body.schedule_date || "",
+            scheduleTime: body.schedule_time || "",
+            facebookPageId: targetPageId,
+            profileId: body.profile_id || targetPageId,
+            mediaId,
+            objectKey,
+            ownerUserId
+          },
+          {
+            allowPast: Boolean(body.allow_past)
+          }
+        );
       } catch (err: any) {
+        if (err instanceof ScheduleValidationError) {
+          return jsonResponse(
+            {
+              error_code: err.code,
+              detail: err.message,
+              message: err.message,
+              field_errors: err.fieldErrors,
+              is_past: err.isPast,
+              missing_date: err.missingDate,
+              missing_time: err.missingTime
+            },
+            err.httpStatus
+          );
+        }
         return jsonResponse(
           { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
           400
@@ -958,6 +1000,7 @@ export async function handleWorkerRequest(
         }>;
         assign_page_ids?: string[];
         assign_profile_ids?: string[];
+        allow_past?: boolean;
       };
 
       const tasksList = body.tasks || [];
@@ -976,18 +1019,195 @@ export async function handleWorkerRequest(
       }
 
       try {
-        const inserted = await addTasksBulk(db, tasksList, assignIds, ownerUserId);
+        const inserted = await addTasksBulk(db, tasksList, assignIds, ownerUserId, {
+          allowPast: Boolean(body.allow_past)
+        });
         return jsonResponse({
           success: true,
           inserted_count: inserted.length,
           task_ids: inserted
         });
       } catch (err: any) {
+        if (err instanceof ScheduleValidationError) {
+          return jsonResponse(
+            {
+              error_code: err.code,
+              detail: err.message,
+              message: err.message,
+              field_errors: err.fieldErrors,
+              is_past: err.isPast,
+              missing_date: err.missingDate,
+              missing_time: err.missingTime
+            },
+            err.httpStatus
+          );
+        }
         return jsonResponse(
           { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
           400
         );
       }
+    }
+
+    const taskAuditLogsMatch = /^\/api\/tasks\/(\d+)\/audit-logs$/.exec(pathname);
+    if (taskAuditLogsMatch && method === "GET") {
+      const taskId = parseInt(taskAuditLogsMatch[1], 10);
+      const auditLogs = await getTaskAuditLogs(db, taskId, ownerUserId);
+      return jsonResponse({ task_id: taskId, audit_logs: auditLogs });
+    }
+
+    const taskPublishNowMatch = /^\/api\/tasks\/(\d+)\/(publish-now|publish)$/.exec(pathname);
+    if (taskPublishNowMatch && method === "POST") {
+      const taskId = parseInt(taskPublishNowMatch[1], 10);
+      const res = await publishSelectedTasksNow(db, env, ctx, {
+        taskIds: [taskId],
+        ownerUserId,
+        actorUserId: ownerUserId,
+        triggerSource: "manual_publish_now"
+      });
+
+      if (!res.success) {
+        const skipItem = res.skipped[0];
+        if (skipItem?.code === "NOT_FOUND") {
+          return jsonResponse({ detail: skipItem.reason, error_code: skipItem.code }, 404);
+        }
+        if (skipItem?.code === "TASK_ALREADY_PUBLISHED") {
+          return jsonResponse(
+            {
+              error_code: "TASK_LOCKED_AFTER_PUBLISH",
+              detail: skipItem.reason,
+              message: skipItem.reason,
+              locked: true
+            },
+            409
+          );
+        }
+        if (skipItem?.code === "TASK_IN_PROGRESS") {
+          return jsonResponse(
+            {
+              error_code: "TASK_IN_PROGRESS",
+              detail: skipItem.reason,
+              message: skipItem.reason
+            },
+            409
+          );
+        }
+        return jsonResponse(
+          {
+            error_code: skipItem?.code || "PUBLISH_NOW_FAILED",
+            detail: res.message,
+            message: res.message,
+            skipped: res.skipped
+          },
+          400
+        );
+      }
+
+      const updatedTask = await getTask(db, taskId, ownerUserId);
+      return jsonResponse({
+        ...res,
+        task: updatedTask
+      });
+    }
+
+    if (pathname === "/api/tasks/bulk-publish-now" && method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as { task_ids?: number[] };
+      const taskIds = Array.isArray(body.task_ids) ? body.task_ids : [];
+      if (taskIds.length === 0) {
+        return jsonResponse({ detail: "Vui lòng chọn ít nhất một task để đăng ngay." }, 400);
+      }
+      const res = await publishSelectedTasksNow(db, env, ctx, {
+        taskIds,
+        ownerUserId,
+        actorUserId: ownerUserId,
+        triggerSource: "bulk_publish_now"
+      });
+      return jsonResponse(res, res.success ? 200 : 400);
+    }
+
+    if (pathname === "/api/tasks/bulk-reschedule" && method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as {
+        task_ids?: number[];
+        schedule_date?: string;
+        schedule_time?: string;
+        new_schedule_date?: string;
+        new_schedule_time?: string;
+        interval_minutes?: number;
+        allow_past?: boolean;
+      };
+      const taskIds = Array.isArray(body.task_ids) ? body.task_ids : [];
+      if (taskIds.length === 0) {
+        return jsonResponse({ detail: "Vui lòng chọn ít nhất một task để đổi lịch đăng." }, 400);
+      }
+      try {
+        const res = await rescheduleTasksBulk(db, {
+          taskIds,
+          scheduleDate: body.new_schedule_date || body.schedule_date || "",
+          scheduleTime: body.new_schedule_time || body.schedule_time || "",
+          intervalMinutes: Number(body.interval_minutes) || 0,
+          allowPast: Boolean(body.allow_past),
+          ownerUserId,
+          actorUserId: ownerUserId
+        });
+        return jsonResponse(
+          {
+            success: res.updatedCount > 0,
+            updated_count: res.updatedCount,
+            rescheduled_count: res.updatedCount,
+            updated_tasks: res.updatedTasks,
+            skipped_tasks: res.skippedTasks,
+            skipped: res.skippedTasks,
+            message:
+              res.updatedCount > 0
+                ? `Đã cập nhật lịch đăng cho ${res.updatedCount} task${res.skippedTasks.length > 0 ? ` (Bỏ qua ${res.skippedTasks.length} task không hợp lệ)` : ""}.`
+                : res.skippedTasks[0]?.reason || "Không có task nào đủ điều kiện đổi lịch."
+          },
+          res.updatedCount > 0 ? 200 : 400
+        );
+      } catch (err: any) {
+        if (err instanceof ScheduleValidationError) {
+          return jsonResponse(
+            {
+              error_code: err.code,
+              detail: err.message,
+              message: err.message,
+              field_errors: err.fieldErrors,
+              is_past: err.isPast,
+              missing_date: err.missingDate,
+              missing_time: err.missingTime
+            },
+            err.httpStatus
+          );
+        }
+        return jsonResponse({ detail: err?.message || "Không thể đổi lịch đăng." }, 400);
+      }
+    }
+
+    if (pathname === "/api/tasks/bulk-cancel" && method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as { task_ids?: number[] };
+      const taskIds = Array.isArray(body.task_ids) ? body.task_ids : [];
+      if (taskIds.length === 0) {
+        return jsonResponse({ detail: "Vui lòng chọn ít nhất một task để hủy lịch." }, 400);
+      }
+      const res = await cancelTasksBulk(db, {
+        taskIds,
+        ownerUserId,
+        actorUserId: ownerUserId
+      });
+      return jsonResponse(
+        {
+          success: res.cancelledCount > 0,
+          cancelled_count: res.cancelledCount,
+          cancelled_task_ids: res.cancelledTaskIds,
+          skipped_tasks: res.skippedTasks,
+          skipped: res.skippedTasks,
+          message:
+            res.cancelledCount > 0
+              ? `Đã hủy lịch ${res.cancelledCount} task${res.skippedTasks.length > 0 ? ` (Bỏ qua ${res.skippedTasks.length} task)` : ""}.`
+              : res.skippedTasks[0]?.reason || "Không có task nào có thể hủy lịch."
+        },
+        res.cancelledCount > 0 ? 200 : 400
+      );
     }
 
     const taskLogsMatch = /^\/api\/tasks\/(\d+)\/logs$/.exec(pathname);
@@ -1166,19 +1386,27 @@ export async function handleWorkerRequest(
         comment_text?: string;
         schedule_date?: string;
         schedule_time?: string;
+        allow_past?: boolean;
       };
       const pageId =
         body.facebook_page_id !== undefined ? body.facebook_page_id : body.profile_id;
       try {
-        const ok = await updateTask(db, taskId, {
-          facebookPageId: pageId,
-          videoPath: body.video_path,
-          caption: body.caption,
-          commentText: body.comment_text,
-          scheduleDate: body.schedule_date,
-          scheduleTime: body.schedule_time,
-          ownerUserId
-        });
+        const ok = await updateTask(
+          db,
+          taskId,
+          {
+            facebookPageId: pageId,
+            videoPath: body.video_path,
+            caption: body.caption,
+            commentText: body.comment_text,
+            scheduleDate: body.schedule_date,
+            scheduleTime: body.schedule_time,
+            ownerUserId
+          },
+          {
+            allowPast: Boolean(body.allow_past)
+          }
+        );
         if (!ok) {
           return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
         }
@@ -1192,6 +1420,20 @@ export async function handleWorkerRequest(
               detail: err.message,
               message: err.message,
               locked: true
+            },
+            err.httpStatus
+          );
+        }
+        if (err instanceof ScheduleValidationError) {
+          return jsonResponse(
+            {
+              error_code: err.code,
+              detail: err.message,
+              message: err.message,
+              field_errors: err.fieldErrors,
+              is_past: err.isPast,
+              missing_date: err.missingDate,
+              missing_time: err.missingTime
             },
             err.httpStatus
           );
@@ -1401,6 +1643,14 @@ export async function handleWorkerRequest(
         success: true,
         reset_tasks: resetCount,
         message: `Đã dừng các tác vụ đang chờ/xử lý và đặt lại ${resetCount} tác vụ về trạng thái chờ.`
+      });
+    }
+
+    if (pathname === "/api/system/api-telemetry" && method === "GET") {
+      const summary = await getMetaApiTelemetrySummary(db);
+      return jsonResponse({
+        success: true,
+        ...summary
       });
     }
 

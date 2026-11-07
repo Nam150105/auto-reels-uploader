@@ -76,3 +76,4 @@ CREATE INDEX IF NOT EXISTS idx_reel_snapshots_task
 
 CREATE INDEX IF NOT EXISTS idx_reel_metrics_owner_task
   ON reel_insight_metric_items(owner_user_id, task_id);
+

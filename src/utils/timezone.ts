@@ -167,6 +167,7 @@ export function parseVnScheduleToUtc(
     minLeadSeconds?: number;
     allowPast?: boolean;
     referenceNowUtc?: number;
+    requireSchedule?: boolean;
   }
 ): {
   scheduledAtUtc: number | null;
@@ -174,18 +175,40 @@ export function parseVnScheduleToUtc(
   normalizedTime?: string;
   isValid: boolean;
   isPast?: boolean;
+  missingDate?: boolean;
+  missingTime?: boolean;
+  fieldErrors?: { schedule_date?: string; schedule_time?: string };
   error?: string;
 } {
   let dStr = (scheduleDate || "").trim();
   const tStr = (scheduleTime || "").trim();
 
   if (!dStr && !tStr) {
+    if (options?.requireSchedule) {
+      return {
+        scheduledAtUtc: null,
+        isValid: false,
+        missingDate: true,
+        missingTime: true,
+        fieldErrors: {
+          schedule_date: "Vui lòng nhập ngày đăng (YYYY-MM-DD hoặc DD/MM/YYYY).",
+          schedule_time: "Vui lòng nhập giờ đăng (HH:MM 24h)."
+        },
+        error: "Bắt buộc nhập đầy đủ cả Ngày đăng và Giờ đăng (không được để trống)."
+      };
+    }
     return { scheduledAtUtc: null, normalizedDate: "", normalizedTime: "", isValid: true };
   }
   if (!dStr || !tStr) {
     return {
       scheduledAtUtc: null,
       isValid: false,
+      missingDate: !dStr,
+      missingTime: !tStr,
+      fieldErrors: {
+        schedule_date: !dStr ? "Vui lòng nhập ngày đăng (YYYY-MM-DD hoặc DD/MM/YYYY)." : undefined,
+        schedule_time: !tStr ? "Vui lòng nhập giờ đăng (HH:MM 24h)." : undefined
+      },
       error: "Phải nhập đầy đủ cả Ngày đăng (YYYY-MM-DD) và Giờ đăng (HH:MM 24h) theo giờ Việt Nam."
     };
   }

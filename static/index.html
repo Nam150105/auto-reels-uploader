@@ -145,25 +145,13 @@
         </button>
       </div>
 
-      <!-- Runner Controls + User Profile -->
+      <!-- Scheduler Status + User Profile -->
       <div class="flex items-center gap-2.5">
-        <!-- Trạng thái runner -->
-        <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700">
-          <span class="h-2 w-2 rounded-full" :class="isRunning ? 'bg-blue-400 animate-ping' : 'bg-slate-400'"></span>
-          <span>{{ isRunning ? 'Đang chạy' : 'Đang rảnh' }}</span>
+        <!-- Trạng thái xử lý tự động & hàng đợi -->
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-950/90 text-slate-300 border border-slate-800" title="Hệ thống tự động đăng theo lịch hẹn của từng task hoặc khi bạn bấm Đăng ngay trên từng task">
+          <span class="h-2 w-2 rounded-full" :class="isRunning || systemStats.running_tasks > 0 ? 'bg-blue-400 animate-ping' : 'bg-emerald-400'"></span>
+          <span>{{ (isRunning || systemStats.running_tasks > 0) ? ('Đang xử lý ' + (systemStats.running_tasks || 1) + ' task...') : 'Scheduler: Tự động theo lịch' }}</span>
         </div>
-
-        <!-- Nút RUN TASK: Đăng thật lên Graph API -->
-        <button @click="handleRunBatch" :disabled="isRunning || systemStats.selected_pages === 0" class="flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold px-3.5 py-1.5 rounded-xl shadow-lg shadow-emerald-950/40 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-xs" title="Upload và Đăng Reels thật cho các Fanpage đã chọn qua Meta Graph API">
-          <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M4.5 3.5v13l11-6.5-11-6.5z"/></svg>
-          <span>Đăng Reels</span>
-        </button>
-
-        <!-- Nút DỪNG KHẨN CẤP -->
-        <button @click="handleStopBatch" :disabled="!isRunning" class="flex items-center gap-1 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold px-3 py-1.5 rounded-xl shadow-lg shadow-rose-950/40 transition active:scale-95 text-xs" title="Dừng ngay lập tức các luồng đang xử lý">
-          <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M5 4h10v12H5V4z"/></svg>
-          <span>Dừng</span>
-        </button>
 
         <!-- User Profile & Logout Widget -->
         <div v-if="currentUser" class="flex items-center gap-2 bg-slate-950/90 p-1.5 px-3 rounded-xl border border-slate-800 ml-1">
@@ -205,7 +193,7 @@
         <span class="text-base">⚠️</span>
         <div>
           <div class="font-bold text-amber-300">
-            Access Token đã hết hạn hoặc không còn hợp lệ ({{ expiredAccounts.map(a => a.user_name || a.user_id).join(', ') }})
+            Access Token đã hết hạn hoặc không còn hợp lệ ({{ expiredAccountNames }})
           </div>
           <div class="text-[11px] text-amber-200/90">
             Access Token của bạn đã hết hạn hoặc không còn hợp lệ. Vui lòng tạo lại Access Token trong Graph API Explorer và cập nhật vào hệ thống. Toàn bộ Fanpage, lịch sử bài đăng và thống kê sẽ được giữ nguyên.
@@ -213,7 +201,7 @@
         </div>
       </div>
       <div class="flex items-center gap-2 shrink-0">
-        <button @click="openConnectModal(expiredAccounts[0]?.id)" class="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold transition shadow-md">
+        <button @click="openConnectModal(expiredAccounts[0] ? expiredAccounts[0].id : null)" class="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold transition shadow-md">
           🔑 Cập nhật Access Token
         </button>
       </div>
@@ -459,13 +447,13 @@
         :class="{ 'hidden md:flex': currentTab !== 'schedules' }">
         
         <!-- Task Action Toolbar -->
-        <div class="p-3 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-3">
+        <div class="p-3 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-2.5">
           
           <!-- Filters & Search -->
-          <div class="flex items-center gap-2.5 flex-wrap">
+          <div class="flex items-center gap-2 flex-wrap">
             <div class="flex items-center gap-1.5 text-xs text-slate-400">
               <span>Fanpage:</span>
-              <select v-model="filterPage" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 max-w-[180px]">
+              <select v-model="filterPage" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 max-w-[170px]">
                 <option value="">Tất cả Fanpage</option>
                 <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">{{ p.name }}</option>
               </select>
@@ -474,17 +462,26 @@
             <div class="flex items-center gap-1.5 text-xs text-slate-400">
               <select v-model="filterStatus" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
                 <option value="">Tất cả trạng thái</option>
-                <option value="scheduled">Đang chờ lịch (Scheduled)</option>
-                <option value="pending">Chờ đăng (Pending)</option>
-                <option value="queued">Hàng đợi (Queued)</option>
-                <option value="running">Đang đăng (Running)</option>
-                <option value="success">Thành công (Success)</option>
-                <option value="failed">Thất bại (Failed)</option>
+                <option value="scheduled">🕒 Chờ đăng (Scheduled)</option>
+                <option value="due_soon">⏰ Sắp đến giờ (&le; 15 phút)</option>
+                <option value="needs_schedule">⚠️ Cần bổ sung lịch</option>
+                <option value="queued">⏳ Đang chờ hàng đợi (Queued)</option>
+                <option value="running">🔄 Đang xử lý (Running)</option>
+                <option value="success">✅ Thành công (Đã khóa)</option>
+                <option value="failed">❌ Thất bại (Cần xử lý)</option>
+                <option value="cancelled">🚫 Đã hủy</option>
               </select>
             </div>
 
+            <div class="flex items-center gap-1 text-xs text-slate-400" title="Lọc theo khoảng ngày đăng">
+              <input type="date" v-model="filterStartDate" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-white font-mono focus:outline-none focus:border-blue-500" title="Từ ngày">
+              <span class="text-slate-600">→</span>
+              <input type="date" v-model="filterEndDate" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-white font-mono focus:outline-none focus:border-blue-500" title="Đến ngày">
+              <button v-if="filterStartDate || filterEndDate" @click="filterStartDate = ''; filterEndDate = ''; loadTasks()" class="text-slate-400 hover:text-white px-1 text-xs" title="Xóa lọc ngày">&times;</button>
+            </div>
+
             <div class="relative">
-              <input type="text" v-model="searchTask" @input="loadTasks" placeholder="Tìm caption, video, id..." class="w-44 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 pl-7 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+              <input type="text" v-model="searchTask" @input="loadTasks" placeholder="Tìm caption, video, ID, Page..." class="w-44 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 pl-7 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
               <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2 top-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
             </div>
           </div>
@@ -508,24 +505,54 @@
 
         </div>
 
-        <!-- Bulk Selection Action Bar -->
-        <div v-if="selectedTaskIds.length > 0" class="px-4 py-2 bg-blue-950/80 border-b border-blue-800/60 flex items-center justify-between text-xs transition">
-          <div class="flex items-center gap-2">
+        <!-- Bulk Selection Action Bar (Thanh công cụ thao tác hàng loạt) -->
+        <div v-if="selectedTaskIds.length > 0" class="px-4 py-2.5 bg-blue-950/85 border-b border-blue-800/70 flex flex-wrap items-center justify-between gap-2 text-xs transition shadow-inner">
+          <div class="flex items-center gap-2.5 flex-wrap">
             <span class="font-semibold text-blue-200 flex items-center gap-1.5">
               <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-              Đã chọn <b class="text-white">{{ selectedTaskIds.length }}</b> / {{ tasks.length }} task
+              Đã chọn <b class="text-white">{{ selectedTaskIds.length }}</b> / {{ selectableTasksCount }} task khả dụng
             </span>
-            <button @click="clearSelectedTasks" class="text-[11px] text-slate-400 hover:text-white underline ml-2 transition">
-              Bỏ chọn tất cả
+            <button v-if="!isAllTasksSelected && selectableTasksCount > selectedTaskIds.length"
+                    @click="selectAllFilteredTasks"
+                    class="text-[11px] text-cyan-300 hover:text-cyan-200 underline font-semibold transition">
+              Chọn tất cả {{ selectableTasksCount }} task trong bộ lọc
             </button>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
+            <!-- 1. Đăng ngay các task đã chọn -->
+            <button @click="openBulkPublishConfirmModal"
+                    :disabled="isBulkPublishingTasks"
+                    class="flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition shadow-md disabled:opacity-50"
+                    title="Tự động cập nhật lịch đăng về hiện tại và đăng ngay các task đã chọn">
+              <span>⚡ Đăng ngay ({{ selectedTaskIds.length }})</span>
+            </button>
+
+            <!-- 2. Đổi lịch đăng hàng loạt -->
+            <button @click="openBulkRescheduleModal"
+                    class="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition shadow-md"
+                    title="Đổi ngày giờ đăng hoặc đặt lịch cách đều tự động cho các task đã chọn">
+              <span>📅 Đổi lịch đăng</span>
+            </button>
+
+            <!-- 3. Hủy lịch hàng loạt -->
+            <button @click="handleBulkCancelSelectedTasks"
+                    :disabled="isBulkCancellingTasks"
+                    class="flex items-center gap-1.5 bg-amber-600/90 hover:bg-amber-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition shadow-md disabled:opacity-50"
+                    title="Hủy lịch chờ đăng của các task đã chọn">
+              <span>{{ isBulkCancellingTasks ? 'Đang hủy...' : '🚫 Hủy lịch' }}</span>
+            </button>
+
+            <!-- 4. Xóa các task đã chọn -->
             <button @click="handleBulkDeleteSelectedTasks"
                     :disabled="isBulkDeletingTasks"
                     class="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition shadow-md disabled:opacity-50">
-              <svg v-if="isBulkDeletingTasks" class="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-              <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-              <span>{{ isBulkDeletingTasks ? 'Đang xóa...' : 'Xóa ' + selectedTaskIds.length + ' task đã chọn' }}</span>
+              <span>{{ isBulkDeletingTasks ? 'Đang xóa...' : '🗑️ Xóa task' }}</span>
+            </button>
+
+            <!-- 5. Bỏ chọn -->
+            <button @click="clearSelectedTasks"
+                    class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold transition">
+              ✕ Bỏ chọn
             </button>
           </div>
         </div>
@@ -603,11 +630,18 @@
 
                 <!-- Schedule -->
                 <td class="py-2.5 px-3 whitespace-nowrap">
-                  <div v-if="t.schedule_date || t.schedule_time">
+                  <div v-if="t.schedule_date && t.schedule_time">
                     <div class="font-semibold text-slate-200">{{ t.schedule_date }}</div>
-                    <div class="text-[11px] font-mono text-slate-400">{{ t.schedule_time || '00:00' }}</div>
+                    <div class="text-[11px] font-mono text-cyan-300">{{ t.schedule_time }} (24h)</div>
+                    <div v-if="t.original_schedule_date && (t.trigger_source === 'manual_publish_now' || t.trigger_source === 'bulk_publish_now')"
+                         class="text-[9px] text-slate-500 font-mono mt-0.5"
+                         :title="'Lịch gốc trước khi bấm Đăng ngay: ' + t.original_schedule_date + ' ' + (t.original_schedule_time || '')">
+                      Gốc: {{ t.original_schedule_date }} {{ t.original_schedule_time }}
+                    </div>
                   </div>
-                  <div v-else class="text-slate-500">Đăng ngay</div>
+                  <div v-else class="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-bold inline-block">
+                    ⚠️ Cần bổ sung lịch
+                  </div>
                 </td>
 
                 <!-- Trạng thái (Tách biệt rõ ràng giữa R2 Storage, Đăng Reels & Đăng Bình luận) -->
@@ -622,13 +656,15 @@
 
                     <!-- Trạng thái Reels -->
                     <div>
-                      <span v-if="t.status === 'scheduled'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">🕒 Chờ lịch</span>
-                      <span v-else-if="t.status === 'queued'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">Hàng đợi</span>
-                      <span v-else-if="t.status === 'pending'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Chờ đăng</span>
-                      <span v-else-if="t.status === 'running'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/30 animate-pulse">Đang đăng Reels...</span>
-                      <span v-else-if="t.status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Reels: Thành công</span>
-                      <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">Reels: Thất bại</span>
-                      <span v-else-if="t.status === 'cancelled'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">Đã hủy</span>
+                      <span v-if="t.status === 'needs_schedule'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">⚠️ Cần bổ sung lịch</span>
+                      <span v-else-if="t.status === 'due_soon'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-orange-500/15 text-orange-300 border border-orange-500/30 animate-pulse">⏰ Sắp đến giờ</span>
+                      <span v-else-if="t.status === 'scheduled'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">🕒 Chờ đăng</span>
+                      <span v-else-if="t.status === 'queued'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">⏳ Hàng đợi</span>
+                      <span v-else-if="t.status === 'pending'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">🕒 Chờ đăng</span>
+                      <span v-else-if="t.status === 'running'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/30 animate-pulse">🔄 Đang đăng Reels...</span>
+                      <span v-else-if="t.status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">✅ Thành công</span>
+                      <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">❌ Thất bại</span>
+                      <span v-else-if="t.status === 'cancelled'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">🚫 Đã hủy</span>
                     </div>
 
                     <!-- Trạng thái khóa sau khi đăng -->
@@ -693,25 +729,39 @@
                         <span>📊 Thống kê</span>
                       </button>
                       <button @click="openLogModal(t)"
-                              title="Xem chi tiết task & lịch sử thực thi"
+                              title="Xem chi tiết task & lịch sử thao tác"
                               class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                       </button>
                     </template>
 
-                    <!-- Khi task chưa đăng thành công: Cho phép Sửa / Đặt lại / Xóa (khóa nếu đang chạy) -->
+                    <!-- Khi task chưa đăng thành công: Cho phép Đăng ngay / Sửa / Thử lại / Xem log / Xóa -->
                     <template v-else>
+                      <button @click="handlePublishSingleTaskNow(t)"
+                              :disabled="isTaskInFlight(t) || publishingNowTaskId === t.id"
+                              title="Đăng ngay lập tức (Tự động cập nhật lịch đăng về hiện tại và đưa vào hàng đợi xuất bản)"
+                              class="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600/35 text-emerald-300 border border-emerald-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition disabled:opacity-30 disabled:cursor-not-allowed">
+                        <svg v-if="publishingNowTaskId === t.id" class="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                        <span v-else>⚡</span>
+                        <span>{{ publishingNowTaskId === t.id ? 'Đang gửi...' : 'Đăng ngay' }}</span>
+                      </button>
                       <button @click="openEditTaskModal(t)"
                               :disabled="isTaskInFlight(t)"
-                              title="Sửa task"
+                              title="Sửa nội dung & lịch đăng task"
                               class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                       </button>
-                      <button @click="handleResetTask(t.id)"
+                      <button v-if="t.status === 'failed' || t.status === 'cancelled'"
+                              @click="handleResetTask(t.id)"
                               :disabled="isTaskInFlight(t)"
-                              title="Đặt lại về Pending"
-                              class="p-1 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
+                              title="Thử lại (Đặt lại về trạng thái Chờ đăng)"
+                              class="p-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 rounded transition disabled:opacity-30 disabled:cursor-not-allowed">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                      </button>
+                      <button @click="openLogModal(t)"
+                              title="Xem chi tiết task & lịch sử thao tác"
+                              class="p-1 text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded transition">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                       </button>
                       <button @click="handleDeleteTask(t.id)"
                               :disabled="isTaskInFlight(t)"
@@ -826,7 +876,7 @@
                 <li v-for="(w, idx) in insightsData.permission_warnings" :key="idx">{{ w }}</li>
               </ul>
             </div>
-            <button @click="openConnectModal(expiredAccounts[0]?.id || missingInsightsAccounts[0]?.id || null)"
+            <button @click="openConnectModal(expiredAccounts[0] ? expiredAccounts[0].id : (missingInsightsAccounts[0] ? missingInsightsAccounts[0].id : null))"
                     class="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition shrink-0">
               🔑 Cập nhật Token (read_insights)
             </button>
@@ -1134,25 +1184,25 @@
 
                     <!-- Chỉ số -->
                     <td class="py-2.5 px-2.5 text-right font-mono font-bold text-blue-300 whitespace-nowrap">
-                      {{ formatMetricValue(item.metrics.views) }}
+                      {{ formatMetricValue(item.metrics ? item.metrics.views : item.views) }}
                     </td>
                     <td class="py-2.5 px-2.5 text-right font-mono text-cyan-300 whitespace-nowrap">
-                      {{ formatMetricValue(item.metrics.reach) }}
+                      {{ formatMetricValue(item.metrics ? item.metrics.reach : item.reach) }}
                     </td>
                     <td class="py-2.5 px-2 text-right font-mono text-pink-300 whitespace-nowrap">
-                      {{ formatMetricValue(item.metrics.likes) }}
+                      {{ formatMetricValue(item.metrics ? item.metrics.likes : item.likes) }}
                     </td>
                     <td class="py-2.5 px-2 text-right font-mono text-teal-300 whitespace-nowrap">
-                      {{ formatMetricValue(item.metrics.comments) }}
+                      {{ formatMetricValue(item.metrics ? item.metrics.comments : item.comments) }}
                     </td>
                     <td class="py-2.5 px-2 text-right font-mono text-emerald-300 whitespace-nowrap">
-                      {{ formatMetricValue(item.metrics.shares) }}
+                      {{ formatMetricValue(item.metrics ? item.metrics.shares : item.shares) }}
                     </td>
                     <td class="py-2.5 px-2.5 text-right font-mono text-purple-300 whitespace-nowrap">
-                      {{ formatDurationMs(item.metrics.avg_watch_time_ms) }}
+                      {{ formatDurationMs(item.metrics ? item.metrics.avg_watch_time_ms : item.avg_watch_time_ms) }}
                     </td>
                     <td class="py-2.5 px-2.5 text-right font-mono text-amber-300 whitespace-nowrap">
-                      {{ formatDurationMs(item.metrics.total_watch_time_ms) }}
+                      {{ formatDurationMs(item.metrics ? item.metrics.total_watch_time_ms : item.total_watch_time_ms) }}
                     </td>
 
                     <!-- Thao tác -->
@@ -1599,23 +1649,24 @@
             <p class="text-[11px] text-slate-500 mt-1 italic">Nếu để trống, hệ thống sẽ bỏ qua bước bình luận.</p>
           </div>
 
-          <!-- Ngày lên lịch + Presets thông minh -->
-          <div class="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+          <!-- Ngày lên lịch bắt buộc + Presets thông minh -->
+          <div class="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border" :class="singleScheduleErrors.schedule_date ? 'border-rose-500/80' : 'border-slate-800'">
             <div class="flex items-center justify-between">
-              <label class="text-xs font-semibold text-slate-300">Ngày lên lịch (Để trống nếu muốn Đăng ngay):</label>
+              <label class="text-xs font-semibold text-slate-300">Ngày đăng bắt buộc (YYYY-MM-DD): <span class="text-rose-400">*</span></label>
               <div class="flex items-center gap-1.5">
                 <button type="button" @click="setDatePreset(0)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[Hôm nay]</button>
                 <button type="button" @click="setDatePreset(1)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[Ngày mai]</button>
                 <button type="button" @click="setDatePreset(2)" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-medium transition">[+2 ngày]</button>
               </div>
             </div>
-            <input type="date" v-model="singleTaskForm.schedule_date" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+            <input type="date" v-model="singleTaskForm.schedule_date" @change="clearSingleScheduleErrors" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+            <p v-if="singleScheduleErrors.schedule_date" class="text-[11px] text-rose-400 font-semibold">⚠️ {{ singleScheduleErrors.schedule_date }}</p>
           </div>
 
-          <!-- Giờ lên lịch (24 tiếng) + Tự nhận biết SA/CH/AM/PM -->
-          <div class="space-y-2 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+          <!-- Giờ lên lịch bắt buộc (24 tiếng) + Tự nhận biết SA/CH/AM/PM -->
+          <div class="space-y-2 p-3 rounded-xl bg-slate-950/60 border" :class="singleScheduleErrors.schedule_time || singleScheduleErrors.general ? 'border-rose-500/80' : 'border-slate-800'">
             <div class="flex items-center justify-between flex-wrap gap-1.5">
-              <label class="text-xs font-semibold text-slate-300">Giờ lên lịch (24 tiếng - HH:MM):</label>
+              <label class="text-xs font-semibold text-slate-300">Giờ đăng bắt buộc (24 tiếng - HH:MM): <span class="text-rose-400">*</span></label>
               <div class="flex items-center gap-1 flex-wrap">
                 <button type="button" @click="setRelativeTimePreset(5, 'single')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[11px] text-emerald-300 font-bold border border-emerald-700/60 transition" title="Đặt nhanh hiện tại + 5 phút">[+5 phút]</button>
                 <button type="button" @click="setRelativeTimePreset(15, 'single')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[11px] text-emerald-300 font-bold border border-emerald-700/60 transition" title="Đặt nhanh hiện tại + 15 phút">[+15 phút]</button>
@@ -1651,6 +1702,7 @@
               <div class="relative flex-1 min-w-[150px]">
                 <input type="text"
                        v-model="singleTaskForm.schedule_time"
+                       @input="clearSingleScheduleErrors"
                        @blur="normalizeScheduleTimeField('single')"
                        @keydown.enter.prevent="normalizeScheduleTimeField('single')"
                        placeholder="Nhập 24h: VD 12:16, 14:30 hoặc 2:30 CH"
@@ -1663,12 +1715,20 @@
               </div>
             </div>
 
+            <p v-if="singleScheduleErrors.schedule_time" class="text-[11px] text-rose-400 font-semibold">⚠️ {{ singleScheduleErrors.schedule_time }}</p>
+            <div v-if="singleScheduleErrors.general" class="p-2.5 rounded-lg bg-amber-950/60 border border-amber-600/50 text-[11px] text-amber-200 flex items-center justify-between gap-2">
+              <span>⚠️ {{ singleScheduleErrors.general }}</span>
+              <button type="button" @click="setRelativeTimePreset(5, 'single'); clearSingleScheduleErrors()" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold shrink-0 text-[10px]">
+                Đặt hiện tại + 5 phút
+              </button>
+            </div>
+
             <div class="flex items-center justify-between text-[11px] pt-0.5">
               <span v-if="singleTaskForm.schedule_time" class="text-cyan-300 font-mono font-semibold">
                 🕒 {{ describeTime24h(singleTaskForm.schedule_time, singleTaskForm.schedule_date) }}
               </span>
               <span v-else class="text-slate-500">
-                Hệ thống dùng chuẩn 24 tiếng (00:00 – 23:59) và tự nhận diện SA / CH / AM / PM.
+                Bắt buộc chọn Ngày và Giờ đăng (24h). Nếu muốn đăng ngay sau khi tạo, bạn có thể bấm nút ⚡ Đăng ngay trên bảng Task.
               </span>
             </div>
           </div>
@@ -1729,11 +1789,17 @@
 
           <!-- LIVE PREVIEW TABLE -->
           <div class="flex-1 flex flex-col min-h-[160px]">
-            <div class="flex items-center justify-between mb-1.5">
+            <div class="flex items-center justify-between mb-1.5 flex-wrap gap-2">
               <span class="text-xs font-bold text-slate-300 flex items-center gap-2">
                 <span>Bảng Live Preview (Xem trước):</span>
-                <span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-mono">{{ bulkParsedList.length }} dòng hợp lệ</span>
+                <span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-mono">{{ bulkParsedList.length }} dòng</span>
               </span>
+              <button v-if="bulkParsedList.length > 0"
+                      type="button"
+                      @click="autoFillBulkSchedules(10)"
+                      class="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold transition">
+                ⚡ Tự động điền lịch cách đều 10 phút (từ Hiện tại + 15p)
+              </button>
             </div>
 
             <div class="flex-1 overflow-auto border border-slate-800 rounded-xl bg-slate-950">
@@ -1744,13 +1810,13 @@
                     <th class="py-2 px-2.5">ĐƯỜNG DẪN VIDEO</th>
                     <th class="py-2 px-2.5">CAPTION</th>
                     <th class="py-2 px-2.5">BÌNH LUẬN</th>
-                    <th class="py-2 px-2.5 w-32">NGÀY & GIỜ</th>
+                    <th class="py-2 px-2.5 w-40">NGÀY & GIỜ (BẮT BUỘC) *</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800/60 font-mono">
                   <tr v-if="bulkParsedList.length === 0">
                     <td colspan="5" class="py-8 text-center text-slate-500 font-sans">
-                      Hãy dán dữ liệu vào ô bên trên để xem trước tại đây.
+                      Hãy dán dữ liệu vào ô bên trên để xem trước tại đây (Bắt buộc có Ngày đăng và Giờ đăng cho mỗi dòng).
                     </td>
                   </tr>
 
@@ -1778,8 +1844,13 @@
                       <span v-else class="text-slate-500 italic text-[11px] font-sans">(Không cmt)</span>
                     </td>
 
-                    <td class="py-2 px-2.5 whitespace-nowrap text-slate-300">
-                      {{ item.schedule_date }} {{ item.schedule_time }}
+                    <td class="py-2 px-2.5 whitespace-nowrap">
+                      <span v-if="item.schedule_date && item.schedule_time" class="text-emerald-300 font-semibold">
+                        {{ item.schedule_date }} {{ item.schedule_time }}
+                      </span>
+                      <span v-else class="text-rose-400 font-sans font-bold text-[11px]">
+                        ⚠ Thiếu ngày/giờ đăng!
+                      </span>
                     </td>
                   </tr>
                 </tbody>
@@ -1831,12 +1902,12 @@
 
           <div class="space-y-3 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
             <div>
-              <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày đăng (Để trống nếu muốn Đăng ngay):</label>
-              <input type="date" v-model="editTaskForm.schedule_date" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày đăng bắt buộc (YYYY-MM-DD): <span class="text-rose-400">*</span></label>
+              <input type="date" v-model="editTaskForm.schedule_date" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
             </div>
             <div class="space-y-1.5">
               <div class="flex items-center justify-between">
-                <label class="block text-xs font-semibold text-slate-300">Giờ đăng (24 tiếng - HH:MM):</label>
+                <label class="block text-xs font-semibold text-slate-300">Giờ đăng bắt buộc (24 tiếng - HH:MM): <span class="text-rose-400">*</span></label>
                 <div class="flex items-center gap-1">
                   <button type="button" @click="setRelativeTimePreset(5, 'edit')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[10px] text-emerald-300 font-bold border border-emerald-700/60 transition">[+5 phút]</button>
                   <button type="button" @click="setRelativeTimePreset(15, 'edit')" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[10px] text-emerald-300 font-bold border border-emerald-700/60 transition">[+15 phút]</button>
@@ -1862,6 +1933,7 @@
                 </select>
                 <input type="text"
                        v-model="editTaskForm.schedule_time"
+                       required
                        @blur="normalizeScheduleTimeField('edit')"
                        @keydown.enter.prevent="normalizeScheduleTimeField('edit')"
                        placeholder="HH:MM (24h)"
@@ -1876,6 +1948,143 @@
           <div class="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
             <button type="button" @click="showEditTaskModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Hủy</button>
             <button type="submit" class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md">Lưu Thay Đổi</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: XÁC NHẬN ĐĂNG NGAY HÀNG LOẠT (BULK PUBLISH NOW) ================= -->
+    <div v-if="showBulkPublishModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">⚡</span>
+            <h3 class="font-bold text-white text-base">Xác Nhận Đăng Ngay ({{ bulkPublishPreview.total }} Task đã chọn)</h3>
+          </div>
+          <button @click="showBulkPublishModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <div class="p-5 space-y-4 overflow-y-auto text-xs">
+          <div class="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-700/50 text-emerald-200 space-y-1">
+            <div class="font-bold text-emerald-300">Quy trình Đăng ngay tự động:</div>
+            <p class="text-[11px] text-emerald-200/90 leading-relaxed">
+              Hệ thống sẽ tự động cập nhật thời gian lên lịch (<code class="font-mono text-white">scheduled_at</code>) của các task hợp lệ về đúng thời điểm hiện tại (lưu giữ lịch hẹn gốc vào lịch sử Audit) và đưa vào hàng đợi xuất bản có kiểm soát luồng (tối đa 3 task song song để bảo vệ Rate Limit Meta API).
+            </p>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2.5 text-center font-mono">
+            <div class="p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-sans">Tổng đã chọn</div>
+              <div class="text-base font-extrabold text-white mt-0.5">{{ bulkPublishPreview.total }}</div>
+            </div>
+            <div class="p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800/60">
+              <div class="text-[10px] text-emerald-300 uppercase font-sans">Hợp lệ để đăng</div>
+              <div class="text-base font-extrabold text-emerald-400 mt-0.5">{{ bulkPublishPreview.eligible.length }}</div>
+            </div>
+            <div class="p-2.5 rounded-xl bg-amber-950/40 border border-amber-800/60">
+              <div class="text-[10px] text-amber-300 uppercase font-sans">Sẽ bỏ qua</div>
+              <div class="text-base font-extrabold text-amber-400 mt-0.5">{{ bulkPublishPreview.ineligible.length }}</div>
+            </div>
+          </div>
+
+          <div v-if="bulkPublishPreview.ineligible.length > 0" class="space-y-1.5">
+            <div class="font-bold text-amber-300">Danh sách Task không đủ điều kiện (sẽ tự động bỏ qua):</div>
+            <div class="max-h-32 overflow-y-auto rounded-xl bg-slate-950 border border-slate-800 divide-y divide-slate-800/70">
+              <div v-for="skip in bulkPublishPreview.ineligible" :key="skip.id" class="p-2 px-3 flex items-center justify-between gap-2">
+                <span class="font-mono text-slate-200">Task #{{ skip.id }} ({{ skip.page_name || 'Chưa gán Page' }})</span>
+                <span class="text-amber-300 text-[11px]">{{ skip.reason }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="bulkPublishPreview.eligible.length > 0" class="space-y-1.5">
+            <div class="font-bold text-slate-300">Danh sách Task sẵn sàng xuất bản ngay ({{ bulkPublishPreview.eligible.length }}):</div>
+            <div class="max-h-40 overflow-y-auto rounded-xl bg-slate-950 border border-slate-800 divide-y divide-slate-800/70 font-mono text-[11px]">
+              <div v-for="el in bulkPublishPreview.eligible" :key="el.id" class="p-2 px-3 flex items-center justify-between gap-2">
+                <span class="text-slate-200 truncate">#{{ el.id }} • {{ el.page_name || el.facebook_page_id }} — {{ el.caption || getFileName(el.video_path) }}</span>
+                <span class="text-emerald-400 shrink-0">{{ el.schedule_date ? (el.schedule_date + ' ' + el.schedule_time + ' → Ngay bây giờ') : 'Bổ sung lịch → Ngay bây giờ' }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-5 py-3 border-t border-slate-800 flex justify-end gap-2.5 bg-slate-900">
+          <button type="button" @click="showBulkPublishModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Hủy</button>
+          <button type="button"
+                  @click="confirmBulkPublishNow"
+                  :disabled="isBulkPublishingTasks || bulkPublishPreview.eligible.length === 0"
+                  class="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg">
+            {{ isBulkPublishingTasks ? 'Đang gửi lệnh Đăng ngay...' : ('⚡ Xác nhận Đăng ngay ' + bulkPublishPreview.eligible.length + ' Task') }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= MODAL: ĐỔI LỊCH ĐĂNG HÀNG LOẠT (BULK RESCHEDULE) ================= -->
+    <div v-if="showBulkRescheduleModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">📅</span>
+            <h3 class="font-bold text-white text-base">Đổi Lịch Đăng Hàng Loạt ({{ selectedTaskIds.length }} Task)</h3>
+          </div>
+          <button @click="showBulkRescheduleModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+        </div>
+
+        <form @submit.prevent="handleBulkRescheduleSubmit" class="p-5 space-y-4 overflow-y-auto text-xs">
+          <div class="space-y-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800">
+            <div class="flex items-center justify-between">
+              <label class="font-bold text-slate-200">1. Ngày bắt đầu đăng (YYYY-MM-DD): <span class="text-rose-400">*</span></label>
+              <div class="flex items-center gap-1.5">
+                <button type="button" @click="bulkRescheduleForm.schedule_date = getVnDateString(0)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300">[Hôm nay]</button>
+                <button type="button" @click="bulkRescheduleForm.schedule_date = getVnDateString(1)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300">[Ngày mai]</button>
+              </div>
+            </div>
+            <input type="date" v-model="bulkRescheduleForm.schedule_date" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono">
+
+            <div class="flex items-center justify-between pt-1">
+              <label class="font-bold text-slate-200">2. Giờ bắt đầu đăng (24 tiếng - HH:MM): <span class="text-rose-400">*</span></label>
+              <div class="flex items-center gap-1">
+                <button type="button" @click="setBulkRescheduleRelativePreset(5)" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[10px] text-emerald-300 font-bold border border-emerald-700/60">[+5 phút]</button>
+                <button type="button" @click="setBulkRescheduleRelativePreset(15)" class="px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 text-[10px] text-emerald-300 font-bold border border-emerald-700/60">[+15 phút]</button>
+                <button type="button" @click="bulkRescheduleForm.schedule_time = '07:00'" class="px-2 py-0.5 rounded bg-indigo-950/50 text-[10px] text-indigo-300 font-bold border border-indigo-800/60">[07:00]</button>
+                <button type="button" @click="bulkRescheduleForm.schedule_time = '12:00'" class="px-2 py-0.5 rounded bg-indigo-950/50 text-[10px] text-indigo-300 font-bold border border-indigo-800/60">[12:00]</button>
+                <button type="button" @click="bulkRescheduleForm.schedule_time = '19:00'" class="px-2 py-0.5 rounded bg-indigo-950/50 text-[10px] text-indigo-300 font-bold border border-indigo-800/60">[19:00]</button>
+              </div>
+            </div>
+            <input type="text" v-model="bulkRescheduleForm.schedule_time" required placeholder="VD: 14:30 hoặc 19:00" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono">
+
+            <div class="pt-1">
+              <label class="block font-bold text-slate-200 mb-1.5">3. Khoảng cách tự động giữa các Task (Chống trùng giờ):</label>
+              <div class="grid grid-cols-5 gap-1.5">
+                <button type="button"
+                        v-for="iv in [0, 5, 10, 15, 30]"
+                        :key="iv"
+                        @click="bulkRescheduleForm.interval_minutes = iv"
+                        class="py-1.5 px-2 rounded-lg font-mono text-[11px] font-bold border transition"
+                        :class="bulkRescheduleForm.interval_minutes === iv ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800'">
+                  {{ iv === 0 ? 'Cùng giờ (0p)' : ('Cách ' + iv + 'p') }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Xem trước lịch mới của từng task -->
+          <div class="space-y-1.5">
+            <div class="font-bold text-slate-300">Xem trước lịch đăng mới ({{ bulkReschedulePreviewList.length }} task hợp lệ):</div>
+            <div class="max-h-40 overflow-y-auto rounded-xl bg-slate-950 border border-slate-800 divide-y divide-slate-800/70 font-mono text-[11px]">
+              <div v-for="(pItem, idx) in bulkReschedulePreviewList" :key="pItem.id" class="p-2 px-3 flex items-center justify-between gap-2">
+                <span class="text-slate-300 truncate">{{ idx + 1 }}. Task #{{ pItem.id }} ({{ pItem.page_name }})</span>
+                <span class="text-cyan-300 font-bold shrink-0">→ {{ pItem.new_date }} {{ pItem.new_time }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
+            <button type="button" @click="showBulkRescheduleModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Hủy</button>
+            <button type="submit" :disabled="isBulkReschedulingTasks || bulkReschedulePreviewList.length === 0" class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg">
+              {{ isBulkReschedulingTasks ? 'Đang cập nhật...' : ('Lưu Lịch Mới Cho ' + bulkReschedulePreviewList.length + ' Task') }}
+            </button>
           </div>
         </form>
       </div>
@@ -1961,7 +2170,28 @@
             </div>
           </div>
 
-          <!-- 3. Logs hệ thống / Chi tiết kỹ thuật -->
+          <!-- 3. Lịch sử thao tác & Audit Log (Phần 8) -->
+          <div v-if="currentLogTask.audit_logs && currentLogTask.audit_logs.length > 0" class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+              <span>📜</span> Lịch sử thao tác &amp; đổi lịch (Audit Logs)
+            </div>
+            <div class="max-h-36 overflow-y-auto space-y-1.5 font-mono text-[11px]">
+              <div v-for="al in currentLogTask.audit_logs" :key="al.id" class="p-2 rounded bg-slate-900/80 border border-slate-800/80 flex flex-col gap-0.5">
+                <div class="flex items-center justify-between text-slate-300">
+                  <span class="font-bold text-cyan-300">[{{ al.action }}] ({{ al.trigger_source }})</span>
+                  <span class="text-[10px] text-slate-500">{{ formatVnDateTime(al.created_at) }}</span>
+                </div>
+                <div v-if="al.before_schedule || al.after_schedule" class="text-slate-400">
+                  Lịch: <span class="text-slate-300">{{ al.before_schedule || 'Trống' }}</span> → <span class="text-emerald-300 font-semibold">{{ al.after_schedule || 'Trống' }}</span>
+                </div>
+                <div v-if="al.before_status || al.after_status" class="text-slate-400">
+                  Trạng thái: <span>{{ al.before_status || '—' }}</span> → <span class="text-white">{{ al.after_status || '—' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Logs hệ thống / Chi tiết kỹ thuật -->
           <div>
             <label class="block text-xs font-semibold text-slate-400 mb-1">Chi tiết kỹ thuật (Logs):</label>
             <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80 font-mono text-xs text-slate-300 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">

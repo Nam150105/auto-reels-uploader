@@ -648,6 +648,7 @@ export async function syncPagesForAccount(
 
     // Đồng bộ lại các liên kết Page cũ không còn thuộc quyền quản lý của Admin này (Giữ Page cũ nhưng đánh dấu thiếu quyền theo Mục 5.4)
     const stalePageIds = await removeStaleAccountPages(db, accountId, ownerUserId, syncedPageIds);
+    invalidatePageTokenVerificationCache();
 
     const nowIso = new Date().toISOString();
     await updateFacebookAccountStatus(db, accountId, "connected", null, nowIso, "valid");
@@ -1142,16 +1143,316 @@ export interface PagePermissionVerificationResult {
   pageTasks: string[];
   hasReadInsights?: boolean;
   canAnalyze?: boolean;
+  fromCache?: boolean;
   errorType?: MetaPermissionErrorCode;
   errorCategory?: MetaErrorCategory;
   errorCode?: number;
   message?: string;
 }
 
+// ==========================================
+// META GRAPH API TELEMETRY, CACHE & RATE-LIMIT HEADER MONITOR (PHẦN 4 & 5)
+// ==========================================
+
+export interface MetaEndpointTelemetry {
+  endpoint_group: string;
+  total_requests: number;
+  cache_hits: number;
+  cache_misses: number;
+  error_requests: number;
+  rate_limited_requests: number;
+  retry_count: number;
+  max_app_call_pct: number;
+  max_page_call_pct: number;
+  last_status_code: number;
+  last_error_code: number | null;
+  updated_at: string;
+}
+
+const TOKEN_VERIFY_CACHE_TTL_MS = 15 * 60 * 1000; // 15 phút
+const pageTokenVerifyCache = new Map<
+  string,
+  { expiresAt: number; result: PagePermissionVerificationResult }
+>();
+
+const inMemoryTelemetry = new Map<string, MetaEndpointTelemetry>();
+let latestAppUsagePct = 0;
+let latestPageUsagePct = 0;
+let latestBucUsagePct = 0;
+let lastRateLimitHitAtMs = 0;
+
+function getOrCreateEndpointTelemetry(group: string): MetaEndpointTelemetry {
+  let rec = inMemoryTelemetry.get(group);
+  if (!rec) {
+    rec = {
+      endpoint_group: group,
+      total_requests: 0,
+      cache_hits: 0,
+      cache_misses: 0,
+      error_requests: 0,
+      rate_limited_requests: 0,
+      retry_count: 0,
+      max_app_call_pct: 0,
+      max_page_call_pct: 0,
+      last_status_code: 200,
+      last_error_code: null,
+      updated_at: new Date().toISOString()
+    };
+    inMemoryTelemetry.set(group, rec);
+  }
+  return rec;
+}
+
+export function parseMetaUsageHeaders(headers?: Headers | null): {
+  appCallPct: number;
+  pageCallPct: number;
+  bucCallPct: number;
+} {
+  let appCallPct = 0;
+  let pageCallPct = 0;
+  let bucCallPct = 0;
+  if (!headers) return { appCallPct, pageCallPct, bucCallPct };
+
+  const parseUsageJson = (raw: string | null): number => {
+    if (!raw) return 0;
+    try {
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      const extractMax = (val: unknown): number => {
+        if (!val || typeof val !== "object") return 0;
+        const r = val as Record<string, unknown>;
+        const c1 = Number(r.call_count || 0);
+        const c2 = Number(r.total_cputime || 0);
+        const c3 = Number(r.total_time || 0);
+        return Math.max(
+          Number.isFinite(c1) ? c1 : 0,
+          Number.isFinite(c2) ? c2 : 0,
+          Number.isFinite(c3) ? c3 : 0
+        );
+      };
+      let maxVal = extractMax(obj);
+      for (const v of Object.values(obj)) {
+        if (Array.isArray(v)) {
+          for (const item of v) {
+            maxVal = Math.max(maxVal, extractMax(item));
+          }
+        } else if (v && typeof v === "object") {
+          maxVal = Math.max(maxVal, extractMax(v));
+        }
+      }
+      return maxVal;
+    } catch {
+      return 0;
+    }
+  };
+
+  appCallPct = parseUsageJson(headers.get("x-app-usage") || headers.get("X-App-Usage"));
+  pageCallPct = parseUsageJson(headers.get("x-page-usage") || headers.get("X-Page-Usage"));
+  bucCallPct = parseUsageJson(
+    headers.get("x-business-use-case-usage") || headers.get("X-Business-Use-Case-Usage")
+  );
+
+  if (appCallPct > 0) latestAppUsagePct = appCallPct;
+  if (pageCallPct > 0) latestPageUsagePct = pageCallPct;
+  if (bucCallPct > 0) latestBucUsagePct = bucCallPct;
+
+  return { appCallPct, pageCallPct, bucCallPct };
+}
+
+export async function trackMetaGraphResponse(
+  db: D1Database | null | undefined,
+  endpointGroup: string,
+  resp: Response | null,
+  errorCode?: number | null,
+  isRetry = false
+): Promise<void> {
+  const rec = getOrCreateEndpointTelemetry(endpointGroup);
+  const nowIso = new Date().toISOString();
+  rec.total_requests += 1;
+  rec.cache_misses += 1;
+  if (isRetry) rec.retry_count += 1;
+  rec.updated_at = nowIso;
+
+  const status = resp ? resp.status : 0;
+  rec.last_status_code = status;
+  if (errorCode) rec.last_error_code = errorCode;
+
+  const { appCallPct, pageCallPct, bucCallPct } = parseMetaUsageHeaders(resp?.headers);
+  const effectivePagePct = Math.max(pageCallPct, bucCallPct);
+  if (appCallPct > rec.max_app_call_pct) rec.max_app_call_pct = appCallPct;
+  if (effectivePagePct > rec.max_page_call_pct) rec.max_page_call_pct = effectivePagePct;
+
+  const isRateLimit =
+    status === 429 ||
+    errorCode === 4 ||
+    errorCode === 17 ||
+    errorCode === 32 ||
+    errorCode === 613;
+
+  if (isRateLimit) {
+    rec.rate_limited_requests += 1;
+    rec.error_requests += 1;
+    lastRateLimitHitAtMs = Date.now();
+  } else if (!resp || !resp.ok || (errorCode && errorCode > 0)) {
+    rec.error_requests += 1;
+  }
+
+  if (db) {
+    const bucketHour = nowIso.slice(0, 13) + ":00:00Z";
+    try {
+      await db
+        .prepare(
+          `INSERT INTO meta_api_telemetry (
+             bucket_hour, endpoint_group, total_requests, cache_hits, cache_misses,
+             error_requests, rate_limited_requests, retry_count,
+             max_app_call_pct, max_page_call_pct, last_status_code, last_error_code, updated_at
+           ) VALUES (?, ?, 1, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(bucket_hour, endpoint_group) DO UPDATE SET
+             total_requests = meta_api_telemetry.total_requests + 1,
+             cache_misses = meta_api_telemetry.cache_misses + 1,
+             error_requests = meta_api_telemetry.error_requests + excluded.error_requests,
+             rate_limited_requests = meta_api_telemetry.rate_limited_requests + excluded.rate_limited_requests,
+             retry_count = meta_api_telemetry.retry_count + excluded.retry_count,
+             max_app_call_pct = MAX(meta_api_telemetry.max_app_call_pct, excluded.max_app_call_pct),
+             max_page_call_pct = MAX(meta_api_telemetry.max_page_call_pct, excluded.max_page_call_pct),
+             last_status_code = excluded.last_status_code,
+             last_error_code = COALESCE(excluded.last_error_code, meta_api_telemetry.last_error_code),
+             updated_at = excluded.updated_at`
+        )
+        .bind(
+          bucketHour,
+          endpointGroup,
+          !resp || !resp.ok || (errorCode && errorCode > 0) ? 1 : 0,
+          isRateLimit ? 1 : 0,
+          isRetry ? 1 : 0,
+          appCallPct,
+          effectivePagePct,
+          status,
+          errorCode ?? null,
+          nowIso
+        )
+        .run();
+    } catch {}
+  }
+}
+
+export function recordMetaCacheHit(endpointGroup: string): void {
+  const rec = getOrCreateEndpointTelemetry(endpointGroup);
+  rec.cache_hits += 1;
+  rec.updated_at = new Date().toISOString();
+}
+
+export function getCurrentMetaThrottleState(): {
+  level: "normal" | "elevated" | "high" | "critical";
+  max_usage_pct: number;
+  app_usage_pct: number;
+  page_usage_pct: number;
+  buc_usage_pct: number;
+  defer_background_sync: boolean;
+  recommended_delay_ms: number;
+} {
+  const maxPct = Math.max(latestAppUsagePct, latestPageUsagePct, latestBucUsagePct);
+  const recentRateLimit = Date.now() - lastRateLimitHitAtMs < 5 * 60 * 1000;
+  if (recentRateLimit || maxPct >= 95) {
+    return {
+      level: "critical",
+      max_usage_pct: maxPct,
+      app_usage_pct: latestAppUsagePct,
+      page_usage_pct: latestPageUsagePct,
+      buc_usage_pct: latestBucUsagePct,
+      defer_background_sync: true,
+      recommended_delay_ms: 5000
+    };
+  }
+  if (maxPct >= 85) {
+    return {
+      level: "high",
+      max_usage_pct: maxPct,
+      app_usage_pct: latestAppUsagePct,
+      page_usage_pct: latestPageUsagePct,
+      buc_usage_pct: latestBucUsagePct,
+      defer_background_sync: true,
+      recommended_delay_ms: 2000
+    };
+  }
+  if (maxPct >= 70) {
+    return {
+      level: "elevated",
+      max_usage_pct: maxPct,
+      app_usage_pct: latestAppUsagePct,
+      page_usage_pct: latestPageUsagePct,
+      buc_usage_pct: latestBucUsagePct,
+      defer_background_sync: false,
+      recommended_delay_ms: 600
+    };
+  }
+  return {
+    level: "normal",
+    max_usage_pct: maxPct,
+    app_usage_pct: latestAppUsagePct,
+    page_usage_pct: latestPageUsagePct,
+    buc_usage_pct: latestBucUsagePct,
+    defer_background_sync: false,
+    recommended_delay_ms: 0
+  };
+}
+
+export async function getMetaApiTelemetrySummary(
+  db?: D1Database | null
+): Promise<Record<string, unknown>> {
+  const endpoints = Array.from(inMemoryTelemetry.values());
+  let totalReq = 0;
+  let totalHits = 0;
+  let totalErrors = 0;
+  let totalRateLimited = 0;
+  for (const e of endpoints) {
+    totalReq += e.total_requests;
+    totalHits += e.cache_hits;
+    totalErrors += e.error_requests;
+    totalRateLimited += e.rate_limited_requests;
+  }
+
+  let d1Buckets: unknown[] = [];
+  if (db) {
+    try {
+      const { results } = await db
+        .prepare("SELECT * FROM meta_api_telemetry ORDER BY bucket_hour DESC LIMIT 24")
+        .all();
+      d1Buckets = results || [];
+    } catch {}
+  }
+
+  return {
+    throttle: getCurrentMetaThrottleState(),
+    totals: {
+      total_network_requests: totalReq,
+      total_cache_hits: totalHits,
+      cache_hit_ratio_pct:
+        totalReq + totalHits > 0 ? Math.round((totalHits / (totalReq + totalHits)) * 100) : 0,
+      total_errors: totalErrors,
+      total_rate_limited: totalRateLimited
+    },
+    endpoints,
+    hourly_buckets: d1Buckets
+  };
+}
+
+export function invalidatePageTokenVerificationCache(facebookPageId?: string): void {
+  if (!facebookPageId) {
+    pageTokenVerifyCache.clear();
+    return;
+  }
+  for (const k of pageTokenVerifyCache.keys()) {
+    if (k.includes(`:${facebookPageId}:`)) {
+      pageTokenVerifyCache.delete(k);
+    }
+  }
+}
+
 /**
  * Hàm kiểm tra thống nhất Token và Quyền của Fanpage (dùng chung cho cả Publish, Retry-Comment & Insights):
  * - Tách bạch hoàn toàn App Permissions (scopes của User Access Token) và Page Tasks (tasks trên /me/accounts)
  * - Không bao giờ kiểm tra MODERATE, CREATE_CONTENT hay ANALYZE trong danh sách scopes của User Token
+ * - Cache TTL 15 phút để không gọi lặp lại `/me` cho cùng một Page Token đã xác thực hợp lệ
  * - Tự động xác minh Page Access Token khớp với facebookPageId hoặc làm mới từ Admin User Access Token
  */
 export async function verifyPageTokenAndPermissions(
@@ -1162,6 +1463,7 @@ export async function verifyPageTokenAndPermissions(
     pageAccessToken: string;
     ownerUserId: string;
     mode: "publish" | "comment" | "insights";
+    forceLiveVerify?: boolean;
   }
 ): Promise<PagePermissionVerificationResult> {
   const cfg = getMetaConfig(env);
@@ -1222,6 +1524,23 @@ export async function verifyPageTokenAndPermissions(
     };
   }
 
+  // Kiểm tra In-Memory Cache (TTL 15 phút) để tránh gọi `/me` dư thừa ở mỗi lần publish/comment/insights
+  const cacheKey = `${ownerUserId}:${resolvedPageId}:${effectiveToken.slice(-20)}`;
+  if (!params.forceLiveVerify) {
+    const cached = pageTokenVerifyCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now() && cached.result.valid) {
+      recordMetaCacheHit("token_verify");
+      return {
+        ...cached.result,
+        grantedScopes,
+        pageTasks: pageTasks.length > 0 ? pageTasks : cached.result.pageTasks,
+        hasReadInsights,
+        canAnalyze,
+        fromCache: true
+      };
+    }
+  }
+
   let tokenPageId = "";
   let tokenExpired = false;
   let tokenRevoked = false;
@@ -1232,6 +1551,7 @@ export async function verifyPageTokenAndPermissions(
       `${cfg.graphBase}/me?fields=id,name&access_token=${encodeURIComponent(effectiveToken)}`
     );
     if (meResp.ok) {
+      await trackMetaGraphResponse(db, "token_verify", meResp, null);
       const meData = (await meResp.json()) as { id?: string; name?: string };
       tokenPageId = String(meData.id || "").trim();
       if (meData.name) resolvedPageName = String(meData.name).trim();
@@ -1240,6 +1560,7 @@ export async function verifyPageTokenAndPermissions(
         error?: Record<string, unknown>;
       };
       const classified = classifyMetaApiError(errBody.error, meResp.status);
+      await trackMetaGraphResponse(db, "token_verify", meResp, classified.code);
       if (classified.category === "TOKEN_EXPIRED") tokenExpired = true;
       else if (classified.category === "TOKEN_REVOKED") tokenRevoked = true;
       else if (classified.category === "INVALID_TOKEN") tokenInvalid = true;
@@ -1372,7 +1693,7 @@ export async function verifyPageTokenAndPermissions(
     };
   }
 
-  return {
+  const validResult: PagePermissionVerificationResult = {
     valid: true,
     effectivePageToken: effectiveToken,
     resolvedPageId,
@@ -1382,6 +1703,13 @@ export async function verifyPageTokenAndPermissions(
     hasReadInsights,
     canAnalyze
   };
+  const finalCacheKey = `${ownerUserId}:${resolvedPageId}:${effectiveToken.slice(-20)}`;
+  pageTokenVerifyCache.set(finalCacheKey, {
+    expiresAt: Date.now() + TOKEN_VERIFY_CACHE_TTL_MS,
+    result: validResult
+  });
+
+  return validResult;
 }
 
 export interface PublishReelResult {
@@ -1497,6 +1825,12 @@ export async function publishReelViaGraphApi(
       })
     });
     const startData = (await startResp.json()) as Record<string, unknown>;
+    await trackMetaGraphResponse(
+      db,
+      "reels_upload",
+      startResp,
+      startData.error ? Number((startData.error as any).code || startResp.status) : null
+    );
 
     if (!startResp.ok || startData.error || !startData.video_id) {
       const err = (startData.error || {}) as Record<string, unknown>;
@@ -1504,6 +1838,7 @@ export async function publishReelViaGraphApi(
       const subcode = Number(err.error_subcode || 0);
       const isTokenErr = code === 190 || code === 10 || code === 200;
       if (isTokenErr) {
+        invalidatePageTokenVerificationCache(facebookPageId);
         await db
           .prepare(
             "UPDATE facebook_pages SET token_status = 'expired', status = 'expired' WHERE facebook_page_id = ? AND owner_user_id = ?"
@@ -1576,6 +1911,12 @@ export async function publishReelViaGraphApi(
     }
 
     const uploadData = (await uploadResp.json()) as Record<string, unknown>;
+    await trackMetaGraphResponse(
+      db,
+      "reels_upload",
+      uploadResp,
+      uploadData.error ? Number((uploadData.error as any).code || uploadResp.status) : null
+    );
     if (!uploadResp.ok || uploadData.error) {
       const err = (uploadData.error || {}) as Record<string, unknown>;
       const code = Number(err.code || uploadResp.status);
@@ -1627,6 +1968,12 @@ export async function publishReelViaGraphApi(
     }
 
     const finishData = (await finishResp.json()) as Record<string, unknown>;
+    await trackMetaGraphResponse(
+      db,
+      "reels_publish",
+      finishResp,
+      finishData.error ? Number((finishData.error as any).code || finishResp.status) : null
+    );
     if (!finishResp.ok || finishData.error) {
       const err = (finishData.error || {}) as Record<string, unknown>;
       const code = Number(err.code || finishResp.status);
@@ -1656,24 +2003,7 @@ export async function publishReelViaGraphApi(
       finishData.post_id ? String(finishData.post_id) : null
     );
 
-    let permalinkUrl = `https://www.facebook.com/reel/${videoId}`;
-
-    // Kiểm tra permalink & trạng thái xử lý video
-    try {
-      const infoResp = await fetch(
-        `${cfg.graphBase}/${videoId}?fields=id,permalink_url,status&access_token=${encodeURIComponent(effectivePageToken)}`
-      );
-      if (infoResp.ok) {
-        const infoData = (await infoResp.json()) as { permalink_url?: string };
-        if (infoData.permalink_url) {
-          permalinkUrl = infoData.permalink_url.startsWith("http")
-            ? infoData.permalink_url
-            : `https://www.facebook.com${infoData.permalink_url}`;
-        }
-      }
-    } catch {
-      // Keep default permalinkUrl
-    }
+    const permalinkUrl = `https://www.facebook.com/reel/${videoId}`;
 
     return {
       success: true,
@@ -1698,6 +2028,7 @@ export async function publishReelViaGraphApi(
 /**
  * 4. XÁC ĐỊNH CHÍNH XÁC POST ID CỦA BÀI REELS
  * Không nhầm lẫn Video ID với Post ID.
+ * Tối ưu: Nếu finishData.post_id đã được Meta trả về, chuẩn hóa trực tiếp không cần gọi thêm GET /{post_id}.
  */
 export async function resolveReelPostId(
   cfg: ReturnType<typeof getMetaConfig>,
@@ -1708,35 +2039,14 @@ export async function resolveReelPostId(
 ): Promise<string> {
   const cleanFinishId = (finishPostId || "").trim();
 
-  // 1. Nếu API publish trả về post_id có chứa dấu '_' (chuẩn {PAGE_ID}_{POST_ID})
+  // 1. Nếu API publish trả về post_id hợp lệ, chuẩn hóa ngay trong bộ nhớ (tiết kiệm 1 request Graph API)
   if (cleanFinishId && cleanFinishId !== videoId) {
+    recordMetaCacheHit("post_resolve");
     if (cleanFinishId.includes("_")) {
-      try {
-        const chkResp = await fetch(
-          `${cfg.graphBase}/${cleanFinishId}?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`
-        );
-        if (chkResp.ok) {
-          const d = (await chkResp.json()) as { id?: string };
-          if (d.id) return String(d.id);
-        }
-      } catch {}
       return cleanFinishId;
     }
-
-    // Nếu cleanFinishId là số thuần không có gạch dưới và khác facebookPageId,
-    // chuẩn hóa thành dạng {PAGE_ID}_{POST_ID} để tránh lỗi Graph API v2.4+ (#12 singular statuses API is deprecated)
     if (cleanFinishId !== facebookPageId) {
-      const prefixedPostId = `${facebookPageId}_${cleanFinishId}`;
-      try {
-        const chkResp = await fetch(
-          `${cfg.graphBase}/${prefixedPostId}?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`
-        );
-        if (chkResp.ok) {
-          const d = (await chkResp.json()) as { id?: string };
-          if (d.id) return String(d.id);
-        }
-      } catch {}
-      return prefixedPostId;
+      return `${facebookPageId}_${cleanFinishId}`;
     }
   }
 
@@ -1746,6 +2056,7 @@ export async function resolveReelPostId(
     const compResp = await fetch(
       `${cfg.graphBase}/${compositeVideoId}?fields=id&access_token=${encodeURIComponent(pageAccessToken)}`
     );
+    await trackMetaGraphResponse(null, "post_resolve", compResp, null);
     if (compResp.ok) {
       const compData = (await compResp.json()) as { id?: string };
       if (compData.id) {
@@ -1759,6 +2070,7 @@ export async function resolveReelPostId(
     const listResp = await fetch(
       `${cfg.graphBase}/${facebookPageId}/published_posts?fields=id,attachments{target{id}}&limit=5&access_token=${encodeURIComponent(pageAccessToken)}`
     );
+    await trackMetaGraphResponse(null, "post_resolve", listResp, null);
     if (listResp.ok) {
       const listData = (await listResp.json()) as {
         data?: Array<{ id: string; attachments?: { data?: Array<{ target?: { id?: string } }> } }>;
@@ -1786,6 +2098,7 @@ export interface PostReelCommentOptions {
   commentText: string;
   ownerUserId: string;
   taskId: number;
+  skipInitialDuplicateCheck?: boolean;
 }
 
 export interface PostReelCommentResult {
@@ -1827,12 +2140,6 @@ export async function postReelCommentViaGraphApi(
     };
   }
 
-  // Xây dựng danh sách target ID theo thứ tự ưu tiên:
-  // 1. Nếu rawPostId có dạng chuẩn {PAGE_ID}_{POST_ID}
-  // 2. Ghép {PAGE_ID}_{POST_ID} nếu rawPostId là số thuần khác pageId và khác videoId
-  // 3. rawVideoId: Node Video của bài Reels nhận comment trực tiếp qua /{video_id}/comments
-  // 4. Ghép {PAGE_ID}_{VIDEO_ID}
-  // 5. Chỉ dùng rawPostId đơn lẻ nếu không có bất kỳ ID nào ở trên (tránh gọi bare numeric post_id gây lỗi #12 singular statuses API is deprecated)
   const candidateIds: string[] = [];
 
   if (rawPostId && rawPostId.includes("_") && !candidateIds.includes(rawPostId)) {
@@ -1871,7 +2178,7 @@ export async function postReelCommentViaGraphApi(
     };
   }
 
-  // Sử dụng hàm kiểm tra thống nhất Token & Quyền Fanpage
+  // Sử dụng hàm kiểm tra thống nhất Token & Quyền Fanpage (có cache TTL 15 phút)
   const permCheck = await verifyPageTokenAndPermissions(db, env, {
     facebookPageId: pageId,
     pageAccessToken: options.pageAccessToken,
@@ -1892,32 +2199,36 @@ export async function postReelCommentViaGraphApi(
 
   let effectiveToken = permCheck.effectivePageToken;
 
-  const attemptPosting = async (token: string): Promise<PostReelCommentResult> => {
+  const attemptPosting = async (token: string, isRetryPass = false): Promise<PostReelCommentResult> => {
     let lastError: PostReelCommentResult | null = null;
 
     for (const targetId of candidateIds) {
-      // 1. CHỐNG ĐĂNG TRÙNG (IDEMPOTENCY CHECK TRÊN FACEBOOK)
-      try {
-        const chkResp = await fetch(
-          `${cfg.graphBase}/${targetId}/comments?fields=id,message,created_time&limit=10&access_token=${encodeURIComponent(token)}`
-        );
-        if (chkResp.ok) {
-          const chkData = (await chkResp.json()) as { data?: Array<{ id: string; message: string }> };
-          if (Array.isArray(chkData.data)) {
-            const existing = chkData.data.find((c) => (c.message || "").trim() === cleanComment);
-            if (existing && existing.id) {
-              return {
-                success: true,
-                comment_id: String(existing.id),
-                post_id: targetId,
-                comment_status: "success",
-                message: "Đã xác nhận bình luận đã tồn tại trên bài viết Facebook.",
-                already_posted: true
-              };
+      // 1. CHỐNG ĐĂNG TRÙNG (IDEMPOTENCY CHECK TRÊN FACEBOOK):
+      // Chỉ gọi GET /{targetId}/comments khi retry hoặc khôi phục, bỏ qua khi vừa mới publish xong để tiết kiệm request
+      if (!options.skipInitialDuplicateCheck || isRetryPass) {
+        try {
+          const chkResp = await fetch(
+            `${cfg.graphBase}/${targetId}/comments?fields=id,message,created_time&limit=10&access_token=${encodeURIComponent(token)}`
+          );
+          await trackMetaGraphResponse(db, "comment_post", chkResp, null, isRetryPass);
+          if (chkResp.ok) {
+            const chkData = (await chkResp.json()) as { data?: Array<{ id: string; message: string }> };
+            if (Array.isArray(chkData.data)) {
+              const existing = chkData.data.find((c) => (c.message || "").trim() === cleanComment);
+              if (existing && existing.id) {
+                return {
+                  success: true,
+                  comment_id: String(existing.id),
+                  post_id: targetId,
+                  comment_status: "success",
+                  message: "Đã xác nhận bình luận đã tồn tại trên bài viết Facebook.",
+                  already_posted: true
+                };
+              }
             }
           }
-        }
-      } catch {}
+        } catch {}
+      }
 
       // 2. GỌI API ĐĂNG COMMENT: POST /{targetId}/comments
       let postResp: Response;
@@ -1943,6 +2254,7 @@ export async function postReelCommentViaGraphApi(
           const verifyResp = await fetch(
             `${cfg.graphBase}/${targetId}/comments?fields=id,message&limit=5&access_token=${encodeURIComponent(token)}`
           );
+          await trackMetaGraphResponse(db, "comment_post", verifyResp, null, true);
           if (verifyResp.ok) {
             const vData = (await verifyResp.json()) as { data?: Array<{ id: string; message: string }> };
             const found = vData.data?.find((c) => (c.message || "").trim() === cleanComment);
@@ -1968,18 +2280,17 @@ export async function postReelCommentViaGraphApi(
         continue;
       }
 
-      // 3. XỬ LÝ PHẢN HỒI TỪ FACEBOOK
+      // 3. XỬ LÝ PHẢN HỒI TỪ FACEBOOK (Không gọi lại GET /{comment_id} dư thừa khi POST đã trả về id)
       const postData = (await postResp.json().catch(() => ({}))) as Record<string, unknown>;
+      await trackMetaGraphResponse(
+        db,
+        "comment_post",
+        postResp,
+        postData.error ? Number((postData.error as any).code || postResp.status) : null,
+        isRetryPass
+      );
       if (postResp.ok && postData.id) {
         const commentId = String(postData.id);
-
-        // Xác nhận comment tồn tại trên Facebook
-        try {
-          await fetch(
-            `${cfg.graphBase}/${commentId}?fields=id&access_token=${encodeURIComponent(token)}`
-          );
-        } catch {}
-
         return {
           success: true,
           comment_id: commentId,
@@ -1997,13 +2308,10 @@ export async function postReelCommentViaGraphApi(
         let friendlyErrMsg = "";
         let errType: MetaPermissionErrorCode = "META_API_ERROR";
 
-        // 1. Phân biệt lỗi Token hết hạn / không hợp lệ
         if (code === 190 || code === 102 || lowerMsg.includes("session") || lowerMsg.includes("expired")) {
           errType = lowerMsg.includes("expired") || subcode === 463 ? "TOKEN_EXPIRED" : "INVALID_PAGE_TOKEN";
           friendlyErrMsg = `Token Facebook đã hết hạn hoặc không hợp lệ (OAuthException ${code}: ${rawErrMsg}). Vui lòng kết nối lại tài khoản Facebook.`;
-        }
-        // 2. Phân biệt lỗi Post ID sai / bài viết không tồn tại / singular statuses deprecated
-        else if (
+        } else if (
           code === 12 ||
           code === 100 ||
           code === 803 ||
@@ -2013,18 +2321,14 @@ export async function postReelCommentViaGraphApi(
         ) {
           errType = lowerMsg.includes("does not exist") || code === 803 ? "POST_NOT_FOUND" : "POST_ID_INVALID";
           friendlyErrMsg = `ID bài viết không tồn tại hoặc không hỗ trợ bình luận (Mã lỗi ${code}: ${rawErrMsg}).`;
-        }
-        // 3. Phân biệt lỗi thiếu quyền (permission / MODERATE)
-        else if (code === 200 || code === 10 || lowerMsg.includes("permission")) {
+        } else if (code === 200 || code === 10 || lowerMsg.includes("permission")) {
           if (lowerMsg.includes("pages_manage_engagement") && !lowerMsg.includes("moderate")) {
             errType = "MISSING_APP_PERMISSION";
           } else {
             errType = "COMMENT_PERMISSION_DENIED";
           }
           friendlyErrMsg = `Facebook từ chối cấp quyền bình luận (#${code}): ${rawErrMsg}. Vui lòng kiểm tra quyền pages_manage_engagement của token và quyền MODERATE trên Fanpage.`;
-        }
-        // 4. Lỗi khác
-        else {
+        } else {
           errType = "META_API_ERROR";
           friendlyErrMsg = `Lỗi đăng bình luận từ Facebook: ${rawErrMsg} (Mã lỗi: ${code}${subcode ? "." + subcode : ""})`;
         }
@@ -2039,12 +2343,10 @@ export async function postReelCommentViaGraphApi(
           message: sanitizeSensitiveText(friendlyErrMsg)
         };
 
-        // Nếu mã lỗi là 190 (token user/page hoàn toàn không hợp lệ trên mọi endpoint), dừng ngay
         if (code === 190) {
           return lastError;
         }
 
-        // Tiếp tục thử các candidate IDs khác (ví dụ: Video ID)!
         continue;
       }
     }
@@ -2059,10 +2361,9 @@ export async function postReelCommentViaGraphApi(
   };
 
   // Lần thử 1: Chạy với Page Access Token hiện tại
-  let result = await attemptPosting(effectiveToken);
+  let result = await attemptPosting(effectiveToken, false);
 
   // Nếu thất bại do quyền hoặc token (code 200, 10, hoặc 190), thử tự động làm mới Page Access Token
-  // trực tiếp từ Facebook thông qua User Access Token của Admin đã liên kết!
   const isAuthOrPermErr =
     !result.success &&
     (result.error_code === 200 ||
@@ -2071,6 +2372,7 @@ export async function postReelCommentViaGraphApi(
       (result.message || "").includes("pages_manage_engagement"));
 
   if (isAuthOrPermErr && options.ownerUserId && pageId) {
+    invalidatePageTokenVerificationCache(pageId);
     try {
       const userAccounts = await getFacebookAccounts(db, cfg.encryptionKey, true, options.ownerUserId);
       const activeAccount = userAccounts.find((a) => a.access_token);
@@ -2098,8 +2400,7 @@ export async function postReelCommentViaGraphApi(
                 .bind(encToken, now, pageId, options.ownerUserId)
             ]);
 
-            // Thử lại lần 2 với Page Access Token mới vừa làm mới từ Facebook!
-            result = await attemptPosting(effectiveToken);
+            result = await attemptPosting(effectiveToken, true);
           }
         }
       }

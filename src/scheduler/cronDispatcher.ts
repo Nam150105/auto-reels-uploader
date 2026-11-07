@@ -9,7 +9,7 @@
 import type { D1Database, Env, ExecutionContext, QueueTaskMessage } from "../types.ts";
 import { nowUtcSeconds } from "../utils/timezone.ts";
 import { randomHex } from "../utils/crypto.ts";
-import { appendTaskStageLog } from "../db.ts";
+import { appendTaskStageLog, recordTaskAuditLog } from "../db.ts";
 import { processTaskQueueMessages } from "../queue/publishQueue.ts";
 import { cleanupExpiredR2Media } from "../services/r2MediaService.ts";
 import { syncDueReelsInsightsBatch } from "../services/reelsInsightsService.ts";
@@ -35,7 +35,7 @@ export async function dispatchDueScheduledTasks(
       `SELECT id, owner_user_id, idempotency_key, attempt_count, status, scheduled_at, next_retry_at
        FROM tasks
        WHERE (
-         (status = 'pending' AND scheduled_at IS NOT NULL AND scheduled_at <= ?)
+         (status IN ('pending', 'scheduled') AND scheduled_at IS NOT NULL AND schedule_date != '' AND schedule_time != '' AND scheduled_at <= ?)
          OR (status = 'queued' AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
          OR (status = 'processing' AND locked_until IS NOT NULL AND locked_until < ? AND attempt_count < max_attempts)
        )
@@ -98,6 +98,16 @@ export async function dispatchDueScheduledTasks(
         "cron_dispatched",
         `Cron Scheduler kích hoạt tác vụ đến hạn (UTC=${now}).`
       );
+      await recordTaskAuditLog(db, {
+        taskId: row.id,
+        ownerUserId: row.owner_user_id,
+        actorUserId: "system_cron",
+        action: "cron_dispatched",
+        triggerSource: "scheduler",
+        beforeStatus: row.status,
+        afterStatus: "queued",
+        details: { dispatched_at_utc: now }
+      });
       messagesToEnqueue.push({
         task_id: row.id,
         owner_user_id: row.owner_user_id,

@@ -25,7 +25,9 @@ import {
 } from "../db.ts";
 import {
   classifyMetaApiError,
+  getCurrentMetaThrottleState,
   getMetaConfig,
+  trackMetaGraphResponse,
   verifyPageTokenAndPermissions
 } from "./metaGraphService.ts";
 import { sanitizeSensitiveText } from "../utils/sanitize.ts";
@@ -279,6 +281,7 @@ export async function syncSingleReelInsights(
 
   try {
     const viResp = await fetch(videoInsightsUrl);
+    trackMetaGraphResponse("video_insights", viResp);
     const viData = (await viResp.json().catch(() => ({}))) as Record<string, unknown>;
 
     if (viResp.ok && Array.isArray(viData.data)) {
@@ -332,6 +335,7 @@ export async function syncSingleReelInsights(
             const singleResp = await fetch(
               `${cfg.graphBase}/${encodeURIComponent(videoId)}/video_insights?metric=${encodeURIComponent(singleMetric)}&access_token=${encodeURIComponent(pageToken)}`
             );
+            trackMetaGraphResponse("video_insights_single", singleResp);
             const singleData = (await singleResp.json().catch(() => ({}))) as Record<
               string,
               unknown
@@ -419,6 +423,7 @@ export async function syncSingleReelInsights(
       const vNodeResp = await fetch(
         `${cfg.graphBase}/${encodeURIComponent(videoId)}?fields=id,views,length,permalink_url,likes.summary(true),comments.summary(true)&access_token=${encodeURIComponent(pageToken)}`
       );
+      trackMetaGraphResponse("video_node_engagement", vNodeResp);
       const vNodeData = (await vNodeResp.json().catch(() => ({}))) as Record<string, unknown>;
       if (vNodeResp.ok && vNodeData.id) {
         anyInsightSuccess = true;
@@ -463,6 +468,7 @@ export async function syncSingleReelInsights(
         const pResp = await fetch(
           `${cfg.graphBase}/${encodeURIComponent(targetPostId)}?fields=id,shares,reactions.summary(true),comments.summary(true)&access_token=${encodeURIComponent(pageToken)}`
         );
+        trackMetaGraphResponse("post_node_engagement", pResp);
         const pData = (await pResp.json().catch(() => ({}))) as Record<string, unknown>;
         if (pResp.ok && pData.id) {
           anyInsightSuccess = true;
@@ -927,10 +933,20 @@ export async function syncDueReelsInsightsBatch(
   env: Env,
   maxBatchSize = 3,
   minIntervalMinutes = 30
-): Promise<{ processed: number; succeeded: number }> {
+): Promise<{ processed: number; succeeded: number; deferred_by_rate_limit?: boolean }> {
   try {
+    const throttle = getCurrentMetaThrottleState();
+    if (throttle.defer_background_sync) {
+      return { processed: 0, succeeded: 0, deferred_by_rate_limit: true };
+    }
+
     await ensureTaskCommentColumns(db);
-    const cutoffIso = new Date(Date.now() - minIntervalMinutes * 60 * 1000).toISOString();
+    const nowMs = Date.now();
+    const cutoffRecentIso = new Date(nowMs - minIntervalMinutes * 60 * 1000).toISOString();
+    const cutoffMidIso = new Date(nowMs - 3 * 60 * 60 * 1000).toISOString(); // 3h cho bài 1-7 ngày
+    const cutoffOldIso = new Date(nowMs - 12 * 60 * 60 * 1000).toISOString(); // 12h cho bài > 7 ngày
+    const age24hIso = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+    const age7dIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const { results: dueRows } = await db
       .prepare(
@@ -939,13 +955,27 @@ export async function syncDueReelsInsightsBatch(
          WHERE status = 'success'
            AND video_id != ''
            AND (analytics_status IS NULL OR analytics_status != 'token_expired')
-           AND (analytics_last_synced_at IS NULL OR analytics_last_synced_at < ?)
+           AND (
+             analytics_last_synced_at IS NULL
+             OR (COALESCE(published_at, updated_at, created_at) >= ? AND analytics_last_synced_at < ?)
+             OR (COALESCE(published_at, updated_at, created_at) >= ? AND COALESCE(published_at, updated_at, created_at) < ? AND analytics_last_synced_at < ?)
+             OR (COALESCE(published_at, updated_at, created_at) < ? AND analytics_last_synced_at < ?)
+           )
          ORDER BY CASE WHEN analytics_last_synced_at IS NULL THEN 0 ELSE 1 END ASC,
                   published_at DESC,
                   id DESC
          LIMIT ?`
       )
-      .bind(cutoffIso, maxBatchSize)
+      .bind(
+        age24hIso,
+        cutoffRecentIso,
+        age7dIso,
+        age24hIso,
+        cutoffMidIso,
+        age7dIso,
+        cutoffOldIso,
+        maxBatchSize
+      )
       .all<{ id: number; owner_user_id: string }>();
 
     if (!dueRows || dueRows.length === 0) {
@@ -954,6 +984,9 @@ export async function syncDueReelsInsightsBatch(
 
     let succeeded = 0;
     for (const row of dueRows) {
+      if (getCurrentMetaThrottleState().defer_background_sync) {
+        break;
+      }
       try {
         const res = await syncSingleReelInsights(db, env, Number(row.id), String(row.owner_user_id));
         if (res.success) succeeded++;
@@ -1135,7 +1168,22 @@ export async function getReelsAnalyticsDashboard(
       total_interactions: totalInteractions,
       total_watch_time_ms: totalWatchTimeMs,
       avg_watch_time_ms: avgWatchTimeMs,
-      video_length_sec: videoLengthSec
+      video_length_sec: videoLengthSec,
+      metrics: {
+        views,
+        plays,
+        initial_plays: initialPlays,
+        replays,
+        reach,
+        likes,
+        comments,
+        shares,
+        interactions: totalInteractions,
+        total_interactions: totalInteractions,
+        total_watch_time_ms: totalWatchTimeMs,
+        avg_watch_time_ms: avgWatchTimeMs,
+        video_length_sec: videoLengthSec
+      }
     };
   });
 
@@ -1288,9 +1336,12 @@ export async function getReelsAnalyticsDashboard(
     }
     pageCompMap.set(pid, cur);
   }
-  const pageComparison = Array.from(pageCompMap.values()).sort(
-    (a, b) => (b.views ?? -1) - (a.views ?? -1)
-  );
+  const pageComparison = Array.from(pageCompMap.values())
+    .map((p) => ({
+      ...p,
+      interactions: p.total_interactions
+    }))
+    .sort((a, b) => (b.views ?? -1) - (a.views ?? -1));
 
   const lastSyncedAt =
     reelsItems
@@ -1310,6 +1361,7 @@ export async function getReelsAnalyticsDashboard(
       sort_by: sortBy,
       sort_dir: sortDir === 1 ? "asc" : "desc"
     },
+    permission_warnings: permissionWarnings,
     token_health: {
       has_read_insights: hasReadInsights,
       expired_accounts_count: expiredAccounts.length,
@@ -1320,6 +1372,7 @@ export async function getReelsAnalyticsDashboard(
     last_synced_at: lastSyncedAt,
     total_published_reels: reelsItems.length,
     overview: {
+      total_reels_count: reelsItems.length,
       total_views: viewsAgg.total,
       total_reach: reachAgg.total,
       total_interactions: interactionsAgg.total,
@@ -1332,6 +1385,7 @@ export async function getReelsAnalyticsDashboard(
     charts: {
       views_over_time: viewsOverTime,
       performance_by_reel: performanceByReel,
+      reel_performance: performanceByReel,
       interactions_breakdown: interactionsChart,
       watch_time: watchTimeChart,
       page_comparison: pageComparison
@@ -1439,18 +1493,40 @@ export async function getSingleReelInsightDetail(
         }
       : null,
     metrics: metricItems.map((m) => ({
+      id: m.id,
       metric_name: m.metric_name,
       label: METRIC_LABELS[m.metric_name] || m.metric_name,
+      metric_label: METRIC_LABELS[m.metric_name] || m.metric_name,
       value: toFiniteNumberOrNull(m.metric_value),
+      metric_value: toFiniteNumberOrNull(m.metric_value),
       metric_json: m.metric_json,
       period: m.period,
       fetched_at: m.fetched_at,
       status: m.status,
-      error_message: m.error_message
+      metric_status: m.status,
+      error_message: m.error_message,
+      note: m.error_message
+    })),
+    metric_items: metricItems.map((m) => ({
+      id: m.id,
+      metric_name: m.metric_name,
+      label: METRIC_LABELS[m.metric_name] || m.metric_name,
+      metric_label: METRIC_LABELS[m.metric_name] || m.metric_name,
+      value: toFiniteNumberOrNull(m.metric_value),
+      metric_value: toFiniteNumberOrNull(m.metric_value),
+      metric_json: m.metric_json,
+      period: m.period,
+      fetched_at: m.fetched_at,
+      status: m.status,
+      metric_status: m.status,
+      error_message: m.error_message,
+      note: m.error_message
     })),
     history: snapshots.map((s) => ({
+      id: s.id,
       sync_date: s.sync_date,
       synced_at: s.synced_at,
+      fetched_at: s.synced_at,
       sync_status: s.sync_status,
       views: toFiniteNumberOrNull(s.views),
       plays: toFiniteNumberOrNull(s.plays),
@@ -1464,3 +1540,4 @@ export async function getSingleReelInsightDetail(
     }))
   };
 }
+

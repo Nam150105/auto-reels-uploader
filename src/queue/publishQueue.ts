@@ -22,13 +22,16 @@ import {
   updateTaskCommentState,
   appendTaskStageLog,
   recordTaskAttemptStart,
-  recordTaskAttemptFinish
+  recordTaskAttemptFinish,
+  prepareTasksForPublishNow,
+  recordTaskAuditLog
 } from "../db.ts";
 import {
   getMetaConfig,
   validateVideoSource,
   publishReelViaGraphApi,
-  postReelCommentViaGraphApi
+  postReelCommentViaGraphApi,
+  getCurrentMetaThrottleState
 } from "../services/metaGraphService.ts";
 import { randomHex } from "../utils/crypto.ts";
 import { nowUtcSeconds } from "../utils/timezone.ts";
@@ -73,6 +76,12 @@ export async function enqueueUserPendingTasks(
   let skippedFutureCount = 0;
 
   for (const task of pendingTasks) {
+    // Task cũ thiếu ngày/giờ đăng (needs_schedule): không tự động đăng cho đến khi bổ sung lịch hoặc bấm Đăng ngay
+    if (!task.scheduled_at || !task.schedule_date || !task.schedule_time) {
+      skippedFutureCount++;
+      continue;
+    }
+
     // BẮT BUỘC: Tuyệt đối KHÔNG BAO GIỜ đưa các task có lịch hẹn tương lai (scheduled_at > now) vào Queue xuất bản ngay!
     // Các task này phải ở trạng thái pending cho đến khi Cron Trigger kích hoạt đúng giờ hẹn.
     if (task.scheduled_at && task.scheduled_at > now) {
@@ -403,6 +412,20 @@ export async function consumeSingleTaskMessage(
       pubRes.message
     );
     await recordTaskAttemptFinish(db, attemptId, "success", "completed");
+    await recordTaskAuditLog(db, {
+      taskId: claimedTask.id,
+      ownerUserId: msg.owner_user_id,
+      actorUserId: msg.owner_user_id,
+      action: "publish_success",
+      triggerSource: claimedTask.trigger_source || "scheduler",
+      beforeStatus: "processing",
+      afterStatus: "success",
+      details: {
+        video_id: pubRes.video_id || "",
+        post_id: rawPostId,
+        video_url: pubRes.video_url || ""
+      }
+    });
 
     // BƯỚC 5, 6, 7: XỬ LÝ ĐĂNG BÌNH LUẬN RIÊNG BIỆT (TÁCH BIỆT VỚI REELS)
     const cleanComment = (claimedTask.comment_text || "").trim();
@@ -426,7 +449,8 @@ export async function consumeSingleTaskMessage(
         videoId: pubRes.video_id || claimedTask.video_id,
         commentText: cleanComment,
         ownerUserId: msg.owner_user_id,
-        taskId: claimedTask.id
+        taskId: claimedTask.id,
+        skipInitialDuplicateCheck: attemptNum <= 1
       });
 
       if (cmtRes.success) {
@@ -555,8 +579,199 @@ export async function consumeSingleTaskMessage(
     pubRes.error_subcode,
     finalFailMsg
   );
+  await recordTaskAuditLog(db, {
+    taskId: claimedTask.id,
+    ownerUserId: msg.owner_user_id,
+    actorUserId: msg.owner_user_id,
+    action: "publish_failed",
+    triggerSource: claimedTask.trigger_source || "scheduler",
+    beforeStatus: "processing",
+    afterStatus: "failed",
+    details: {
+      stage: pubRes.stage || "dead_letter",
+      error_code: pubRes.error_code ?? null,
+      error_subcode: pubRes.error_subcode ?? null,
+      ambiguous_publish: Boolean(pubRes.ambiguous_publish),
+      message: finalFailMsg
+    }
+  });
 
   return { status: "dead_letter", reason: finalFailMsg };
+}
+
+/**
+ * Đăng ngay (Publish Now) cho 1 hoặc nhiều Task được chọn:
+ * - Tự động cập nhật `scheduled_at` = thời điểm hiện tại (UTC), lưu `original_scheduled_at` vào lịch sử
+ * - Kiểm tra chặt chẽ điều kiện đăng (video R2 tồn tại, Fanpage & Page Access Token hợp lệ, không đăng lại task đã thành công hoặc đang chạy)
+ * - Đẩy vào Queue xử lý có kiểm soát Concurrency (tối đa 3 task song song)
+ */
+export async function publishSelectedTasksNow(
+  db: D1Database,
+  env: Env,
+  ctx: ExecutionContext,
+  params: {
+    taskIds: number[];
+    ownerUserId: string;
+    actorUserId?: string;
+    triggerSource?: "manual_publish_now" | "bulk_publish_now";
+  }
+): Promise<{
+  success: boolean;
+  requested_count: number;
+  eligible_count: number;
+  skipped_count: number;
+  enqueued_task_ids: number[];
+  skipped: Array<{ id: number; reason: string; code: string }>;
+  messages: QueueTaskMessage[];
+  updated_schedule_vn?: { schedule_date: string; schedule_time: string; scheduled_at: number };
+  message: string;
+}> {
+  const cfg = getMetaConfig(env);
+  const triggerSource = params.triggerSource || (params.taskIds.length > 1 ? "bulk_publish_now" : "manual_publish_now");
+  const actorId = params.actorUserId || params.ownerUserId;
+
+  // Bước 1: Kiểm tra trạng thái & cập nhật lịch đăng của các task hợp lệ về thời điểm hiện tại
+  const prep = await prepareTasksForPublishNow(db, {
+    taskIds: params.taskIds,
+    ownerUserId: params.ownerUserId,
+    actorUserId: actorId,
+    triggerSource
+  });
+
+  const skippedList: Array<{ id: number; reason: string; code: string }> = [...(prep.ineligibleTasks || [])];
+  const messagesToEnqueue: QueueTaskMessage[] = [];
+  const enqueuedIds: number[] = [];
+  const now = nowUtcSeconds();
+  let updatedScheduleVn: { schedule_date: string; schedule_time: string; scheduled_at: number } | undefined;
+
+  for (const task of (prep.eligibleTasks || [])) {
+    if (!updatedScheduleVn && task.scheduled_at) {
+      updatedScheduleVn = {
+        schedule_date: task.schedule_date || "",
+        schedule_time: task.schedule_time || "",
+        scheduled_at: task.scheduled_at
+      };
+    }
+
+    if (!task.facebook_page_id) {
+      const msg = "Task chưa được gán vào Fanpage đích.";
+      await updateTaskExecutionState(db, task.id, "failed", msg, {
+        retryable: false,
+        clearLease: true
+      });
+      skippedList.push({ id: task.id, reason: msg, code: "MISSING_PAGE" });
+      continue;
+    }
+
+    const page = await getFacebookPageByFbId(
+      db,
+      cfg.encryptionKey,
+      task.facebook_page_id,
+      true,
+      params.ownerUserId
+    );
+    if (!page || !page.page_access_token) {
+      const msg = `Fanpage ${task.facebook_page_id} chưa có Page Access Token hợp lệ.`;
+      await updateTaskExecutionState(db, task.id, "failed", msg, {
+        retryable: false,
+        clearLease: true
+      });
+      skippedList.push({ id: task.id, reason: msg, code: "INVALID_PAGE_TOKEN" });
+      continue;
+    }
+
+    if (
+      page.token_status === "expired" ||
+      page.token_status === "revoked" ||
+      page.token_status === "invalid"
+    ) {
+      const msg = `Access Token của Fanpage '${page.page_name || task.facebook_page_id}' đã hết hạn hoặc bị thu hồi. Vui lòng cập nhật lại Token.`;
+      await updateTaskExecutionState(db, task.id, "failed", msg, {
+        retryable: false,
+        clearLease: true
+      });
+      skippedList.push({ id: task.id, reason: msg, code: "TOKEN_EXPIRED" });
+      continue;
+    }
+
+    if (!page.can_post) {
+      const msg = `Fanpage '${page.page_name || task.facebook_page_id}' thiếu quyền CREATE_CONTENT.`;
+      await updateTaskExecutionState(db, task.id, "failed", msg, {
+        retryable: false,
+        clearLease: true
+      });
+      skippedList.push({ id: task.id, reason: msg, code: "MISSING_CREATE_CONTENT" });
+      continue;
+    }
+
+    const videoRef = task.object_key || task.media_id || task.video_path;
+    const vCheck = await validateVideoSource(db, env, videoRef, params.ownerUserId);
+    if (!vCheck.exists || !vCheck.valid_format) {
+      await updateTaskExecutionState(db, task.id, "failed", vCheck.message, {
+        retryable: false,
+        clearLease: true
+      });
+      skippedList.push({ id: task.id, reason: vCheck.message, code: "INVALID_VIDEO_SOURCE" });
+      continue;
+    }
+
+    const idempotencyKey =
+      task.idempotency_key || `idem_${params.ownerUserId}_${task.id}_${randomHex(6)}`;
+
+    await updateTaskExecutionState(
+      db,
+      task.id,
+      "queued",
+      "Đã nhận lệnh Đăng ngay -> Đang trong hàng đợi xuất bản...",
+      { clearLease: true }
+    );
+    await appendTaskStageLog(
+      db,
+      task.id,
+      params.ownerUserId,
+      "INFO",
+      "queued_publish_now",
+      `Đã cập nhật lịch đăng về hiện tại (${task.schedule_date} ${task.schedule_time}) và đưa vào hàng đợi Đăng ngay.`
+    );
+
+    enqueuedIds.push(task.id);
+    messagesToEnqueue.push({
+      task_id: task.id,
+      owner_user_id: params.ownerUserId,
+      idempotency_key: idempotencyKey,
+      attempt: (task.attempt_count || 0) + 1,
+      enqueued_at: now
+    });
+  }
+
+  if (messagesToEnqueue.length > 0) {
+    if (env.REELS_QUEUE) {
+      await env.REELS_QUEUE.sendBatch(messagesToEnqueue.map((m) => ({ body: m })));
+    } else {
+      ctx.waitUntil(processTaskQueueMessages(db, env, messagesToEnqueue));
+    }
+  }
+
+  const msgText =
+    messagesToEnqueue.length > 0
+      ? skippedList.length > 0
+        ? `Đã đưa ${messagesToEnqueue.length} task vào hàng đợi Đăng ngay (Bỏ qua ${skippedList.length} task không đủ điều kiện).`
+        : `Đã cập nhật lịch đăng về hiện tại và đưa ${messagesToEnqueue.length} task vào hàng đợi Đăng ngay!`
+      : skippedList.length > 0
+        ? `Không thể đăng ngay: ${skippedList[0].reason}`
+        : "Không có task hợp lệ nào để đăng ngay.";
+
+  return {
+    success: messagesToEnqueue.length > 0,
+    requested_count: prep.requested_count,
+    eligible_count: messagesToEnqueue.length,
+    skipped_count: skippedList.length,
+    enqueued_task_ids: enqueuedIds,
+    skipped: skippedList,
+    messages: messagesToEnqueue,
+    updated_schedule_vn: updatedScheduleVn,
+    message: msgText
+  };
 }
 
 export async function processTaskQueueMessages(
@@ -564,15 +779,25 @@ export async function processTaskQueueMessages(
   env: Env,
   messages: QueueTaskMessage[]
 ): Promise<void> {
-  // Tự động phân luồng tối ưu: 1 đến tối đa 5 luồng song song tuỳ theo số lượng tác vụ
-  const concurrency = Math.min(5, Math.max(1, Math.min(messages.length, 3)));
+  // Kiểm soát Concurrency chặt chẽ: Tối đa 3 luồng song song (giảm xuống 1 nếu Meta Rate Limit đang cao)
+  const throttle = getCurrentMetaThrottleState();
+  const maxAllowed = throttle.level === "critical" || throttle.level === "high" ? 1 : 3;
+  const concurrency = Math.min(maxAllowed, Math.max(1, messages.length));
   let index = 0;
 
-  async function workerLoop(): Promise<void> {
+  async function workerLoop(workerIdx: number): Promise<void> {
+    if (workerIdx > 0 && messages.length > 1) {
+      // Stagger nhẹ giữa các worker để tránh burst khởi tạo upload session cùng mili-giây
+      await new Promise((r) => setTimeout(r, workerIdx * 250));
+    }
     while (index < messages.length) {
       const currentIdx = index++;
       const msg = messages[currentIdx];
       if (!msg) continue;
+      const curThrottle = getCurrentMetaThrottleState();
+      if (curThrottle.recommended_delay_ms > 0 && currentIdx > 0) {
+        await new Promise((r) => setTimeout(r, Math.min(curThrottle.recommended_delay_ms, 2000)));
+      }
       await consumeSingleTaskMessage(db, env, msg);
     }
   }
@@ -580,7 +805,7 @@ export async function processTaskQueueMessages(
   const workers: Promise<void>[] = [];
   const count = Math.min(concurrency, messages.length);
   for (let i = 0; i < count; i++) {
-    workers.push(workerLoop());
+    workers.push(workerLoop(i));
   }
   await Promise.all(workers);
 }

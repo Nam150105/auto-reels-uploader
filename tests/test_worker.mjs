@@ -237,7 +237,8 @@ async function runAll30Tests() {
     "migrations/0003_security_and_tokens.sql",
     "migrations/0004_task_comment_columns.sql",
     "migrations/0005_r2_and_task_lifecycle.sql",
-    "migrations/0006_task_lock_and_reels_insights.sql"
+    "migrations/0006_task_lock_and_reels_insights.sql",
+    "migrations/0007_task_schedule_audit_and_api_optimization.sql"
   ];
   for (let pass = 1; pass <= 2; pass++) {
     for (const mf of migFiles) {
@@ -270,7 +271,9 @@ async function runAll30Tests() {
     "rate_limits",
     "user_page_permissions",
     "reel_insight_snapshots",
-    "reel_insight_metric_items"
+    "reel_insight_metric_items",
+    "task_audit_logs",
+    "meta_api_telemetry"
   ]) {
     assert.ok(tableNames.has(required), `Thiếu bảng/view ${required} trong D1`);
   }
@@ -289,7 +292,13 @@ async function runAll30Tests() {
     "is_locked",
     "analytics_status",
     "analytics_last_synced_at",
-    "analytics_error"
+    "analytics_error",
+    "original_scheduled_at",
+    "original_schedule_date",
+    "original_schedule_time",
+    "manual_publish_requested_at",
+    "manual_publish_by_user_id",
+    "trigger_source"
   ]) {
     assert.ok(taskColNames.has(c), `Thiếu cột ${c} trong bảng tasks`);
   }
@@ -745,7 +754,13 @@ async function runAll30Tests() {
           is_published: true,
           tasks: ["MANAGE", "CREATE_CONTENT"]
         }),
-        { status: 200 }
+        {
+          status: 200,
+          headers: {
+            "x-app-usage": JSON.stringify({ call_count: 10, total_cputime: 4, total_time: 7 }),
+            "x-page-usage": JSON.stringify({ call_count: 8, total_cputime: 3, total_time: 5 })
+          }
+        }
       );
     }
 
@@ -757,7 +772,13 @@ async function runAll30Tests() {
           video_id: `vid_reel_${graphApiReelsCalled}`,
           upload_url: `https://rupload.facebook.com/video-upload/v19.0/vid_reel_${graphApiReelsCalled}`
         }),
-        { status: 200 }
+        {
+          status: 200,
+          headers: {
+            "x-app-usage": JSON.stringify({ call_count: 14, total_cputime: 6, total_time: 9 }),
+            "x-page-usage": JSON.stringify({ call_count: 11, total_cputime: 5, total_time: 8 })
+          }
+        }
       );
     }
 
@@ -1248,7 +1269,9 @@ async function runAll30Tests() {
     body: JSON.stringify({
       facebook_page_id: "page_999",
       video_path: `r2://${initUploadData.media_id}`,
-      caption: "Bob mencoba dùng video của Alice"
+      caption: "Bob mencoba dùng video của Alice",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:00"
     })
   });
   assert.equal(bobStealMediaTask.status, 403, "Không cho phép User B dùng video R2 của User A");
@@ -1268,8 +1291,8 @@ async function runAll30Tests() {
       video_path: compUploadData.video_path,
       caption: "Thước phim số 1 đăng từ R2 #reels",
       comment_text: "Bình luận tự động dưới Reels!",
-      schedule_date: "",
-      schedule_time: ""
+      schedule_date: "2029-12-20",
+      schedule_time: "18:30"
     })
   });
   assert.equal(createTaskResp.status, 200);
@@ -1289,14 +1312,14 @@ async function runAll30Tests() {
           video_path: compUploadData.video_path,
           caption: "Bulk Task 1",
           comment_text: "",
-          schedule_date: "2026-12-20",
+          schedule_date: "2029-12-20",
           schedule_time: "07:00"
         },
         {
           video_path: compUploadData.video_path,
           caption: "Bulk Task 2",
           comment_text: "",
-          schedule_date: "2026-12-20",
+          schedule_date: "2029-12-20",
           schedule_time: "19:00"
         }
       ],
@@ -1334,6 +1357,13 @@ async function runAll30Tests() {
       headers: { Cookie: `session_token=${tokenA}` }
     });
   }
+
+  // Giả lập createdTask1 đã đến hạn để runner kích hoạt
+  const nowSecForRunStart = Math.floor(Date.now() / 1000) - 60;
+  await d1
+    .prepare("UPDATE tasks SET scheduled_at = ?, schedule_date = '2020-01-01', schedule_time = '00:00', status = 'pending' WHERE id = ?")
+    .bind(nowSecForRunStart, createdTask1.id)
+    .run();
 
   const runStartResp = await callWorker("/api/runner/start", {
     method: "POST",
@@ -1377,10 +1407,14 @@ async function runAll30Tests() {
     body: JSON.stringify({
       facebook_page_id: "page_101",
       video_path: compUploadData.video_path,
-      caption: "Task kiểm thử Retry & Backoff"
+      caption: "Task kiểm thử Retry & Backoff",
+      schedule_date: "2029-12-20",
+      schedule_time: "20:00"
     })
   });
   const retryTask = (await retryTaskResp.json()).task;
+  const nowDue = Math.floor(Date.now() / 1000) - 10;
+  await d1.prepare("UPDATE tasks SET scheduled_at = ? WHERE id = ?").bind(nowDue, retryTask.id).run();
 
   // Giả lập lỗi 500 tạm thời ở bước upload binary
   simulateUpload500Once = true;
@@ -1717,10 +1751,13 @@ async function runAll30Tests() {
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
       caption: "Reel không có comment",
-      comment_text: ""
+      comment_text: "",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:00"
     })
   });
   const taskNoCmt = (await taskNoCmtResp.json()).task;
+  await d1.prepare("UPDATE tasks SET scheduled_at = ? WHERE id = ?").bind(Math.floor(Date.now() / 1000) - 10, taskNoCmt.id).run();
   const resNoCmt = await consumeSingleTaskMessage(d1, env, {
     task_id: taskNoCmt.id,
     owner_user_id: taskNoCmt.owner_user_id,
@@ -1745,10 +1782,13 @@ async function runAll30Tests() {
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
       caption: "Reel có comment",
-      comment_text: "Bình luận kịch bản 2 & 3"
+      comment_text: "Bình luận kịch bản 2 & 3",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:05"
     })
   });
   const taskWithCmt = (await taskWithCmtResp.json()).task;
+  await d1.prepare("UPDATE tasks SET scheduled_at = ? WHERE id = ?").bind(Math.floor(Date.now() / 1000) - 10, taskWithCmt.id).run();
   const resWithCmt = await consumeSingleTaskMessage(d1, env, {
     task_id: taskWithCmt.id,
     owner_user_id: taskWithCmt.owner_user_id,
@@ -1778,10 +1818,13 @@ async function runAll30Tests() {
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
       caption: "Reel comment thiếu quyền",
-      comment_text: "Comment thiếu quyền MODERATE"
+      comment_text: "Comment thiếu quyền MODERATE",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:10"
     })
   });
   const taskPerm = (await taskPermResp.json()).task;
+  await d1.prepare("UPDATE tasks SET scheduled_at = ? WHERE id = ?").bind(Math.floor(Date.now() / 1000) - 10, taskPerm.id).run();
   await consumeSingleTaskMessage(d1, env, {
     task_id: taskPerm.id,
     owner_user_id: taskPerm.owner_user_id,
@@ -1807,10 +1850,13 @@ async function runAll30Tests() {
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
       caption: "Reel comment lỗi mạng",
-      comment_text: "Comment lỗi mạng"
+      comment_text: "Comment lỗi mạng",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:15"
     })
   });
   const taskNet = (await taskNetResp.json()).task;
+  await d1.prepare("UPDATE tasks SET scheduled_at = ? WHERE id = ?").bind(Math.floor(Date.now() / 1000) - 10, taskNet.id).run();
   await consumeSingleTaskMessage(d1, env, {
     task_id: taskNet.id,
     owner_user_id: taskNet.owner_user_id,
@@ -1834,10 +1880,13 @@ async function runAll30Tests() {
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
       caption: "Reel comment timeout",
-      comment_text: "Comment timeout tự khôi phục"
+      comment_text: "Comment timeout tự khôi phục",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:20"
     })
   });
   const taskTimeout = (await taskTimeoutResp.json()).task;
+  await d1.prepare("UPDATE tasks SET scheduled_at = ? WHERE id = ?").bind(Math.floor(Date.now() / 1000) - 10, taskTimeout.id).run();
   await consumeSingleTaskMessage(d1, env, {
     task_id: taskTimeout.id,
     owner_user_id: taskTimeout.owner_user_id,
@@ -1862,7 +1911,9 @@ async function runAll30Tests() {
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
       caption: "Reel restart",
-      comment_text: "Comment sau restart"
+      comment_text: "Comment sau restart",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:25"
     })
   });
   const taskRestart = (await taskRestartResp.json()).task;
@@ -1924,7 +1975,9 @@ async function runAll30Tests() {
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
       caption: "Task tái hiện lỗi singular statuses",
-      comment_text: "test cmt"
+      comment_text: "test cmt",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:30"
     })
   });
   const barePostTask = (await barePostTaskResp.json()).task;
@@ -1955,7 +2008,9 @@ async function runAll30Tests() {
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
       caption: "Task tái hiện stale token",
-      comment_text: "test cmt stale token recovery"
+      comment_text: "test cmt stale token recovery",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:35"
     })
   });
   const staleTask = (await staleTokenTaskResp.json()).task;
@@ -1995,7 +2050,9 @@ async function runAll30Tests() {
       video_path: "bulk_vid_1.mp4",
       caption: "Task Bulk 1",
       media_id: initMedia1.media_id,
-      facebook_page_id: "page_exp_1"
+      facebook_page_id: "page_exp_1",
+      schedule_date: "2029-12-20",
+      schedule_time: "20:00"
     })
   })).json();
   const bTask2 = await (await callWorker("/api/tasks", {
@@ -2005,7 +2062,9 @@ async function runAll30Tests() {
       video_path: "bulk_vid_1.mp4",
       caption: "Task Bulk 2",
       media_id: initMedia1.media_id,
-      facebook_page_id: "page_exp_1"
+      facebook_page_id: "page_exp_1",
+      schedule_date: "2029-12-20",
+      schedule_time: "20:05"
     })
   })).json();
   const bTask3 = await (await callWorker("/api/tasks", {
@@ -2015,7 +2074,9 @@ async function runAll30Tests() {
       video_path: "bulk_vid_2.mp4",
       caption: "Task Bulk 3",
       media_id: initMedia2.media_id,
-      facebook_page_id: "page_exp_1"
+      facebook_page_id: "page_exp_1",
+      schedule_date: "2029-12-20",
+      schedule_time: "20:10"
     })
   })).json();
 
@@ -2070,9 +2131,14 @@ async function runAll30Tests() {
       video_path: "old_month_video.mp4",
       caption: "Task chứa video cũ 35 ngày",
       media_id: oldMediaInit.media_id,
-      facebook_page_id: "page_exp_1"
+      facebook_page_id: "page_exp_1",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:00"
     })
   })).json();
+
+  // Đánh dấu task này đã xuất bản thành công từ tháng trước để giải phóng video R2 hết hạn
+  await d1.prepare("UPDATE tasks SET status = 'success', publish_status = 'success', scheduled_at = NULL WHERE id = ?").bind(oldTask.id).run();
 
   const cleanupResp = await callWorker("/api/system/cleanup-expired-media", {
     method: "POST",
@@ -2118,7 +2184,9 @@ async function runAll30Tests() {
     body: JSON.stringify({
       facebook_page_id: "page_exp_1",
       video_path: "unuploaded_local_video_gencine.mp4",
-      caption: "Task chưa upload R2"
+      caption: "Task chưa upload R2",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:00"
     })
   });
   assert.equal(unuploadedTaskResp.status, 400, "Không được phép tạo Task khi video chưa tải lên R2");
@@ -2132,7 +2200,9 @@ async function runAll30Tests() {
     body: JSON.stringify({
       facebook_page_id: "page_exp_1",
       video_path: "alice_reel_01.mp4",
-      caption: "Task tự động phân giải từ tên file đã có trên R2"
+      caption: "Task tự động phân giải từ tên file đã có trên R2",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:00"
     })
   });
   assert.equal(byFilenameTaskResp.status, 200);
@@ -2260,7 +2330,9 @@ async function runAll30Tests() {
     body: JSON.stringify({
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
-      caption: "Task pending xóa chung với task locked"
+      caption: "Task pending xóa chung với task locked",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:00"
     })
   });
   const mixPendingTask = (await mixPendingTaskResp.json()).task;
@@ -2284,7 +2356,9 @@ async function runAll30Tests() {
     body: JSON.stringify({
       facebook_page_id: "page_exp_1",
       video_path: compUploadData.video_path,
-      caption: "Task đang chạy"
+      caption: "Task đang chạy",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:00"
     })
   });
   const inFlightTask = (await inFlightTaskResp.json()).task;
@@ -2478,7 +2552,9 @@ async function runAll30Tests() {
     body: JSON.stringify({
       facebook_page_id: "page_exp_2",
       video_path: compUploadData.video_path,
-      caption: "Reel lịch sử trên Page 2 (Zyntrix Vietnam)"
+      caption: "Reel lịch sử trên Page 2 (Zyntrix Vietnam)",
+      schedule_date: "2029-12-20",
+      schedule_time: "19:40"
     })
   });
   const taskOnPage2 = (await taskOnPage2Resp.json()).task;
@@ -2538,10 +2614,403 @@ async function runAll30Tests() {
   );
   console.log("  ✓ [Test 39] Phân loại 8 loại lỗi Meta API & Cập nhật Access Token an toàn (Bảo toàn Page & Lịch sử Task)");
 
+  // --------------------------------------------------------------------------
+  // [TEST 40] BẮT BUỘC NHẬP NGÀY VÀ GIỜ ĐĂNG & TASK CŨ THIẾU LỊCH CHUYỂN NEEDS_SCHEDULE
+  // --------------------------------------------------------------------------
+  console.log("\n  --- BẮT ĐẦU KIỂM THỬ TỐI ƯU TASK MANAGEMENT & META GRAPH API ---");
+
+  // 1. Tạo task bỏ trống cả ngày và giờ -> Bị từ chối HTTP 400 kèm SCHEDULE_REQUIRED và field_errors
+  const emptyBothResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task thiếu cả ngày và giờ",
+      schedule_date: "   ",
+      schedule_time: "   "
+    })
+  });
+  assert.equal(emptyBothResp.status, 400);
+  const emptyBothErr = await emptyBothResp.json();
+  assert.equal(emptyBothErr.error_code, "SCHEDULE_REQUIRED");
+  assert.ok(emptyBothErr.field_errors.schedule_date);
+  assert.ok(emptyBothErr.field_errors.schedule_time);
+
+  // 2. Tạo task chỉ nhập ngày, thiếu giờ -> Bị từ chối HTTP 400
+  const missingTimeResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task thiếu giờ",
+      schedule_date: "2029-12-25",
+      schedule_time: ""
+    })
+  });
+  assert.equal(missingTimeResp.status, 400);
+  const missingTimeErr = await missingTimeResp.json();
+  assert.equal(missingTimeErr.missing_time, true);
+
+  // 3. Tạo task chỉ nhập giờ, thiếu ngày -> Bị từ chối HTTP 400
+  const missingDateResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task thiếu ngày",
+      schedule_date: "",
+      schedule_time: "14:00"
+    })
+  });
+  assert.equal(missingDateResp.status, 400);
+  const missingDateErr = await missingDateResp.json();
+  assert.equal(missingDateErr.missing_date, true);
+
+  // 4. Tạo task với thời gian trong quá khứ -> Bị từ chối HTTP 400 kèm PAST_SCHEDULE_TIME & is_past = true
+  const pastRejectResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task quá khứ",
+      schedule_date: "2021-05-10",
+      schedule_time: "08:00"
+    })
+  });
+  assert.equal(pastRejectResp.status, 400);
+  const pastRejectErr = await pastRejectResp.json();
+  assert.equal(pastRejectErr.error_code, "PAST_SCHEDULE_TIME");
+  assert.equal(pastRejectErr.is_past, true);
+
+  // 5. Bulk Create thiếu lịch đăng -> Bị từ chối 400
+  const bulkMissingSchedResp = await callWorker("/api/tasks/bulk", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tasks: [
+        {
+          video_path: compUploadData.video_path,
+          caption: "Bulk thiếu lịch",
+          schedule_date: "",
+          schedule_time: ""
+        }
+      ],
+      assign_page_ids: ["page_exp_1"]
+    })
+  });
+  assert.equal(bulkMissingSchedResp.status, 400);
+
+  // 6. Task cũ không có ngày giờ trong D1 -> Hiển thị needs_schedule, không tự động đăng, Cron không claim
+  const legacyTaskInsert = await d1.prepare(`
+    INSERT INTO tasks (
+      owner_user_id, facebook_page_id, video_path, caption,
+      schedule_date, schedule_time, scheduled_at, status, is_locked
+    ) VALUES (?, ?, ?, ?, '', '', NULL, 'pending', 0)
+  `).bind(aliceAccsNow[0].owner_user_id, "page_exp_1", compUploadData.video_path, "Legacy task không có lịch").run();
+  const legacyTaskId = legacyTaskInsert.meta.last_row_id;
+
+  const tasksListWithLegacy = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const foundLegacy = tasksListWithLegacy.find((t) => t.id === legacyTaskId);
+  assert.equal(foundLegacy.status, "needs_schedule", "Task cũ không có lịch phải hiển thị needs_schedule");
+  assert.equal(foundLegacy.needs_schedule, true);
+
+  // Chạy Cron -> Đảm bảo legacy task KHÔNG bị đưa vào Queue
+  const cronBgLegacy = [];
+  const cronResLegacy = await workerDefault.scheduled(
+    { cron: "*/1 * * * *", type: "scheduled", scheduledTime: Date.now() },
+    env,
+    { waitUntil: (p) => cronBgLegacy.push(p), passThroughOnException: () => {} }
+  );
+  await Promise.all(cronBgLegacy);
+  assert.ok(!cronResLegacy.task_ids.includes(legacyTaskId), "Cron Scheduler tuyệt đối không claim task thiếu lịch");
+  console.log("  ✓ [Test 40] Bắt buộc nhập ngày & giờ đăng; Chặn quá khứ; Task cũ thiếu lịch thành needs_schedule an toàn");
+
+  // --------------------------------------------------------------------------
+  // [TEST 41] ĐĂNG NGAY TRÊN TỪNG TASK (PUBLISH-NOW) & BULK PUBLISH-NOW & AUDIT LOGS
+  // --------------------------------------------------------------------------
+  // 1. Tạo 1 task hợp lệ hẹn lịch xa (2029-12-25 15:30)
+  const taskToPublishNowResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task test publish-now #reels",
+      comment_text: "Auto comment publish now",
+      schedule_date: "2029-12-25",
+      schedule_time: "15:30"
+    })
+  });
+  assert.equal(taskToPublishNowResp.status, 200);
+  const taskToPub = (await taskToPublishNowResp.json()).task;
+
+  // 2. Nhấn POST /api/tasks/:id/publish-now
+  const pubNowResp = await callWorker(`/api/tasks/${taskToPub.id}/publish-now`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.ok([200, 202].includes(pubNowResp.status));
+  const pubNowData = await pubNowResp.json();
+  assert.equal(pubNowData.success, true);
+  assert.equal(pubNowData.task.status, "queued");
+  assert.equal(pubNowData.task.trigger_source, "manual_publish_now");
+  assert.equal(pubNowData.task.original_schedule_date, "2029-12-25", "Phải bảo toàn ngày đăng ban đầu");
+  assert.equal(pubNowData.task.original_schedule_time, "15:30", "Phải bảo toàn giờ đăng ban đầu");
+  assert.ok(pubNowData.task.manual_publish_requested_at, "Phải ghi nhận thời điểm yêu cầu đăng ngay");
+
+  // 3. Worker tiêu thụ Queue message và xuất bản bài Reels + Comment
+  await consumeSingleTaskMessage(d1, env, {
+    task_id: taskToPub.id,
+    owner_user_id: taskToPub.owner_user_id,
+    idempotency_key: `idem_pubnow_${taskToPub.id}`,
+    attempt: 1,
+    enqueued_at: Math.floor(Date.now() / 1000)
+  });
+
+  const taskAfterPubNow = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const finishedPubNow = taskAfterPubNow.find((t) => t.id === taskToPub.id);
+  assert.equal(finishedPubNow.status, "success");
+  assert.equal(finishedPubNow.is_locked, true, "Task đăng thành công phải bị khóa");
+  assert.equal(finishedPubNow.comment_status, "success");
+
+  // 4. Kiểm tra Audit Logs qua GET /api/tasks/:id/audit-logs
+  const auditLogsResp = await callWorker(`/api/tasks/${taskToPub.id}/audit-logs`, {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(auditLogsResp.status, 200);
+  const auditLogsData = await auditLogsResp.json();
+  assert.ok(auditLogsData.audit_logs.length >= 2);
+  const actionNames = auditLogsData.audit_logs.map((l) => l.action);
+  assert.ok(actionNames.includes("publish_now") || actionNames.includes("manual_publish_now"), "Audit log phải có hành động publish_now");
+  assert.ok(actionNames.includes("publish_success") || actionNames.includes("published"), "Audit log phải có hành động publish_success");
+  for (const logItem of auditLogsData.audit_logs) {
+    assert.equal(logItem.access_token, undefined, "Tuyệt đối không lưu Access Token vào audit logs");
+    assert.equal(logItem.cookie, undefined, "Tuyệt đối không lưu Cookie vào audit logs");
+  }
+
+  // 5. Thử gọi publish-now lần 2 trên task đã đăng thành công -> Phải bị chặn 403 / 409
+  const pubAgainResp = await callWorker(`/api/tasks/${taskToPub.id}/publish-now`, {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.ok([400, 403, 409].includes(pubAgainResp.status));
+  const pubAgainErr = await pubAgainResp.json();
+  assert.ok(["TASK_ALREADY_PUBLISHED", "TASK_LOCKED_AFTER_PUBLISH"].includes(pubAgainErr.error_code));
+
+  // 6. Kiểm tra Bulk Publish Now (POST /api/tasks/bulk-publish-now)
+  const bulkPubT1Resp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Bulk Pub Now 1",
+      schedule_date: "2029-12-28",
+      schedule_time: "10:00"
+    })
+  });
+  const bulkPubT2Resp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Bulk Pub Now 2",
+      schedule_date: "2029-12-28",
+      schedule_time: "11:00"
+    })
+  });
+  const bulkPubT1 = (await bulkPubT1Resp.json()).task;
+  const bulkPubT2 = (await bulkPubT2Resp.json()).task;
+
+  // Gọi Bulk Publish Now bao gồm cả task đã hoàn thành (finishedPubNow.id)
+  const bulkPubNowExecResp = await callWorker("/api/tasks/bulk-publish-now", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: [bulkPubT1.id, bulkPubT2.id, finishedPubNow.id] })
+  });
+  assert.ok([200, 202].includes(bulkPubNowExecResp.status));
+  const bulkPubNowExecData = await bulkPubNowExecResp.json();
+  assert.equal(bulkPubNowExecData.eligible_count, 2, "Chỉ được enqueue 2 task hợp lệ");
+  assert.ok(bulkPubNowExecData.skipped.some((s) => s.id === finishedPubNow.id), "Phải báo rõ task đã đăng bị bỏ qua");
+
+  // 7. Đảm bảo task FAILED không bị khóa vĩnh viễn (is_locked = 0)
+  const failTaskResp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Task giả lập failed",
+      schedule_date: "2029-12-30",
+      schedule_time: "09:00"
+    })
+  });
+  const failTask = (await failTaskResp.json()).task;
+  await d1.prepare("UPDATE tasks SET status = 'failed', publish_status = 'failed', is_locked = 0, log = 'Simulated error' WHERE id = ?")
+    .bind(failTask.id)
+    .run();
+  const taskAfterFail = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const foundFail = taskAfterFail.find((t) => t.id === failTask.id);
+  assert.equal(foundFail.status, "failed");
+  assert.equal(foundFail.is_locked, false, "Task thất bại phải có is_locked = false để cho phép sửa và thử lại");
+  console.log("  ✓ [Test 41] Đăng ngay (Publish-Now) từng task & Bulk; Bảo toàn lịch cũ; Ghi Audit Logs; Mở khóa task failed");
+
+  // --------------------------------------------------------------------------
+  // [TEST 42] THAO TÁC HÀNG LOẠT: BULK RESCHEDULE (GIÃN CÁCH) & BULK CANCEL
+  // --------------------------------------------------------------------------
+  // 1. Bulk Reschedule với khoảng cách thời gian (interval_minutes: 15)
+  const rTask1Resp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Reschedule task 1",
+      schedule_date: "2029-12-28",
+      schedule_time: "08:00"
+    })
+  });
+  const rTask2Resp = await callWorker("/api/tasks", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      facebook_page_id: "page_exp_1",
+      video_path: compUploadData.video_path,
+      caption: "Reschedule task 2",
+      schedule_date: "2029-12-28",
+      schedule_time: "08:15"
+    })
+  });
+  const rTask1 = (await rTask1Resp.json()).task;
+  const rTask2 = (await rTask2Resp.json()).task;
+
+  const bulkReschedResp = await callWorker("/api/tasks/bulk-reschedule", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      task_ids: [rTask1.id, rTask2.id, finishedPubNow.id],
+      new_schedule_date: "2030-01-15",
+      new_schedule_time: "10:00",
+      interval_minutes: 20
+    })
+  });
+  assert.equal(bulkReschedResp.status, 200);
+  const bulkReschedData = await bulkReschedResp.json();
+  assert.equal(bulkReschedData.rescheduled_count, 2);
+  assert.ok(bulkReschedData.skipped_tasks.some((s) => s.id === finishedPubNow.id), "Phải bỏ qua task đã đăng thành công");
+
+  const tasksAfterResched = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const updatedR1 = tasksAfterResched.find((t) => t.id === rTask1.id);
+  const updatedR2 = tasksAfterResched.find((t) => t.id === rTask2.id);
+  assert.equal(updatedR1.schedule_date, "2030-01-15");
+  assert.equal(updatedR1.schedule_time, "10:00");
+  assert.equal(updatedR2.schedule_date, "2030-01-15");
+  assert.equal(updatedR2.schedule_time, "10:20", "Task thứ 2 phải được giãn cách đúng 20 phút");
+
+  // 2. Bulk Cancel
+  const bulkCancelResp = await callWorker("/api/tasks/bulk-cancel", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: [rTask1.id, rTask2.id] })
+  });
+  assert.equal(bulkCancelResp.status, 200);
+  const bulkCancelData = await bulkCancelResp.json();
+  assert.equal(bulkCancelData.cancelled_count, 2);
+
+  const tasksAfterCancel = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  assert.equal(tasksAfterCancel.find((t) => t.id === rTask1.id).status, "cancelled");
+  assert.equal(tasksAfterCancel.find((t) => t.id === rTask2.id).status, "cancelled");
+  console.log("  ✓ [Test 42] Thao tác hàng loạt: Đổi lịch có giãn cách thời gian (Staggered Reschedule) & Hủy lịch an toàn");
+
+  // --------------------------------------------------------------------------
+  // [TEST 43] TỐI ƯU META GRAPH API, THEO DÕI RATE-LIMIT & KHẮC PHỤC TRANG /INSIGHTS
+  // --------------------------------------------------------------------------
+  // 1. Kiểm tra Cache 15 phút của verifyPageTokenAndPermissions
+  const cacheTestRes1 = await verifyPageTokenAndPermissions(d1, env, {
+    facebookPageId: "page_exp_1",
+    pageAccessToken: "EAAB_PAGE_TOKEN_EXP_1_INSIGHTS",
+    ownerUserId: aliceAccsNow[0].owner_user_id,
+    mode: "comment"
+  });
+  assert.equal(cacheTestRes1.valid, true);
+
+  // Gọi lần 2: phải trả về từ cache mà không gọi mock fetch
+  const cacheTestRes2 = await verifyPageTokenAndPermissions(d1, env, {
+    facebookPageId: "page_exp_1",
+    pageAccessToken: "EAAB_PAGE_TOKEN_EXP_1_INSIGHTS",
+    ownerUserId: aliceAccsNow[0].owner_user_id,
+    mode: "comment"
+  });
+  assert.equal(cacheTestRes2.valid, true);
+
+  // 2. Kiểm tra API Telemetry Endpoint (GET /api/system/api-telemetry)
+  const telemetryResp = await callWorker("/api/system/api-telemetry", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(telemetryResp.status, 200);
+  const telemetryData = await telemetryResp.json();
+  assert.equal(telemetryData.success, true);
+  assert.ok(telemetryData.throttle || telemetryData.throttle_state);
+  assert.ok(telemetryData.totals);
+  assert.ok(Array.isArray(telemetryData.endpoints));
+
+  // 3. Kiểm tra Data Contract của Dashboard /insights trả về đầy đủ các trường mà UI yêu cầu
+  const insightsContractResp = await callWorker("/api/insights/reels?range=30d", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(insightsContractResp.status, 200);
+  const insightsContract = await insightsContractResp.json();
+  assert.ok(insightsContract.reels.length >= 1);
+  const sampleReel = insightsContract.reels[0];
+  // Khắc phục lỗi màn hình tối do thiếu metrics.views (như trong ảnh lỗi của user)
+  assert.ok(sampleReel.metrics, "Mỗi Reel trong danh sách /insights phải có object metrics");
+  assert.ok(sampleReel.metrics.views === null || typeof sampleReel.metrics.views === "number", "metrics.views phải là số hoặc null");
+  assert.ok(sampleReel.metrics.reach === null || typeof sampleReel.metrics.reach === "number", "metrics.reach phải là số hoặc null");
+  assert.ok(sampleReel.metrics.interactions === null || typeof sampleReel.metrics.interactions === "number", "metrics.interactions phải là số hoặc null");
+  assert.ok(sampleReel.metrics.likes === null || typeof sampleReel.metrics.likes === "number");
+  assert.ok(sampleReel.metrics.comments === null || typeof sampleReel.metrics.comments === "number");
+  assert.ok(sampleReel.metrics.shares === null || typeof sampleReel.metrics.shares === "number");
+
+  assert.equal(typeof insightsContract.overview.total_reels_count, "number");
+  assert.ok(Array.isArray(insightsContract.permission_warnings));
+  assert.ok(Array.isArray(insightsContract.charts.reel_performance));
+  assert.ok(Array.isArray(insightsContract.charts.page_comparison));
+  if (insightsContract.charts.page_comparison.length > 0) {
+    assert.equal(typeof insightsContract.charts.page_comparison[0].interactions, "number");
+  }
+
+  // 4. Kiểm tra Chi tiết Reel Insights (GET /api/insights/reels/:taskId)
+  const reelDetailContractResp = await callWorker(`/api/insights/reels/${staleTask.id}`, {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(reelDetailContractResp.status, 200);
+  const reelDetailContract = await reelDetailContractResp.json();
+  assert.ok(Array.isArray(reelDetailContract.metric_items));
+  assert.ok(reelDetailContract.metric_items.length >= 5);
+  const sampleItem = reelDetailContract.metric_items[0];
+  assert.ok(sampleItem.metric_name);
+  assert.ok(sampleItem.metric_label);
+  assert.ok(sampleItem.metric_status);
+  assert.ok(sampleItem.fetched_at);
+  console.log("  ✓ [Test 43] Tối ưu Graph API: 15-min TTL Cache, Rate-Limit Header Monitor & Hoàn thiện Data Contract /insights 100%");
+
   globalThis.fetch = originalFetch;
 
   console.log("\n==================================================================");
-  console.log(" TẤT CẢ 39/39 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
+  console.log(" TẤT CẢ 43/43 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
   console.log("==================================================================");
 }
 

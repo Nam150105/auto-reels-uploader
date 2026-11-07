@@ -301,6 +301,15 @@ export interface TaskRecord {
   schedule_date: string;
   schedule_time: string;
   scheduled_at?: number | null;
+  original_scheduled_at?: number | null;
+  original_schedule_date?: string | null;
+  original_schedule_time?: string | null;
+  manual_publish_requested_at?: string | null;
+  manual_publish_by_user_id?: string | null;
+  trigger_source?: string | null;
+  needs_schedule?: boolean;
+  is_future_schedule?: boolean;
+  is_due_soon?: boolean;
   timezone?: string;
   status: string;
   raw_status?: string;
@@ -379,4 +388,36 @@ export interface ReelInsightMetricItemRecord {
   fetched_at: string;
   status: "supported" | "unavailable" | "permission_required" | "no_data" | "retryable";
   error_message: string;
+}
+
+export interface TaskAuditLogRecord {
+  id: number;
+  task_id: number;
+  owner_user_id: string;
+  actor_user_id: string;
+  action: string;
+  previous_status: string;
+  new_status: string;
+  previous_scheduled_at: number | null;
+  new_scheduled_at: number | null;
+  trigger_source: string;
+  detail_json: string;
+  error_message: string;
+  created_at: string;
+}
+
+export interface MetaApiTelemetryRecord {
+  endpoint_key: string;
+  total_requests: number;
+  cache_hits: number;
+  cache_misses: number;
+  error_requests: number;
+  rate_limited_requests: number;
+  retry_count: number;
+  last_status_code: number;
+  app_usage_json: string;
+  page_usage_json: string;
+  buc_usage_json: string;
+  throttle_level: "normal" | "elevated" | "high" | "rate_limited";
+  updated_at: string;
 }
