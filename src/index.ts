@@ -37,6 +37,7 @@ import {
   addTasksBulk,
   deleteTask,
   deleteTasksBulk,
+  cleanupCompletedTasks,
   resetTask,
   resetRunningTasks,
   getTaskLogs,
@@ -1068,17 +1069,15 @@ export async function handleWorkerRequest(
         }
       }
 
+      const allowUnuploadedVideo = Boolean((body as any).allow_unuploaded_video);
+
       // 2. Kiểm tra tính hợp lệ và phân giải R2 cho từng task
       for (let i = 0; i < tasksList.length; i++) {
         const item = tasksList[i];
         const vPath = (item.video_path || "").trim();
-        const cap = (item.caption || "").trim();
 
         if (!vPath) {
           return jsonResponse({ detail: `Dòng ${i + 1}: Đường dẫn video không được để trống.` }, 400);
-        }
-        if (!cap) {
-          return jsonResponse({ detail: `Dòng ${i + 1}: Caption không được để trống.` }, 400);
         }
 
         // Tự động giải quyết media R2
@@ -1104,12 +1103,16 @@ export async function handleWorkerRequest(
             item.object_key = mediaRecord.object_key;
             item.video_path = `r2://${mediaRecord.id}`;
           } else if (isExplicitR2 || /^[a-zA-Z]:\\/.test(vPath) || vPath.endsWith(".mp4")) {
-            return jsonResponse(
-              {
-                detail: `Dòng ${i + 1}: Video '${baseName}' chưa được tải lên Cloudflare R2 hoặc upload chưa hoàn tất. Vui lòng chọn file và tải lên R2 trước khi tạo task.`
-              },
-              400
-            );
+            if (allowUnuploadedVideo) {
+              item.video_path = vPath;
+            } else {
+              return jsonResponse(
+                {
+                  detail: `Dòng ${i + 1}: Video '${baseName}' chưa được tải lên Cloudflare R2 hoặc upload chưa hoàn tất. Vui lòng chọn file và tải lên R2 trước khi tạo task.`
+                },
+                400
+              );
+            }
           }
         }
       }
@@ -1647,6 +1650,19 @@ export async function handleWorkerRequest(
       }
     }
 
+
+    if (pathname === "/api/tasks/cleanup-completed" && method === "POST") {
+      try {
+        const cleanupRes = await cleanupCompletedTasks(db, ownerUserId);
+        return jsonResponse({
+          success: true,
+          deleted_count: cleanupRes.deletedCount,
+          message: `Đã dọn dẹp ${cleanupRes.deletedCount} tác vụ đã hoàn thành khỏi hệ thống.`
+        });
+      } catch (err: any) {
+        return jsonResponse({ detail: err?.message || "Không thể dọn dẹp tác vụ hoàn thành." }, 400);
+      }
+    }
 
     // ------------------------------------------
     // 6.4E. THÊM BÌNH LUẬN TRỰC TIẾP VÀO BÀI VIẾT ĐÃ ĐĂNG (/api/tasks/:id/comment)

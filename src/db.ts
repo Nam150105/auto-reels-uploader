@@ -2930,7 +2930,7 @@ export async function getTasks(
       params.push(status);
     }
   } else if (excludePublished) {
-    sql += " AND t.status != 'published'";
+    sql += " AND t.status NOT IN ('published', 'success')";
   }
 
   if (startDate && startDate.trim()) {
@@ -4179,6 +4179,19 @@ export async function deleteTask(
   }
 
   return { deleted: true, orphanMediaId };
+}
+
+export async function cleanupCompletedTasks(
+  db: D1Database,
+  ownerUserId: string
+): Promise<{ deletedCount: number }> {
+  const res = await db
+    .prepare(
+      "DELETE FROM tasks WHERE owner_user_id = ? AND status IN ('published', 'success')"
+    )
+    .bind(ownerUserId)
+    .run();
+  return { deletedCount: res.meta?.changes || 0 };
 }
 
 export async function deleteTasksBulk(
