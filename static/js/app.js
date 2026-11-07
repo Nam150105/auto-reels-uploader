@@ -629,9 +629,11 @@ const selectedPageCount = computed(() => {
       const seq = ++tasksReqSeq;
       try {
         const params = new URLSearchParams();
-        params.append('exclude_published', 'true');
+        if (filterStatus.value !== 'published' && filterStatus.value !== 'all') {
+          params.append('exclude_published', 'true');
+        }
         if (filterPage.value) params.append('facebook_page_id', filterPage.value);
-        if (filterStatus.value) params.append('status', filterStatus.value);
+        if (filterStatus.value && filterStatus.value !== 'all') params.append('status', filterStatus.value);
         if (filterStartDate.value) params.append('start_date', filterStartDate.value);
         if (filterEndDate.value) params.append('end_date', filterEndDate.value);
         if (searchTask.value.trim()) params.append('search', searchTask.value.trim());
@@ -644,8 +646,12 @@ const selectedPageCount = computed(() => {
         if (res.ok) {
           const data = await res.json();
           if (seq === tasksReqSeq && Array.isArray(data)) {
-            // Danh sách task đang hoạt động CHỈ hiển thị bài chưa đăng thành công (chờ đăng và đăng lỗi)
-            tasks.value = data.filter(t => t.status !== 'published' && t.status !== 'success');
+            // Mặc định chỉ hiển thị task cần xử lý (chờ đăng, đang xử lý, đăng lỗi)
+            if (filterStatus.value !== 'published' && filterStatus.value !== 'all') {
+              tasks.value = data.filter(t => t.status !== 'published' && t.status !== 'success');
+            } else {
+              tasks.value = data;
+            }
             if (selectedTaskIds.value.length > 0) {
               const currentIds = new Set(tasks.value.map(t => t.id));
               selectedTaskIds.value = selectedTaskIds.value.filter(id => currentIds.has(id));
@@ -1234,6 +1240,27 @@ const selectedPageCount = computed(() => {
       }
       loadTasks();
     }
+
+    function selectPageFilter(pageId) {
+      if (filterPage.value === pageId) {
+        filterPage.value = '';
+      } else {
+        filterPage.value = pageId;
+      }
+      loadTasks();
+    }
+
+    const activeFilterPageObj = computed(() => {
+      if (!filterPage.value) return null;
+      return pages.value.find(p => p.facebook_page_id === filterPage.value) || null;
+    });
+
+    const allPagesStats = computed(() => {
+      const pending = pages.value.reduce((acc, p) => acc + (p.pending_count || 0), 0);
+      const running = pages.value.reduce((acc, p) => acc + (p.running_count || 0), 0);
+      const failed = pages.value.reduce((acc, p) => acc + (p.failed_count || 0), 0);
+      return { pending, running, failed };
+    });
 
     // ==========================================
     // 6. RUNNER CONTROLS (RUN TEST & RUN TASK)
@@ -3765,6 +3792,15 @@ async function handleDeleteTask(taskId) {
       }).catch(() => {});
     }
 
+    const displayPages = computed(() => {
+      let list = pages.value || [];
+      if (searchPage.value && searchPage.value.trim()) {
+        const q = searchPage.value.toLowerCase().trim();
+        list = list.filter(p => (p.name || p.page_name || '').toLowerCase().includes(q) || (p.facebook_page_id || '').includes(q));
+      }
+      return list;
+    });
+
     const validPages = computed(() => {
       let list = pages.value.filter(p => p.can_post === 1 || p.status === 'connected' || p.status === 'active');
       if (searchPage.value && searchPage.value.trim()) {
@@ -3899,15 +3935,8 @@ async function handleDeleteTask(taskId) {
     }
 
     onMounted(async () => {
-      // Chuẩn hóa đường dẫn mặc định theo 3 Tab chính: /schedule, /analytics, /pages
-      const path = window.location.pathname;
-      if (path === '/analytics' || path === '/insights' || path === '/posts' || path === '/comments') {
-        mainView.value = 'analytics';
-      } else if (path === '/pages' || path === '/page') {
-        mainView.value = 'pages';
-      } else {
-        mainView.value = 'schedule';
-      }
+      // Luôn cố định giao diện 1 tab duy nhất: Quản lý Fanpage & Task đăng bài
+      mainView.value = 'schedule';
 
       window.addEventListener('popstate', onPopState);
       window.addEventListener('pageshow', onPageShow);
@@ -4041,6 +4070,9 @@ async function handleDeleteTask(taskId) {
       searchPage,
       filterPageStatus,
       filterPage,
+      activeFilterPageObj,
+      allPagesStats,
+      selectPageFilter,
       filterStatus,
       filterStartDate,
       filterEndDate,
@@ -4247,6 +4279,7 @@ async function handleDeleteTask(taskId) {
       formatCompactNumber,
       handleCleanupCompletedTasks,
       togglePageSelection,
+      displayPages,
       validPages,
       samplePageComparison,
       pageComparisonList,

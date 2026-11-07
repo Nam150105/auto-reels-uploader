@@ -1995,7 +1995,15 @@ export async function getFacebookPages(
            (SELECT COUNT(*) FROM tasks t
             WHERE t.facebook_page_id = fp.facebook_page_id
               AND t.owner_user_id = fp.owner_user_id
-              AND t.status IN ('pending', 'queued', 'processing', 'running')) AS pending_count
+              AND t.status IN ('pending', 'queued', 'processing', 'scheduled', 'needs_schedule')) AS pending_count,
+           (SELECT COUNT(*) FROM tasks t
+            WHERE t.facebook_page_id = fp.facebook_page_id
+              AND t.owner_user_id = fp.owner_user_id
+              AND t.status = 'running') AS running_count,
+           (SELECT COUNT(*) FROM tasks t
+            WHERE t.facebook_page_id = fp.facebook_page_id
+              AND t.owner_user_id = fp.owner_user_id
+              AND t.status = 'failed') AS failed_count
     FROM facebook_pages fp
     WHERE fp.owner_user_id = ?
   `;
@@ -2126,6 +2134,8 @@ export async function getFacebookPages(
       created_at: (r.created_at as string) || null,
       updated_at: (r.updated_at as string) || null,
       pending_count: Number(r.pending_count || 0),
+      running_count: Number(r.running_count || 0),
+      failed_count: Number(r.failed_count || 0),
       admin_accounts: adminAccounts,
       admin_names: adminAccounts
         .map((a) => a.facebook_user_name)
