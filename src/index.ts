@@ -164,7 +164,24 @@ export async function handleWorkerRequest(
   }
 
   // ==========================================
-  // 0.5. STATIC ASSETS FAST-PATH (/js/*, /static/*, /css/*, /favicon.ico)
+  // 0.4. FAVICON FAST-PATH (/favicon.ico, /favicon.svg)
+  // ==========================================
+  if (
+    (method === "GET" || method === "HEAD") &&
+    (pathname === "/favicon.ico" || pathname === "/favicon.svg")
+  ) {
+    const faviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="reelsGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#2563eb"/><stop offset="50%" stop-color="#4f46e5"/><stop offset="100%" stop-color="#ec4899"/></linearGradient></defs><rect width="100" height="100" rx="28" fill="url(#reelsGrad)"/><text x="50" y="68" dominant-baseline="middle" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="900" font-size="54" fill="#ffffff">R</text></svg>`;
+    return new Response(method === "HEAD" ? null : faviconSvg, {
+      status: 200,
+      headers: {
+        "Content-Type": "image/svg+xml; charset=utf-8",
+        "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"
+      }
+    });
+  }
+
+  // ==========================================
+  // 0.5. STATIC ASSETS FAST-PATH (/js/*, /static/*, /css/*)
   // Phục vụ trực tiếp từ Cloudflare Assets không tốn truy vấn D1 và hỗ trợ cả 200 OK lẫn 304 Not Modified
   // ==========================================
   if (

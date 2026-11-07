@@ -4122,6 +4122,47 @@ async function handleDeleteTask(taskId) {
       }
     }
 
+    function getPageName(pageId) {
+      if (!pageId) return 'Fanpage';
+      const p = (pages.value || []).find(x => x.facebook_page_id === pageId);
+      return p ? (p.name || p.page_name) : 'Fanpage';
+    }
+
+    function cleanFilename(path) {
+      if (!path) return '';
+      const clean = String(path).replace(/\\/g, '/');
+      const parts = clean.split('/');
+      return parts[parts.length - 1];
+    }
+
+    function formatVnDateOnly(dateStr) {
+      if (!dateStr) return '';
+      const parts = String(dateStr).split('-');
+      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      return String(dateStr);
+    }
+
+    async function handleRetryTask(taskId) {
+      if (!taskId) return;
+      try {
+        const res = await apiFetch(`/api/tasks/${taskId}/retry`, { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message || "Đã đưa bài viết vào hàng đợi thử lại!", "success");
+          await loadTasks();
+        } else {
+          showToast(data.detail || "Không thể thử lại bài viết.", "error");
+        }
+      } catch (err) {
+        showToast("Lỗi: " + (err.message || 'Mạng không ổn định'), "error");
+      }
+    }
+
+    const showTaskDetailModal = showLogModal;
+    const selectedTaskDetail = currentLogTask;
+    const showDeleteAccountConfirmModal = showDeleteAccountModal;
+    const openDeleteAccountConfirmModal = promptDeleteAccount;
+
     // ==========================================
     // COMPOSER METHODS (VIẾT BÀI TẬP TRUNG)
     // ==========================================
@@ -4777,7 +4818,17 @@ async function handleDeleteTask(taskId) {
       removeComposerMedia,
       openComposerCommentModal,
       saveComposerComment,
-      handleComposerSubmit
+      handleComposerSubmit,
+
+      // Helpers & Compatibility Aliases
+      getPageName,
+      cleanFilename,
+      formatVnDateOnly,
+      handleRetryTask,
+      showTaskDetailModal,
+      selectedTaskDetail,
+      showDeleteAccountConfirmModal,
+      openDeleteAccountConfirmModal
     };
   }
 });
