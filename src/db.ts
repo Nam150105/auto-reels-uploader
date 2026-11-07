@@ -2882,9 +2882,10 @@ export async function getTasks(
     startDate?: string | null;
     endDate?: string | null;
     ownerUserId: string;
+    excludePublished?: boolean;
   }
 ): Promise<TaskRecord[]> {
-  const { facebookPageId, status, search, accountIds = [], startDate, endDate, ownerUserId } = options;
+  const { facebookPageId, status, search, accountIds = [], startDate, endDate, ownerUserId, excludePublished } = options;
   const nowSec = nowUtcSeconds();
 
   let sql = `
@@ -2928,6 +2929,8 @@ export async function getTasks(
       sql += " AND t.status = ?";
       params.push(status);
     }
+  } else if (excludePublished) {
+    sql += " AND t.status != 'published'";
   }
 
   if (startDate && startDate.trim()) {

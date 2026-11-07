@@ -15,7 +15,7 @@
   <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
   
   <!-- Vue 3 Production CDN (jsDelivr chuẩn, fallback sang unpkg qua DOM script) -->
-  <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" onerror="(function(){var s=document.createElement('script');s.src='https://unpkg.com/vue@3/dist/vue.global.prod.js';document.head.appendChild(s);})()"></script>
+  <script data-cfasync="false" src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.4.21/vue.global.prod.min.js" onerror="(function(){var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js';document.head.appendChild(s);})()"></script>
   
   <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -70,29 +70,25 @@
         <div>
           <div class="flex items-center gap-2">
             <h1 class="font-extrabold text-sm tracking-tight text-white">Facebook Page Manager</h1>
-            <!-- Main View Navigation Pills -->
-            <div class="flex items-center gap-1 bg-slate-950/90 p-0.5 rounded-lg border border-slate-800 ml-1">
-              <button @click="setMainView('posts')"
-                      class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
-                      :class="mainView === 'posts' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
-                <span>📱 Bài Viết</span>
-                <span v-if="totalPosts > 0" class="px-1.5 py-0.2 rounded-full text-[9px] bg-white/20 text-white font-mono">{{ totalPosts }}</span>
-              </button>
-              <button @click="setMainView('workspace')"
-                      class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
-                      :class="mainView === 'workspace' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+            <!-- Main View Navigation Pills: ĐÚNG 3 TAB CHÍNH -->
+            <div class="flex items-center gap-1.5 bg-slate-950/90 p-1 rounded-xl border border-slate-800 ml-1">
+              <button @click="setMainView('schedule')"
+                      class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+                      :class="mainView === 'schedule' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
                 <span>⏰ Lên Lịch &amp; Đăng Bài</span>
-                <span v-if="tasks.length > 0" class="px-1.5 py-0.2 rounded-full text-[9px] bg-white/20 text-white font-mono">{{ tasks.length }}</span>
+                <span v-if="tasks.length > 0" class="px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 text-white font-mono">{{ tasks.length }}</span>
               </button>
-              <button @click="setMainView('comments')"
-                      class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
-                      :class="mainView === 'comments' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
-                <span>💬 Bình Luận</span>
+              <button @click="setMainView('analytics')"
+                      class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+                      :class="mainView === 'analytics' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+                <span>📊 Thống kê Reels &amp; Bài Viết</span>
+                <span v-if="totalPosts > 0" class="px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 text-white font-mono">{{ totalPosts }}</span>
               </button>
-              <button @click="setMainView('insights')"
-                      class="px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1"
-                      :class="mainView === 'insights' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
-                <span>📊 Thống kê Reels</span>
+              <button @click="setMainView('pages')"
+                      class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+                      :class="mainView === 'pages' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'">
+                <span>⚙️ Quản Lý Fanpage</span>
+                <span v-if="pages.length > 0" class="px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 text-white font-mono">{{ pages.length }}</span>
               </button>
             </div>
           </div>
@@ -221,540 +217,10 @@
     <!-- ================= MAIN WORKSPACE ================= -->
     <main class="flex-1 flex overflow-hidden p-3 gap-2">
 
-      <!-- ================= VIEW: QUẢN LÝ BÀI VIẾT (POSTS MANAGER) ================= -->
-      <section
-        v-if="mainView === 'posts'"
-        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
-
-        <!-- 1. Thanh công cụ & Bộ lọc bài viết -->
-        <div class="p-3.5 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          <div class="flex items-center gap-2 flex-wrap">
-            <span class="text-lg">📱</span>
-            <h2 class="font-bold text-white text-sm">Kho Bài Viết Facebook</h2>
-            <span class="text-xs text-slate-400 font-mono">({{ totalPosts }} bài)</span>
-
-            <!-- Chọn Fanpage -->
-            <select v-model="postsFilter.page_id" @change="loadFacebookPosts"
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 max-w-[190px]">
-              <option value="">Tất cả Fanpage</option>
-              <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">
-                {{ p.name }}
-              </option>
-            </select>
-
-            <!-- Chọn Loại bài -->
-            <select v-model="postsFilter.post_type" @change="loadFacebookPosts"
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
-              <option value="all">Tất cả loại bài</option>
-              <option value="reel">🎬 Reels</option>
-              <option value="video">📹 Video</option>
-              <option value="photo">🖼️ Ảnh đơn</option>
-              <option value="album">📚 Album</option>
-              <option value="status">📝 Bài viết văn bản</option>
-              <option value="link">🔗 Liên kết</option>
-            </select>
-
-            <!-- Chọn Nguồn -->
-            <select v-model="postsFilter.source" @change="loadFacebookPosts"
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
-              <option value="all">Tất cả nguồn</option>
-              <option value="app_published">🚀 Đăng từ App</option>
-              <option value="facebook_external">🌐 Đăng từ Facebook</option>
-            </select>
-
-            <!-- Tìm kiếm -->
-            <div class="relative">
-              <input v-model="postsFilter.search" @input="loadFacebookPosts" type="text"
-                     placeholder="Tìm kiếm caption bài viết..."
-                     class="bg-slate-950 border border-slate-700 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 w-44 focus:w-56 transition-all">
-              <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-            </div>
-          </div>
-
-          <!-- Nhóm nút hành động bên phải -->
-          <div class="flex items-center gap-2">
-            <!-- Chuyển chế độ xem -->
-            <div class="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5">
-              <button @click="postsViewMode = 'grid'"
-                      class="px-2.5 py-1 rounded text-xs font-bold transition flex items-center gap-1"
-                      :class="postsViewMode === 'grid' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'"
-                      title="Chế độ xem thẻ Media trực quan">
-                <span>⊞ Lưới</span>
-              </button>
-              <button @click="postsViewMode = 'list'"
-                      class="px-2.5 py-1 rounded text-xs font-bold transition flex items-center gap-1"
-                      :class="postsViewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'"
-                      title="Chế độ xem danh sách gọn">
-                <span>☰ Danh sách</span>
-              </button>
-            </div>
-
-            <!-- Nút Đồng Bộ Từ Facebook -->
-            <button @click="handleSyncPagePosts()" :disabled="isSyncingPagePosts"
-                    class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow transition"
-                    title="Đồng bộ bài viết mới nhất từ Fanpage qua Meta Graph API">
-              <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-              <span>{{ isSyncingPagePosts ? 'Đang đồng bộ...' : '📥 Đồng bộ từ Facebook' }}</span>
-            </button>
-
-            <!-- Nút Thêm bài viết mới -->
-            <button @click="openCreateTaskModal"
-                    class="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow transition">
-              <span>+ Đăng bài mới</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- 2. Thân danh sách bài viết -->
-        <div class="flex-1 overflow-y-auto min-h-0 bg-slate-950/40">
-          <!-- Đang tải -->
-          <div v-if="isLoadingPosts" class="h-64 flex flex-col items-center justify-center text-slate-400 text-xs gap-2">
-            <svg class="animate-spin h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-            <span>Đang tải danh sách bài viết...</span>
-          </div>
-
-          <!-- Danh sách rỗng -->
-          <div v-else-if="posts.length === 0" class="h-64 flex flex-col items-center justify-center text-slate-400 text-xs text-center p-6">
-            <div class="text-4xl mb-3">📭</div>
-            <p class="font-bold text-white text-sm mb-1">Chưa có bài viết nào trong danh mục</p>
-            <p class="text-slate-400 max-w-sm mb-4">Nhấn nút bên dưới để đồng bộ tất cả bài viết cũ từ Fanpage hoặc lên lịch đăng bài viết mới.</p>
-            <div class="flex items-center gap-2">
-              <button @click="handleSyncPagePosts()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs shadow">
-                📥 Đồng bộ bài viết từ Facebook
-              </button>
-              <button @click="openCreateTaskModal" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg text-xs border border-slate-700">
-                + Tạo bài viết mới
-              </button>
-            </div>
-          </div>
-
-          <!-- Chế độ 1: DẠNG LƯỚI THẺ MEDIA (GRID VIEW) -->
-          <div v-else-if="postsViewMode === 'grid'" class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-            <div v-for="p in posts" :key="p.post_id"
-                 class="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col transition hover:-translate-y-0.5 group">
-              
-              <!-- Media Thumbnail -->
-              <div class="relative bg-slate-950 aspect-video overflow-hidden cursor-pointer" @click="openPostDetail(p)">
-                <img v-if="p.thumbnail_url" :src="p.thumbnail_url" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" alt="Thumbnail">
-                <div v-else class="w-full h-full flex flex-col items-center justify-center text-slate-600">
-                  <span class="text-3xl">{{ p.post_type === 'reel' ? '🎬' : (p.post_type === 'video' ? '📹' : (p.post_type === 'photo' ? '🖼️' : '📝')) }}</span>
-                </div>
-
-                <!-- Badges -->
-                <div class="absolute top-2 left-2 flex items-center gap-1 z-10">
-                  <span class="px-2 py-0.5 rounded text-[10px] font-bold shadow"
-                        :class="p.post_type === 'reel' ? 'bg-pink-600 text-white' : (p.post_type === 'video' ? 'bg-blue-600 text-white' : (p.post_type === 'photo' ? 'bg-amber-600 text-white' : (p.post_type === 'album' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200')))">
-                    {{ p.post_type === 'reel' ? '🎬 Reel' : (p.post_type === 'video' ? '📹 Video' : (p.post_type === 'photo' ? '🖼️ Ảnh' : (p.post_type === 'album' ? '📚 Album' : (p.post_type === 'link' ? '🔗 Link' : '📝 Status')))) }}
-                  </span>
-                  <span class="px-1.5 py-0.5 rounded text-[9px] font-bold shadow"
-                        :class="p.source === 'app_published' ? 'bg-emerald-600 text-white' : 'bg-slate-950/80 text-slate-300 border border-slate-700'">
-                    {{ p.source === 'app_published' ? '🚀 Đăng từ App' : '🌐 Facebook' }}
-                  </span>
-                </div>
-              </div>
-
-              <!-- Content Body -->
-              <div class="p-3 flex-1 flex flex-col justify-between">
-                <div>
-                  <div class="flex items-center justify-between text-[11px] text-slate-400 mb-1">
-                    <span class="font-bold text-slate-300 truncate max-w-[130px]" :title="p.page_name">📢 {{ p.page_name || 'Fanpage' }}</span>
-                    <span class="text-[10px] text-slate-500 shrink-0">{{ formatVnDateTime(p.created_time) }}</span>
-                  </div>
-                  <p class="text-xs text-slate-200 line-clamp-2 leading-relaxed mb-3 cursor-pointer hover:text-white"
-                     @click="openPostDetail(p)" :title="p.message">
-                    {{ p.message || '(Bài viết không có nội dung văn bản)' }}
-                  </p>
-                </div>
-
-                <!-- Social Stats & Quick Actions -->
-                <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-                  <div class="flex items-center gap-2.5 text-[11px]">
-                    <span title="Lượt thích">👍 {{ p.likes_count || 0 }}</span>
-                    <span title="Bình luận">💬 {{ p.comments_count || 0 }}</span>
-                  </div>
-                  <div class="flex items-center gap-1">
-                    <button @click="openPostDetail(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] transition" title="Xem chi tiết & bình luận">👁️</button>
-                    <a v-if="p.permalink_url" :href="p.permalink_url" target="_blank" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[11px] transition" title="Mở trên Facebook">🔗</a>
-                    <button @click="openEditPostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 text-[11px] transition" title="Sửa nội dung">✏️</button>
-                    <button @click="openDeletePostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-rose-400 text-[11px] transition" title="Xóa bài viết">🗑️</button>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-          <!-- Chế độ 2: DẠNG DANH SÁCH (LIST VIEW) -->
-          <div v-else class="p-3">
-            <table class="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr class="border-b border-slate-800 text-slate-400 text-[11px] uppercase">
-                  <th class="py-2.5 px-3 w-14">Media</th>
-                  <th class="py-2.5 px-3 w-36">Fanpage</th>
-                  <th class="py-2.5 px-3 w-28">Loại</th>
-                  <th class="py-2.5 px-3 w-28">Nguồn</th>
-                  <th class="py-2.5 px-3">Nội dung</th>
-                  <th class="py-2.5 px-3 w-36">Thời gian</th>
-                  <th class="py-2.5 px-3 w-32 text-center">Thao tác</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-800/60 font-normal">
-                <tr v-for="p in posts" :key="p.post_id" class="hover:bg-slate-900/60 transition">
-                  <td class="py-2 px-3">
-                    <div class="w-10 h-10 rounded-lg bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer" @click="openPostDetail(p)">
-                      <img v-if="p.thumbnail_url" :src="p.thumbnail_url" class="w-full h-full object-cover">
-                      <span v-else class="text-sm">🎬</span>
-                    </div>
-                  </td>
-                  <td class="py-2 px-3 font-bold text-white max-w-[140px] truncate" :title="p.page_name">
-                    {{ p.page_name || 'Fanpage' }}
-                  </td>
-                  <td class="py-2 px-3">
-                    <span class="px-2 py-0.5 rounded text-[10px] font-bold"
-                          :class="p.post_type === 'reel' ? 'bg-pink-900/60 text-pink-300 border border-pink-700/50' : 'bg-slate-800 text-slate-300'">
-                      {{ p.post_type }}
-                    </span>
-                  </td>
-                  <td class="py-2 px-3">
-                    <span class="px-1.5 py-0.5 rounded text-[9px] font-bold"
-                          :class="p.source === 'app_published' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-slate-800 text-slate-400'">
-                      {{ p.source === 'app_published' ? 'App' : 'Facebook' }}
-                    </span>
-                  </td>
-                  <td class="py-2 px-3 max-w-[280px]">
-                    <div class="truncate text-slate-200 cursor-pointer hover:text-white" @click="openPostDetail(p)" :title="p.message">
-                      {{ p.message || '—' }}
-                    </div>
-                  </td>
-                  <td class="py-2 px-3 text-[11px] text-slate-400 font-mono">
-                    {{ formatVnDateTime(p.created_time) }}
-                  </td>
-                  <td class="py-2 px-3 text-center">
-                    <div class="flex items-center justify-center gap-1">
-                      <button @click="openPostDetail(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px]" title="Xem chi tiết">👁️</button>
-                      <a v-if="p.permalink_url" :href="p.permalink_url" target="_blank" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[11px]" title="Mở Facebook">🔗</a>
-                      <button @click="openEditPostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 text-[11px]" title="Sửa caption">✏️</button>
-                      <button @click="openDeletePostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-rose-400 text-[11px]" title="Xóa bài">🗑️</button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- 3. Thanh phân trang Footer -->
-        <div class="px-4 py-2.5 border-t border-slate-800 bg-slate-900/90 flex flex-wrap items-center justify-between text-xs text-slate-400 shrink-0 gap-2">
-          <div class="flex items-center gap-3">
-            <span>Tổng số: <b class="text-white">{{ totalPosts }}</b> bài viết</span>
-            <span class="text-slate-600">•</span>
-            <span>Trang <b class="text-white">{{ postsPage }}</b> / <b>{{ postsTotalPages }}</b></span>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <!-- Nút Tải thêm bài viết cũ từ Facebook khi Fanpage có Cursor -->
-            <button v-if="postsFilter.page_id && pageSyncStates[postsFilter.page_id] && pageSyncStates[postsFilter.page_id].next_cursor"
-                    @click="handleLoadMoreOldPosts(postsFilter.page_id)"
-                    :disabled="isSyncingPagePosts"
-                    class="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow">
-              <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-              <span>{{ isSyncingPagePosts ? 'Đang lấy...' : 'Tải thêm bài viết cũ từ Facebook' }}</span>
-            </button>
-
-            <button @click="postsPage > 1 && (postsPage--, loadFacebookPosts())" :disabled="postsPage <= 1"
-                    class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-lg text-xs font-bold transition">
-              &larr; Trang trước
-            </button>
-            <button @click="postsPage < postsTotalPages && (postsPage++, loadFacebookPosts())" :disabled="postsPage >= postsTotalPages"
-                    class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-lg text-xs font-bold transition">
-              Trang sau &rarr;
-            </button>
-          </div>
-        </div>
-
-      </section>
-
-      <!-- ================= VIEW: QUẢN LÝ BÌNH LUẬN (COMMENTS MANAGER) ================= -->
-      <section
-        v-if="mainView === 'comments'"
-        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
-
-        <!-- Header Bình Luận -->
-        <div class="p-3.5 border-b border-slate-800 bg-slate-900 flex items-center justify-between shrink-0">
-          <div class="flex items-center gap-2">
-            <span class="text-lg">💬</span>
-            <h2 class="font-bold text-white text-sm">Quản Lý Bình Luận Tập Trung</h2>
-          </div>
-          <div class="flex items-center gap-2">
-            <select v-model="postsFilter.page_id" @change="loadFacebookPosts"
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
-              <option value="">Tất cả Fanpage</option>
-              <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">{{ p.name }}</option>
-            </select>
-            <button @click="loadFacebookPosts" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold transition">
-              Làm mới
-            </button>
-          </div>
-        </div>
-
-        <div class="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-950/40">
-          <div v-for="post in posts.filter(x => (x.comments_count || 0) > 0 || (x.message && x.message.length > 0))" :key="post.post_id"
-               class="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-2">
-            <div class="flex items-center justify-between text-xs">
-              <span class="font-bold text-blue-400">📢 {{ post.page_name || 'Fanpage' }}</span>
-              <span class="text-slate-500 text-[11px]">{{ formatVnDateTime(post.created_time) }}</span>
-            </div>
-            <p class="text-xs text-slate-200 line-clamp-1 italic">"{{ post.message || 'Không có caption' }}"</p>
-            <div class="flex items-center justify-between pt-1">
-              <span class="text-[11px] text-slate-400">💬 {{ post.comments_count || 0 }} bình luận</span>
-              <button @click="openPostDetail(post)" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold transition">
-                Xem &amp; Trả Lời Bình Luận
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================= LEFT: FANPAGE MANAGEMENT ================= -->
+      <!-- ================= TAB 1: LÊN LỊCH & ĐĂNG BÀI (SCHEDULE) ================= -->
       <section 
-        v-if="mainView === 'workspace'"
-        class="flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl shrink-0 transition-all duration-75"
-        :class="{ 'hidden md:flex': currentTab !== 'pages' }"
-        :style="{ width: sidebarWidth + 'px', minWidth: '320px', maxWidth: '750px' }">
-        
-        <!-- Header Fanpage -->
-        <div class="p-3 border-b border-slate-800 bg-slate-900 flex items-center justify-between gap-2">
-          <div class="flex items-center gap-2">
-            <span class="text-base">📢</span>
-            <h2 class="font-bold text-white text-sm">Quản Lý Fanpage</h2>
-            <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">{{ pages.length }}</span>
-          </div>
-
-          <div class="flex items-center gap-1.5">
-            <button @click="openAccountsModal" class="flex items-center gap-1 px-2.5 py-1 bg-blue-600/90 hover:bg-blue-600 text-white rounded-lg text-xs font-semibold transition shadow-sm" title="Quản lý các tài khoản Facebook Admin">
-              <span>👥 Admins</span>
-            </button>
-            <button @click="handleSyncPages" :disabled="isSyncingPages" class="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs transition" title="Đồng bộ danh sách Page từ Graph API">
-              <svg class="w-3.5 h-3.5" :class="isSyncingPages ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-              <span>Đồng Bộ</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Multi-Admin Filter Toolbar (Lọc theo 1 hoặc nhiều tài khoản Admin) -->
-        <div v-if="accounts.length > 0" class="px-2.5 py-2 border-b border-slate-800/80 bg-slate-950/70 space-y-1.5">
-          <div class="flex items-center justify-between text-[11px]">
-            <span class="font-bold text-slate-300 flex items-center gap-1.5">
-              <span>👥 Lọc theo Admin FB:</span>
-            </span>
-            <div class="flex items-center gap-2">
-              <button @click="clearAdminFilter" class="text-blue-400 hover:text-blue-300 transition underline text-[10px]">(Tất cả)</button>
-              <button @click="selectAllConnectedAdminFilters" class="text-slate-400 hover:text-slate-200 transition underline text-[10px]">(Chọn hết)</button>
-            </div>
-          </div>
-          <!-- Admin Filter Chips -->
-          <div class="flex items-center gap-1.5 flex-wrap">
-            <button @click="clearAdminFilter"
-                    class="px-2 py-0.5 rounded-lg text-[11px] font-medium transition flex items-center gap-1 border"
-                    :class="selectedAdminFilterIds.length === 0
-                      ? 'bg-blue-600 border-blue-500 text-white font-bold shadow-sm'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800'">
-              <span>Tất cả</span>
-            </button>
-            <button v-for="acc in accounts" :key="acc.id"
-                    @click="toggleAdminFilter(acc.id)"
-                    class="px-2 py-0.5 rounded-lg text-[11px] font-medium transition flex items-center gap-1.5 border"
-                    :class="selectedAdminFilterIds.includes(acc.id)
-                      ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200 font-bold shadow-sm'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800'">
-              <span class="w-1.5 h-1.5 rounded-full" :class="acc.status === 'connected' ? 'bg-emerald-400' : 'bg-rose-400'"></span>
-              <span class="truncate max-w-[110px]" :title="acc.user_name">{{ acc.user_name }}</span>
-              <span class="text-[9px] opacity-75 font-mono">({{ acc.managed_pages_count }})</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Search & Filter Toolbar -->
-        <div class="p-2.5 border-b border-slate-800/80 bg-slate-950/40 space-y-2">
-          <div class="relative">
-            <input type="text" v-model="searchPage" @input="loadPages" placeholder="Tìm kiếm Fanpage theo tên, Page ID..." class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-1.5 pl-8 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
-            <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-          </div>
-
-          <!-- Selection & Filter Tabs -->
-          <div class="flex items-center justify-between text-xs px-1 text-slate-400 flex-wrap gap-1">
-            <div class="flex items-center gap-2">
-              <span class="text-[11px] text-slate-300">
-                Đã chọn: <b class="text-blue-400 font-bold">{{ selectedPageCount }}</b> / {{ pages.length }}
-              </span>
-              <button @click="handleToggleSelectAll(true)" class="text-[11px] text-blue-400 hover:text-blue-300 transition underline">(Chọn tất cả)</button>
-              <button @click="handleToggleSelectAll(false)" class="text-[11px] text-slate-400 hover:text-rose-400 transition underline">(Bỏ chọn)</button>
-            </div>
-
-            <!-- Filter Status -->
-            <div class="flex items-center gap-1 text-[11px]">
-              <button @click="filterPageStatus = ''; loadPages()" class="px-2 py-0.5 rounded transition" :class="filterPageStatus === '' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-slate-200'">Tất cả</button>
-              <button @click="filterPageStatus = 'can_post'; loadPages()" class="px-2 py-0.5 rounded transition" :class="filterPageStatus === 'can_post' ? 'bg-emerald-950/60 text-emerald-400 font-bold border border-emerald-800/40' : 'text-slate-400 hover:text-slate-200'">Đủ quyền</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Fanpage List Table -->
-        <div class="flex-1 overflow-y-auto">
-          <table class="w-full text-left border-collapse select-none">
-            <thead class="sticky top-0 bg-slate-950/95 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider z-10 backdrop-blur-sm">
-              <tr>
-                <th class="py-2 px-2 w-8 text-center">
-                  <input type="checkbox" :checked="isAllPagesSelected" @change="handleToggleSelectAll($event.target.checked)" class="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer" title="Chọn / Bỏ chọn tất cả Fanpage">
-                </th>
-                <th class="py-2 px-2.5">Fanpage</th>
-                <th class="py-2 px-1 w-16 text-center">Tasks</th>
-                <th class="py-2 px-1 w-24 text-center">Quyền</th>
-                <th class="py-2 px-2 text-right w-20">Thao tác</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-800/60 text-xs">
-              <tr v-if="pages.length === 0">
-                <td colspan="5" class="text-center py-12 text-slate-500 text-xs">
-                  <div class="space-y-2">
-                    <p>Chưa có Fanpage nào được đồng bộ.</p>
-                    <button @click="openAccountsModal" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition shadow-md">
-                      🔗 Quản Lý / Thêm Tài Khoản Facebook Admin
-                    </button>
-                  </div>
-                </td>
-              </tr>
-
-              <tr v-for="p in pages" :key="p.facebook_page_id"
-                  @click="filterByPage(p.facebook_page_id)"
-                  class="h-10 transition-colors group cursor-pointer"
-                  :class="p.is_selected ? 'bg-blue-950/30 hover:bg-blue-900/30' : (filterPage === p.facebook_page_id ? 'bg-slate-800/70 hover:bg-slate-800/90' : 'hover:bg-slate-800/30')">
-                
-                <!-- Checkbox -->
-                <td class="py-1 px-2 text-center" @click.stop>
-                  <input type="checkbox" :checked="p.is_selected" @change="handleTogglePageSelect(p)" class="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer">
-                </td>
-
-                <!-- Page Info -->
-                <td class="py-1 px-2.5 min-w-0" :title="'Page ID: ' + p.facebook_page_id">
-                  <div class="flex items-center gap-2">
-                    <img v-if="p.avatar_url" :src="p.avatar_url" class="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-700 shadow-sm" alt="Page Avatar">
-                    <div v-else class="w-7 h-7 rounded-lg bg-blue-600/20 text-blue-400 font-bold flex items-center justify-center shrink-0 border border-blue-500/30 text-xs">
-                      {{ (p.name || 'P').charAt(0).toUpperCase() }}
-                    </div>
-                    <div class="min-w-0 flex-1">
-                      <div class="font-bold text-slate-100 truncate group-hover:text-blue-400 transition-colors text-xs tracking-tight">
-                        {{ p.name }}
-                      </div>
-                      <div class="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono mt-0.5">
-                        <span class="truncate">{{ p.facebook_page_id }}</span>
-                        <button @click.stop="copyToClipboard(p.facebook_page_id)" class="text-slate-500 hover:text-white transition" title="Sao chép Facebook Page ID">
-                          <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                        </button>
-                        <span v-if="p.category" class="text-slate-500 font-sans truncate">• {{ p.category }}</span>
-                      </div>
-
-                      <!-- Multi-Admin Badges (Nhiều - Nhiều) -->
-                      <div v-if="p.admin_accounts && p.admin_accounts.length > 0" class="flex items-center gap-1 flex-wrap mt-1">
-                        <span v-for="adm in p.admin_accounts" :key="adm.account_id"
-                              class="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-medium border"
-                              :class="adm.account_status === 'connected' ? 'bg-indigo-950/40 text-indigo-300 border-indigo-800/40' : 'bg-slate-800 text-slate-400 border-slate-700'"
-                              :title="'Admin: ' + adm.user_name + ' (' + adm.user_id + ') - ' + (adm.account_status === 'connected' ? 'Đang kết nối' : 'Đã ngắt')">
-                          <span class="w-1.5 h-1.5 rounded-full" :class="adm.account_status === 'connected' ? 'bg-emerald-400' : 'bg-rose-500'"></span>
-                          <span class="truncate max-w-[85px]">{{ adm.user_name }}</span>
-                        </span>
-                      </div>
-                      <div v-else-if="p.admin_names" class="text-[9px] text-slate-500 mt-0.5 truncate">
-                        Admin: {{ p.admin_names }}
-                      </div>
-                    </div>
-                  </div>
-                </td>
-
-                <!-- Pending Tasks Badge -->
-                <td class="py-1 px-1 text-center whitespace-nowrap" @click.stop="filterByPage(p.facebook_page_id)">
-                  <span class="cursor-pointer px-1.5 py-0.5 rounded text-[10px] font-bold font-mono transition inline-block"
-                        :class="p.pending_count > 0 ? 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30' : 'bg-slate-800 text-slate-500 hover:bg-slate-700'"
-                        :title="'Click để xem ' + (p.pending_count || 0) + ' task chờ của Page này'">
-                    {{ p.pending_count || 0 }} chờ
-                  </span>
-                </td>
-
-                <!-- Quyền Đăng -->
-                <td class="py-1 px-1 text-center whitespace-nowrap" @click.stop>
-                  <div class="space-y-0.5">
-                    <span v-if="p.status === 'missing_permission'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 inline-block" title="Token hiện tại không còn quyền quản lý Page này. Dữ liệu & lịch sử vẫn được giữ nguyên.">
-                      ⚠ Cần quyền Token
-                    </span>
-                    <span v-else-if="p.can_post" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 inline-block" title="Fanpage đã sẵn sàng đăng bài">
-                      ✓ Đủ quyền
-                    </span>
-                    <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 inline-block" title="Chưa cấp đủ quyền quản lý Fanpage">
-                      ⚠ Thiếu quyền
-                    </span>
-                    <div v-if="p.can_analyze" class="text-[9px] text-indigo-300 font-semibold" title="Có quyền ANALYZE đọc Insights">
-                      📊 ANALYZE
-                    </div>
-                    <div v-if="p.token_status && p.token_status !== 'valid'" class="text-[9px] text-rose-400 font-semibold">
-                      Cần kết nối lại
-                    </div>
-                  </div>
-                </td>
-
-                <!-- Actions -->
-                <td class="py-1 px-2 text-right whitespace-nowrap" @click.stop>
-                  <div class="flex items-center justify-end gap-1">
-                    <!-- Kiểm tra quyền -->
-                    <button @click="handleCheckPagePermission(p)" class="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded transition" title="Kiểm tra quyền đăng bài của Fanpage">
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    </button>
-
-                    <!-- Lấy bài viết cũ từ Fanpage -->
-                    <button @click.stop="syncPagePosts(p)" :disabled="isSyncingPagePosts" class="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded transition" title="Đồng bộ bài viết từ Fanpage">
-                      <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                    </button>
-                    <!-- Tạo bài viết cho Page này -->
-                    <button @click.stop="openPageTasksModal(p)" class="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded transition" title="Lên lịch đăng bài cho Fanpage này">
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
-                    </button>
-
-                    <!-- Xóa Page khỏi tool -->
-                    <button @click="handleDeletePage(p)" class="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition" title="Xóa Fanpage khỏi ứng dụng (không ảnh hưởng Fanpage trên Facebook)">
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    </button>
-                  </div>
-                </td>
-
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Hint Footer -->
-        <div class="px-3 py-1.5 border-t border-slate-800 bg-slate-950/70 text-[10px] text-slate-500 flex items-center justify-between">
-          <span>Click vào dòng để lọc task theo Page</span>
-          <span class="font-mono">Total: {{ pages.length }}</span>
-        </div>
-
-      </section>
-
-      <!-- ================= RESIZABLE SPLITTER HANDLE ================= -->
-      <div 
-        v-if="mainView === 'workspace'"
-        class="hidden md:flex w-2.5 -mx-1 hover:w-2.5 bg-transparent hover:bg-blue-500/30 cursor-col-resize select-none items-center justify-center transition-colors group relative z-20 shrink-0"
-        :class="isResizingSplitter ? 'bg-blue-500/50' : ''"
-        @mousedown="startResizeSplitter"
-        title="Kéo sang trái/phải để thay đổi độ rộng cột Fanpage"
-      >
-        <div class="w-1 h-8 rounded-full bg-slate-700/80 group-hover:bg-blue-400 group-hover:h-12 transition-all"></div>
-      </div>
-
-      <!-- ================= RIGHT: TASK MANAGEMENT ================= -->
-      <section 
-        v-if="mainView === 'workspace'"
-        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0"
-        :class="{ 'hidden md:flex': currentTab !== 'schedules' }">
-        
+        v-if="mainView === 'schedule'"
+        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
         <!-- Task Action Toolbar -->
         <div class="p-3 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-2.5">
           
@@ -1026,14 +492,13 @@
           <span>Tổng cộng: <b class="text-white">{{ tasks.length }}</b> bài viết</span>
           <span class="text-[11px] text-slate-500">By Nam Năng Nổ</span>
         </div>
-
       </section>
 
-      <!-- ================= VIEW: THỐNG KÊ REELS (INSIGHTS DASHBOARD) ================= -->
-      <section
-        v-if="mainView === 'insights'"
-        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
 
+      <!-- ================= TAB 2: THỐNG KÊ & BÀI VIẾT ĐÃ ĐĂNG (ANALYTICS) ================= -->
+      <section
+        v-if="mainView === 'analytics'"
+        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
         <!-- 1. Thanh tiêu đề & Bộ lọc Thống kê -->
         <div class="p-3.5 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div class="flex items-center gap-2.5">
@@ -1126,6 +591,14 @@
             </button>
           </div>
 
+        
+        
+        
+
+        <!-- Scrollable Dashboard Body -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-6">
+          
+          <!-- Phần 1: Các chỉ số hiệu suất & Biểu đồ Reels / Posts -->
           <!-- 2. 8 THẺ CHỈ SỐ TỔNG QUAN (OVERVIEW CARDS) -->
           <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
             <!-- Card 1: Tổng lượt xem Reels -->
@@ -1475,6 +948,477 @@
             </div>
           </div>
 
+        </div>
+
+          <!-- Phần 2: Kho Bài Viết Đã Đăng (Facebook Published Posts) -->
+          <div class="pt-4 border-t border-slate-800/80">
+            <!-- 1. Thanh công cụ & Bộ lọc bài viết -->
+        <div class="p-3.5 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-lg">📱</span>
+            <h2 class="font-bold text-white text-sm">Kho Bài Viết Facebook</h2>
+            <span class="text-xs text-slate-400 font-mono">({{ totalPosts }} bài)</span>
+
+            <!-- Chọn Fanpage -->
+            <select v-model="postsFilter.page_id" @change="loadFacebookPosts"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 max-w-[190px]">
+              <option value="">Tất cả Fanpage</option>
+              <option v-for="p in pages" :key="p.facebook_page_id" :value="p.facebook_page_id">
+                {{ p.name }}
+              </option>
+            </select>
+
+            <!-- Chọn Loại bài -->
+            <select v-model="postsFilter.post_type" @change="loadFacebookPosts"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+              <option value="all">Tất cả loại bài</option>
+              <option value="reel">🎬 Reels</option>
+              <option value="video">📹 Video</option>
+              <option value="photo">🖼️ Ảnh đơn</option>
+              <option value="album">📚 Album</option>
+              <option value="status">📝 Bài viết văn bản</option>
+              <option value="link">🔗 Liên kết</option>
+            </select>
+
+            <!-- Chọn Nguồn -->
+            <select v-model="postsFilter.source" @change="loadFacebookPosts"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+              <option value="all">Tất cả nguồn</option>
+              <option value="app_published">🚀 Đăng từ App</option>
+              <option value="facebook_external">🌐 Đăng từ Facebook</option>
+            </select>
+
+            <!-- Tìm kiếm -->
+            <div class="relative">
+              <input v-model="postsFilter.search" @input="loadFacebookPosts" type="text"
+                     placeholder="Tìm kiếm caption bài viết..."
+                     class="bg-slate-950 border border-slate-700 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 w-44 focus:w-56 transition-all">
+              <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            </div>
+          </div>
+
+          <!-- Nhóm nút hành động bên phải -->
+          <div class="flex items-center gap-2">
+            <!-- Chuyển chế độ xem -->
+            <div class="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+              <button @click="postsViewMode = 'grid'"
+                      class="px-2.5 py-1 rounded text-xs font-bold transition flex items-center gap-1"
+                      :class="postsViewMode === 'grid' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'"
+                      title="Chế độ xem thẻ Media trực quan">
+                <span>⊞ Lưới</span>
+              </button>
+              <button @click="postsViewMode = 'list'"
+                      class="px-2.5 py-1 rounded text-xs font-bold transition flex items-center gap-1"
+                      :class="postsViewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'"
+                      title="Chế độ xem danh sách gọn">
+                <span>☰ Danh sách</span>
+              </button>
+            </div>
+
+            <!-- Nút Đồng Bộ Từ Facebook -->
+            <button @click="handleSyncPagePosts()" :disabled="isSyncingPagePosts"
+                    class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow transition"
+                    title="Đồng bộ bài viết mới nhất từ Fanpage qua Meta Graph API">
+              <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              <span>{{ isSyncingPagePosts ? 'Đang đồng bộ...' : '📥 Đồng bộ từ Facebook' }}</span>
+            </button>
+
+            <!-- Nút Thêm bài viết mới -->
+            <button @click="openCreateTaskModal"
+                    class="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow transition">
+              <span>+ Đăng bài mới</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 2. Thân danh sách bài viết -->
+        <div class="flex-1 overflow-y-auto min-h-0 bg-slate-950/40">
+          <!-- Đang tải -->
+          <div v-if="isLoadingPosts" class="h-64 flex flex-col items-center justify-center text-slate-400 text-xs gap-2">
+            <svg class="animate-spin h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+            <span>Đang tải danh sách bài viết...</span>
+          </div>
+
+          <!-- Danh sách rỗng -->
+          <div v-else-if="posts.length === 0" class="h-64 flex flex-col items-center justify-center text-slate-400 text-xs text-center p-6">
+            <div class="text-4xl mb-3">📭</div>
+            <p class="font-bold text-white text-sm mb-1">Chưa có bài viết nào trong danh mục</p>
+            <p class="text-slate-400 max-w-sm mb-4">Nhấn nút bên dưới để đồng bộ tất cả bài viết cũ từ Fanpage hoặc lên lịch đăng bài viết mới.</p>
+            <div class="flex items-center gap-2">
+              <button @click="handleSyncPagePosts()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs shadow">
+                📥 Đồng bộ bài viết từ Facebook
+              </button>
+              <button @click="openCreateTaskModal" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg text-xs border border-slate-700">
+                + Tạo bài viết mới
+              </button>
+            </div>
+          </div>
+
+          <!-- Chế độ 1: DẠNG LƯỚI THẺ MEDIA (GRID VIEW) -->
+          <div v-else-if="postsViewMode === 'grid'" class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div v-for="p in posts" :key="p.post_id"
+                 class="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col transition hover:-translate-y-0.5 group">
+              
+              <!-- Media Thumbnail -->
+              <div class="relative bg-slate-950 aspect-video overflow-hidden cursor-pointer" @click="openPostDetail(p)">
+                <img v-if="p.thumbnail_url" :src="p.thumbnail_url" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" alt="Thumbnail">
+                <div v-else class="w-full h-full flex flex-col items-center justify-center text-slate-600">
+                  <span class="text-3xl">{{ p.post_type === 'reel' ? '🎬' : (p.post_type === 'video' ? '📹' : (p.post_type === 'photo' ? '🖼️' : '📝')) }}</span>
+                </div>
+
+                <!-- Badges -->
+                <div class="absolute top-2 left-2 flex items-center gap-1 z-10">
+                  <span class="px-2 py-0.5 rounded text-[10px] font-bold shadow"
+                        :class="p.post_type === 'reel' ? 'bg-pink-600 text-white' : (p.post_type === 'video' ? 'bg-blue-600 text-white' : (p.post_type === 'photo' ? 'bg-amber-600 text-white' : (p.post_type === 'album' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200')))">
+                    {{ p.post_type === 'reel' ? '🎬 Reel' : (p.post_type === 'video' ? '📹 Video' : (p.post_type === 'photo' ? '🖼️ Ảnh' : (p.post_type === 'album' ? '📚 Album' : (p.post_type === 'link' ? '🔗 Link' : '📝 Status')))) }}
+                  </span>
+                  <span class="px-1.5 py-0.5 rounded text-[9px] font-bold shadow"
+                        :class="p.source === 'app_published' ? 'bg-emerald-600 text-white' : 'bg-slate-950/80 text-slate-300 border border-slate-700'">
+                    {{ p.source === 'app_published' ? '🚀 Đăng từ App' : '🌐 Facebook' }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Content Body -->
+              <div class="p-3 flex-1 flex flex-col justify-between">
+                <div>
+                  <div class="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+                    <span class="font-bold text-slate-300 truncate max-w-[130px]" :title="p.page_name">📢 {{ p.page_name || 'Fanpage' }}</span>
+                    <span class="text-[10px] text-slate-500 shrink-0">{{ formatVnDateTime(p.created_time) }}</span>
+                  </div>
+                  <p class="text-xs text-slate-200 line-clamp-2 leading-relaxed mb-3 cursor-pointer hover:text-white"
+                     @click="openPostDetail(p)" :title="p.message">
+                    {{ p.message || '(Bài viết không có nội dung văn bản)' }}
+                  </p>
+                </div>
+
+                <!-- Social Stats & Quick Actions -->
+                <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                  <div class="flex items-center gap-2.5 text-[11px]">
+                    <span title="Lượt thích">👍 {{ p.likes_count || 0 }}</span>
+                    <span title="Bình luận">💬 {{ p.comments_count || 0 }}</span>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <button @click="openPostDetail(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] transition" title="Xem chi tiết & bình luận">👁️</button>
+                    <a v-if="p.permalink_url" :href="p.permalink_url" target="_blank" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[11px] transition" title="Mở trên Facebook">🔗</a>
+                    <button @click="openEditPostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 text-[11px] transition" title="Sửa nội dung">✏️</button>
+                    <button @click="openDeletePostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-rose-400 text-[11px] transition" title="Xóa bài viết">🗑️</button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Chế độ 2: DẠNG DANH SÁCH (LIST VIEW) -->
+          <div v-else class="p-3">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr class="border-b border-slate-800 text-slate-400 text-[11px] uppercase">
+                  <th class="py-2.5 px-3 w-14">Media</th>
+                  <th class="py-2.5 px-3 w-36">Fanpage</th>
+                  <th class="py-2.5 px-3 w-28">Loại</th>
+                  <th class="py-2.5 px-3 w-28">Nguồn</th>
+                  <th class="py-2.5 px-3">Nội dung</th>
+                  <th class="py-2.5 px-3 w-36">Thời gian</th>
+                  <th class="py-2.5 px-3 w-32 text-center">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60 font-normal">
+                <tr v-for="p in posts" :key="p.post_id" class="hover:bg-slate-900/60 transition">
+                  <td class="py-2 px-3">
+                    <div class="w-10 h-10 rounded-lg bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer" @click="openPostDetail(p)">
+                      <img v-if="p.thumbnail_url" :src="p.thumbnail_url" class="w-full h-full object-cover">
+                      <span v-else class="text-sm">🎬</span>
+                    </div>
+                  </td>
+                  <td class="py-2 px-3 font-bold text-white max-w-[140px] truncate" :title="p.page_name">
+                    {{ p.page_name || 'Fanpage' }}
+                  </td>
+                  <td class="py-2 px-3">
+                    <span class="px-2 py-0.5 rounded text-[10px] font-bold"
+                          :class="p.post_type === 'reel' ? 'bg-pink-900/60 text-pink-300 border border-pink-700/50' : 'bg-slate-800 text-slate-300'">
+                      {{ p.post_type }}
+                    </span>
+                  </td>
+                  <td class="py-2 px-3">
+                    <span class="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                          :class="p.source === 'app_published' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-slate-800 text-slate-400'">
+                      {{ p.source === 'app_published' ? 'App' : 'Facebook' }}
+                    </span>
+                  </td>
+                  <td class="py-2 px-3 max-w-[280px]">
+                    <div class="truncate text-slate-200 cursor-pointer hover:text-white" @click="openPostDetail(p)" :title="p.message">
+                      {{ p.message || '—' }}
+                    </div>
+                  </td>
+                  <td class="py-2 px-3 text-[11px] text-slate-400 font-mono">
+                    {{ formatVnDateTime(p.created_time) }}
+                  </td>
+                  <td class="py-2 px-3 text-center">
+                    <div class="flex items-center justify-center gap-1">
+                      <button @click="openPostDetail(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px]" title="Xem chi tiết">👁️</button>
+                      <a v-if="p.permalink_url" :href="p.permalink_url" target="_blank" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[11px]" title="Mở Facebook">🔗</a>
+                      <button @click="openEditPostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 text-[11px]" title="Sửa caption">✏️</button>
+                      <button @click="openDeletePostModal(p)" class="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-rose-400 text-[11px]" title="Xóa bài">🗑️</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 3. Thanh phân trang Footer -->
+        <div class="px-4 py-2.5 border-t border-slate-800 bg-slate-900/90 flex flex-wrap items-center justify-between text-xs text-slate-400 shrink-0 gap-2">
+          <div class="flex items-center gap-3">
+            <span>Tổng số: <b class="text-white">{{ totalPosts }}</b> bài viết</span>
+            <span class="text-slate-600">•</span>
+            <span>Trang <b class="text-white">{{ postsPage }}</b> / <b>{{ postsTotalPages }}</b></span>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <!-- Nút Tải thêm bài viết cũ từ Facebook khi Fanpage có Cursor -->
+            <button v-if="postsFilter.page_id && pageSyncStates[postsFilter.page_id] && pageSyncStates[postsFilter.page_id].next_cursor"
+                    @click="handleLoadMoreOldPosts(postsFilter.page_id)"
+                    :disabled="isSyncingPagePosts"
+                    class="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow">
+              <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+              <span>{{ isSyncingPagePosts ? 'Đang lấy...' : 'Tải thêm bài viết cũ từ Facebook' }}</span>
+            </button>
+
+            <button @click="postsPage > 1 && (postsPage--, loadFacebookPosts())" :disabled="postsPage <= 1"
+                    class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-lg text-xs font-bold transition">
+              &larr; Trang trước
+            </button>
+            <button @click="postsPage < postsTotalPages && (postsPage++, loadFacebookPosts())" :disabled="postsPage >= postsTotalPages"
+                    class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-lg text-xs font-bold transition">
+              Trang sau &rarr;
+            </button>
+          </div>
+        </div>
+          </div>
+
+        </div>
+      </section>
+
+
+      <!-- ================= TAB 3: QUẢN LÝ FANPAGE (PAGES) ================= -->
+      <section 
+        v-if="mainView === 'pages'"
+        class="flex-1 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-w-0">
+        <!-- Header Fanpage -->
+        <div class="p-3 border-b border-slate-800 bg-slate-900 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-base">📢</span>
+            <h2 class="font-bold text-white text-sm">Quản Lý Fanpage</h2>
+            <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">{{ pages.length }}</span>
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <button @click="openAccountsModal" class="flex items-center gap-1 px-2.5 py-1 bg-blue-600/90 hover:bg-blue-600 text-white rounded-lg text-xs font-semibold transition shadow-sm" title="Quản lý các tài khoản Facebook Admin">
+              <span>👥 Admins</span>
+            </button>
+            <button @click="handleSyncPages" :disabled="isSyncingPages" class="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs transition" title="Đồng bộ danh sách Page từ Graph API">
+              <svg class="w-3.5 h-3.5" :class="isSyncingPages ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              <span>Đồng Bộ</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Multi-Admin Filter Toolbar (Lọc theo 1 hoặc nhiều tài khoản Admin) -->
+        <div v-if="accounts.length > 0" class="px-2.5 py-2 border-b border-slate-800/80 bg-slate-950/70 space-y-1.5">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="font-bold text-slate-300 flex items-center gap-1.5">
+              <span>👥 Lọc theo Admin FB:</span>
+            </span>
+            <div class="flex items-center gap-2">
+              <button @click="clearAdminFilter" class="text-blue-400 hover:text-blue-300 transition underline text-[10px]">(Tất cả)</button>
+              <button @click="selectAllConnectedAdminFilters" class="text-slate-400 hover:text-slate-200 transition underline text-[10px]">(Chọn hết)</button>
+            </div>
+          </div>
+          <!-- Admin Filter Chips -->
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <button @click="clearAdminFilter"
+                    class="px-2 py-0.5 rounded-lg text-[11px] font-medium transition flex items-center gap-1 border"
+                    :class="selectedAdminFilterIds.length === 0
+                      ? 'bg-blue-600 border-blue-500 text-white font-bold shadow-sm'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800'">
+              <span>Tất cả</span>
+            </button>
+            <button v-for="acc in accounts" :key="acc.id"
+                    @click="toggleAdminFilter(acc.id)"
+                    class="px-2 py-0.5 rounded-lg text-[11px] font-medium transition flex items-center gap-1.5 border"
+                    :class="selectedAdminFilterIds.includes(acc.id)
+                      ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200 font-bold shadow-sm'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800'">
+              <span class="w-1.5 h-1.5 rounded-full" :class="acc.status === 'connected' ? 'bg-emerald-400' : 'bg-rose-400'"></span>
+              <span class="truncate max-w-[110px]" :title="acc.user_name">{{ acc.user_name }}</span>
+              <span class="text-[9px] opacity-75 font-mono">({{ acc.managed_pages_count }})</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Search & Filter Toolbar -->
+        <div class="p-2.5 border-b border-slate-800/80 bg-slate-950/40 space-y-2">
+          <div class="relative">
+            <input type="text" v-model="searchPage" @input="loadPages" placeholder="Tìm kiếm Fanpage theo tên, Page ID..." class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-1.5 pl-8 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+            <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          </div>
+
+          <!-- Selection & Filter Tabs -->
+          <div class="flex items-center justify-between text-xs px-1 text-slate-400 flex-wrap gap-1">
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] text-slate-300">
+                Đã chọn: <b class="text-blue-400 font-bold">{{ selectedPageCount }}</b> / {{ pages.length }}
+              </span>
+              <button @click="handleToggleSelectAll(true)" class="text-[11px] text-blue-400 hover:text-blue-300 transition underline">(Chọn tất cả)</button>
+              <button @click="handleToggleSelectAll(false)" class="text-[11px] text-slate-400 hover:text-rose-400 transition underline">(Bỏ chọn)</button>
+            </div>
+
+            <!-- Filter Status -->
+            <div class="flex items-center gap-1 text-[11px]">
+              <button @click="filterPageStatus = ''; loadPages()" class="px-2 py-0.5 rounded transition" :class="filterPageStatus === '' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-slate-200'">Tất cả</button>
+              <button @click="filterPageStatus = 'can_post'; loadPages()" class="px-2 py-0.5 rounded transition" :class="filterPageStatus === 'can_post' ? 'bg-emerald-950/60 text-emerald-400 font-bold border border-emerald-800/40' : 'text-slate-400 hover:text-slate-200'">Đủ quyền</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fanpage List Table -->
+        <div class="flex-1 overflow-y-auto">
+          <table class="w-full text-left border-collapse select-none">
+            <thead class="sticky top-0 bg-slate-950/95 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider z-10 backdrop-blur-sm">
+              <tr>
+                <th class="py-2 px-2 w-8 text-center">
+                  <input type="checkbox" :checked="isAllPagesSelected" @change="handleToggleSelectAll($event.target.checked)" class="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer" title="Chọn / Bỏ chọn tất cả Fanpage">
+                </th>
+                <th class="py-2 px-2.5">Fanpage</th>
+                <th class="py-2 px-1 w-16 text-center">Tasks</th>
+                <th class="py-2 px-1 w-24 text-center">Quyền</th>
+                <th class="py-2 px-2 text-right w-20">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/60 text-xs">
+              <tr v-if="pages.length === 0">
+                <td colspan="5" class="text-center py-12 text-slate-500 text-xs">
+                  <div class="space-y-2">
+                    <p>Chưa có Fanpage nào được đồng bộ.</p>
+                    <button @click="openAccountsModal" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition shadow-md">
+                      🔗 Quản Lý / Thêm Tài Khoản Facebook Admin
+                    </button>
+                  </div>
+                </td>
+              </tr>
+
+              <tr v-for="p in pages" :key="p.facebook_page_id"
+                  @click="filterByPage(p.facebook_page_id)"
+                  class="h-10 transition-colors group cursor-pointer"
+                  :class="p.is_selected ? 'bg-blue-950/30 hover:bg-blue-900/30' : (filterPage === p.facebook_page_id ? 'bg-slate-800/70 hover:bg-slate-800/90' : 'hover:bg-slate-800/30')">
+                
+                <!-- Checkbox -->
+                <td class="py-1 px-2 text-center" @click.stop>
+                  <input type="checkbox" :checked="p.is_selected" @change="handleTogglePageSelect(p)" class="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer">
+                </td>
+
+                <!-- Page Info -->
+                <td class="py-1 px-2.5 min-w-0" :title="'Page ID: ' + p.facebook_page_id">
+                  <div class="flex items-center gap-2">
+                    <img v-if="p.avatar_url" :src="p.avatar_url" class="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-700 shadow-sm" alt="Page Avatar">
+                    <div v-else class="w-7 h-7 rounded-lg bg-blue-600/20 text-blue-400 font-bold flex items-center justify-center shrink-0 border border-blue-500/30 text-xs">
+                      {{ (p.name || 'P').charAt(0).toUpperCase() }}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="font-bold text-slate-100 truncate group-hover:text-blue-400 transition-colors text-xs tracking-tight">
+                        {{ p.name }}
+                      </div>
+                      <div class="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono mt-0.5">
+                        <span class="truncate">{{ p.facebook_page_id }}</span>
+                        <button @click.stop="copyToClipboard(p.facebook_page_id)" class="text-slate-500 hover:text-white transition" title="Sao chép Facebook Page ID">
+                          <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                        </button>
+                        <span v-if="p.category" class="text-slate-500 font-sans truncate">• {{ p.category }}</span>
+                      </div>
+
+                      <!-- Multi-Admin Badges (Nhiều - Nhiều) -->
+                      <div v-if="p.admin_accounts && p.admin_accounts.length > 0" class="flex items-center gap-1 flex-wrap mt-1">
+                        <span v-for="adm in p.admin_accounts" :key="adm.account_id"
+                              class="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-medium border"
+                              :class="adm.account_status === 'connected' ? 'bg-indigo-950/40 text-indigo-300 border-indigo-800/40' : 'bg-slate-800 text-slate-400 border-slate-700'"
+                              :title="'Admin: ' + adm.user_name + ' (' + adm.user_id + ') - ' + (adm.account_status === 'connected' ? 'Đang kết nối' : 'Đã ngắt')">
+                          <span class="w-1.5 h-1.5 rounded-full" :class="adm.account_status === 'connected' ? 'bg-emerald-400' : 'bg-rose-500'"></span>
+                          <span class="truncate max-w-[85px]">{{ adm.user_name }}</span>
+                        </span>
+                      </div>
+                      <div v-else-if="p.admin_names" class="text-[9px] text-slate-500 mt-0.5 truncate">
+                        Admin: {{ p.admin_names }}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+
+                <!-- Pending Tasks Badge -->
+                <td class="py-1 px-1 text-center whitespace-nowrap" @click.stop="filterByPage(p.facebook_page_id)">
+                  <span class="cursor-pointer px-1.5 py-0.5 rounded text-[10px] font-bold font-mono transition inline-block"
+                        :class="p.pending_count > 0 ? 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30' : 'bg-slate-800 text-slate-500 hover:bg-slate-700'"
+                        :title="'Click để xem ' + (p.pending_count || 0) + ' task chờ của Page này'">
+                    {{ p.pending_count || 0 }} chờ
+                  </span>
+                </td>
+
+                <!-- Quyền Đăng -->
+                <td class="py-1 px-1 text-center whitespace-nowrap" @click.stop>
+                  <div class="space-y-0.5">
+                    <span v-if="p.status === 'missing_permission'" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 inline-block" title="Token hiện tại không còn quyền quản lý Page này. Dữ liệu & lịch sử vẫn được giữ nguyên.">
+                      ⚠ Cần quyền Token
+                    </span>
+                    <span v-else-if="p.can_post" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 inline-block" title="Fanpage đã sẵn sàng đăng bài">
+                      ✓ Đủ quyền
+                    </span>
+                    <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 inline-block" title="Chưa cấp đủ quyền quản lý Fanpage">
+                      ⚠ Thiếu quyền
+                    </span>
+                    <div v-if="p.can_analyze" class="text-[9px] text-indigo-300 font-semibold" title="Có quyền ANALYZE đọc Insights">
+                      📊 ANALYZE
+                    </div>
+                    <div v-if="p.token_status && p.token_status !== 'valid'" class="text-[9px] text-rose-400 font-semibold">
+                      Cần kết nối lại
+                    </div>
+                  </div>
+                </td>
+
+                <!-- Actions -->
+                <td class="py-1 px-2 text-right whitespace-nowrap" @click.stop>
+                  <div class="flex items-center justify-end gap-1">
+                    <!-- Kiểm tra quyền -->
+                    <button @click="handleCheckPagePermission(p)" class="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded transition" title="Kiểm tra quyền đăng bài của Fanpage">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </button>
+
+                    <!-- Lấy bài viết cũ từ Fanpage -->
+                    <button @click.stop="syncPagePosts(p)" :disabled="isSyncingPagePosts" class="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded transition" title="Đồng bộ bài viết từ Fanpage">
+                      <svg class="w-3.5 h-3.5" :class="isSyncingPagePosts ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                    </button>
+                    <!-- Tạo bài viết cho Page này -->
+                    <button @click.stop="openPageTasksModal(p)" class="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded transition" title="Lên lịch đăng bài cho Fanpage này">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                    </button>
+
+                    <!-- Xóa Page khỏi tool -->
+                    <button @click="handleDeletePage(p)" class="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition" title="Xóa Fanpage khỏi ứng dụng (không ảnh hưởng Fanpage trên Facebook)">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                  </div>
+                </td>
+
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Hint Footer -->
+        <div class="px-3 py-1.5 border-t border-slate-800 bg-slate-950/70 text-[10px] text-slate-500 flex items-center justify-between">
+          <span>Click vào dòng để lọc task theo Page</span>
+          <span class="font-mono">Total: {{ pages.length }}</span>
         </div>
       </section>
 
@@ -3217,6 +3161,6 @@
   </div>
 
   <!-- App Script (data-cfasync=false chống Rocket Loader và fallback DOM script) -->
-  <script data-cfasync="false" src="/js/app.js" onerror="(function(){var s=document.createElement('script');s.src='/static/js/app.js';document.body.appendChild(s);})()"></script>
+  <script data-cfasync="false" src="/js/app.js?v=3.1.0" onerror="(function(){var s=document.createElement('script');s.src='/static/js/app.js?v=3.1.0';document.body.appendChild(s);})()"></script>
 </body>
 </html>

@@ -239,11 +239,13 @@ export async function handleWorkerRequest(
   if (
     (pathname === "/page" ||
       pathname === "/pages" ||
+      pathname === "/schedule" ||
+      pathname === "/schedules" ||
+      pathname === "/analytics" ||
+      pathname === "/insights" ||
       pathname === "/posts" ||
       pathname === "/comments" ||
-      pathname === "/schedules" ||
-      pathname === "/reels" ||
-      pathname === "/insights") &&
+      pathname === "/reels") &&
     method === "GET"
   ) {
     const ua = request.headers.get("User-Agent") || "";
@@ -254,13 +256,14 @@ export async function handleWorkerRequest(
         if (staticResp) return staticResp;
       }
       const loginRedirect =
-        pathname === "/schedules" || pathname === "/reels" || pathname === "/insights"
+        pathname === "/schedules" ||
+        pathname === "/schedule" ||
+        pathname === "/reels" ||
+        pathname === "/insights" ||
+        pathname === "/analytics"
           ? `/login?redirect=${encodeURIComponent(pathname + url.search)}`
           : "/login";
       return redirectResponse(`${url.origin}${loginRedirect}`, 302);
-    }
-    if (pathname === "/pages") {
-      return redirectResponse(`${url.origin}/page${url.search}`, 302);
     }
     const staticResp = await serveStaticHtmlAsset(request, env, "/index.html");
     if (staticResp) return staticResp;
@@ -827,6 +830,9 @@ export async function handleWorkerRequest(
       const search = url.searchParams.get("search");
       const startDate = url.searchParams.get("start_date");
       const endDate = url.searchParams.get("end_date");
+      const excludePublished =
+        url.searchParams.get("exclude_published") === "true" ||
+        url.searchParams.get("active_only") === "true";
       const accountIdsRaw = url.searchParams.get("account_ids") || "";
       const accountIds = accountIdsRaw
         .split(",")
@@ -840,7 +846,8 @@ export async function handleWorkerRequest(
         startDate,
         endDate,
         accountIds,
-        ownerUserId
+        ownerUserId,
+        excludePublished
       });
       return jsonResponse(tasks);
     }

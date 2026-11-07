@@ -31,8 +31,8 @@
     const isPageLoading = ref(true);
     const pageLoadError = ref('');
     const currentUser = ref(null);
-    const mainView = ref('workspace'); // 'workspace' | 'insights'
-    const currentTab = ref('pages'); // 'pages' | 'schedules'
+    const mainView = ref('schedule'); // 'schedule' | 'analytics' | 'pages'
+    const currentTab = ref('schedules'); // 'pages' | 'schedules'
     const pages = ref([]);
     const tasks = ref([]);
     const selectedTaskIds = ref([]);
@@ -629,6 +629,7 @@ const selectedPageCount = computed(() => {
       const seq = ++tasksReqSeq;
       try {
         const params = new URLSearchParams();
+        params.append('exclude_published', 'true');
         if (filterPage.value) params.append('facebook_page_id', filterPage.value);
         if (filterStatus.value) params.append('status', filterStatus.value);
         if (filterStartDate.value) params.append('start_date', filterStartDate.value);
@@ -636,16 +637,17 @@ const selectedPageCount = computed(() => {
         if (searchTask.value.trim()) params.append('search', searchTask.value.trim());
 
         const queryStr = params.toString();
-        const res = await apiFetch(queryStr ? `/api/tasks?${queryStr}` : '/api/tasks', {
+        const res = await apiFetch(`/api/tasks?${queryStr}`, {
           abortKey: 'loadTasks',
           timeoutMs: 12000
         });
         if (res.ok) {
           const data = await res.json();
           if (seq === tasksReqSeq && Array.isArray(data)) {
-            tasks.value = data;
+            // Danh sách task đang hoạt động CHỈ hiển thị bài chưa đăng thành công
+            tasks.value = data.filter(t => t.status !== 'published');
             if (selectedTaskIds.value.length > 0) {
-              const currentIds = new Set(data.map(t => t.id));
+              const currentIds = new Set(tasks.value.map(t => t.id));
               selectedTaskIds.value = selectedTaskIds.value.filter(id => currentIds.has(id));
             }
           }
@@ -793,38 +795,39 @@ const selectedPageCount = computed(() => {
     }
 
     function setTab(tab) {
-      currentTab.value = tab;
-      mainView.value = 'workspace';
-      const targetPath = tab === 'pages' ? '/page' : '/schedules';
-      if (window.location.pathname !== targetPath) {
-        history.pushState(null, '', targetPath);
+      if (tab === 'pages') {
+        setMainView('pages');
+      } else {
+        setMainView('schedule');
       }
     }
 
+    async function loadAnalyticsDashboard() {
+      if (authState.value !== 'authenticated') return;
+      await Promise.allSettled([
+        loadReelsInsights(),
+        loadFacebookPosts()
+      ]);
+    }
+
     function setMainView(view) {
-      if (view === 'insights') {
-        mainView.value = 'insights';
-        const targetPath = '/insights';
+      if (view === 'analytics' || view === 'insights' || view === 'posts' || view === 'comments') {
+        mainView.value = 'analytics';
+        const targetPath = '/analytics';
         if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
-        loadReelsInsights();
-      } else if (view === 'workspace' || view === 'schedules') {
-        mainView.value = 'workspace';
+        loadAnalyticsDashboard();
+      } else if (view === 'pages' || view === 'page') {
+        mainView.value = 'pages';
+        currentTab.value = 'pages';
+        const targetPath = '/pages';
+        if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
+        loadPages();
+      } else {
+        mainView.value = 'schedule';
         currentTab.value = 'schedules';
-        const targetPath = '/schedules';
+        const targetPath = '/schedule';
         if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
         loadTasks();
-      } else if (view === 'comments') {
-        mainView.value = 'comments';
-        const targetPath = '/comments';
-        if (window.location.pathname !== targetPath) history.pushState(null, '', targetPath);
-        loadCommentsView();
-      } else {
-        mainView.value = 'posts';
-        const targetPath = '/posts';
-        if (window.location.pathname !== targetPath && window.location.pathname !== '/page') {
-          history.pushState(null, '', targetPath);
-        }
-        loadFacebookPosts();
       }
     }
 
@@ -3722,19 +3725,15 @@ async function handleDeleteTask(taskId) {
 
     function onPopState() {
       const p = window.location.pathname;
-      if (p === '/insights') {
-        mainView.value = 'insights';
-        loadReelsInsights();
-      } else if (p === '/schedules' || p === '/reels') {
-        mainView.value = 'workspace';
-        currentTab.value = 'schedules';
-        loadTasks();
-      } else if (p === '/comments') {
-        mainView.value = 'comments';
-        loadCommentsView();
+      if (p === '/analytics' || p === '/insights' || p === '/posts' || p === '/comments') {
+        mainView.value = 'analytics';
+        loadAnalyticsDashboard();
+      } else if (p === '/pages' || p === '/page') {
+        mainView.value = 'pages';
+        loadPages();
       } else {
-        mainView.value = 'posts';
-        loadFacebookPosts();
+        mainView.value = 'schedule';
+        loadTasks();
       }
     }
 
@@ -3769,19 +3768,14 @@ async function handleDeleteTask(taskId) {
     }
 
     onMounted(async () => {
-      // Chuẩn hóa đường dẫn mặc định về /posts, /page hoặc /insights
+      // Chuẩn hóa đường dẫn mặc định theo 3 Tab chính: /schedule, /analytics, /pages
       const path = window.location.pathname;
-      if (path === '/insights') {
-        mainView.value = 'insights';
-      } else if (path === '/schedules' || path === '/reels') {
-        mainView.value = 'workspace';
-        currentTab.value = 'schedules';
-      } else if (path === '/comments') {
-        mainView.value = 'comments';
-      } else if (path === '/posts') {
-        mainView.value = 'posts';
+      if (path === '/analytics' || path === '/insights' || path === '/posts' || path === '/comments') {
+        mainView.value = 'analytics';
+      } else if (path === '/pages' || path === '/page') {
+        mainView.value = 'pages';
       } else {
-        mainView.value = 'posts';
+        mainView.value = 'schedule';
       }
 
       window.addEventListener('popstate', onPopState);
@@ -3793,12 +3787,14 @@ async function handleDeleteTask(taskId) {
       const authed = await checkAuth();
       if (!authed) return;
 
-      // 2. Tải dữ liệu thiết yếu của trang /page (Pages & Accounts), dữ liệu phụ chạy ngầm không chặn UI
+      // 2. Tải dữ liệu thiết yếu của hệ thống (Pages & Accounts), dữ liệu phụ chạy ngầm không chặn UI
       await loadAll();
-      if (mainView.value === 'insights') {
-        await loadReelsInsights();
-      } else if (mainView.value === 'posts') {
-        await loadFacebookPosts();
+      if (mainView.value === 'analytics') {
+        await loadAnalyticsDashboard();
+      } else if (mainView.value === 'pages') {
+        // Danh sách Fanpage đã được load trong loadAll()
+      } else {
+        await loadTasks();
       }
 
       // 3. Xử lý kết quả OAuth nếu quay lại từ chế độ redirect toàn trang
@@ -3899,6 +3895,7 @@ async function handleDeleteTask(taskId) {
       currentUser,
       mainView,
       setMainView,
+      loadAnalyticsDashboard,
       currentTab,
       setTab,
       checkAuth,
@@ -4026,6 +4023,7 @@ async function handleDeleteTask(taskId) {
       handleRunBatch,
       handleStopBatch,
       openSingleTaskModal,
+      openCreateTaskModal: openSingleTaskModal,
       handleBrowseFileSingleTask,
       handleCloudVideoFileSelected,
       handleFileDropSingleTask,

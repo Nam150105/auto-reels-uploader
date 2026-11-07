@@ -3629,10 +3629,54 @@ async function runAll30Tests() {
   globalThis.fetch = originalFetch;
   console.log("  ✓ [Test 46] Facebook Page Manager: Extended Synchronization Scenarios (Pass toàn bộ kiểm thử thực tế 100%)");
 
-  globalThis.fetch = originalFetch;
+  // --------------------------------------------------------------------------
+  // [TEST 47] HỆ THỐNG 3 TAB CHÍNH & TỰ ĐỘNG ẨN TASK PUBLISHED KHỎI TAB LÊN LỊCH
+  // --------------------------------------------------------------------------
+  console.log("\n  --- BẮT ĐẦU KIỂM THỬ HỆ THỐNG 3 TAB CHÍNH & LỌC BÀI ĐÃ ĐĂNG ---");
+  // 1. Kiểm tra 3 route chính của 3 Tab trả về 200 OK
+  const scheduleResp = await callWorker("/schedule", { headers: { Cookie: `session_token=${tokenA}` } });
+  assert.equal(scheduleResp.status, 200, "Route /schedule phải trả về 200 OK");
+  const schedHtml = await scheduleResp.text();
+  assert.ok(schedHtml.includes("Lên Lịch &amp; Đăng Bài") || schedHtml.includes("Lên Lịch & Đăng Bài"), "Trang /schedule phải chứa giao diện Lên Lịch & Đăng Bài");
+
+  const analyticsResp = await callWorker("/analytics", { headers: { Cookie: `session_token=${tokenA}` } });
+  assert.equal(analyticsResp.status, 200, "Route /analytics phải trả về 200 OK");
+  const analHtml = await analyticsResp.text();
+  assert.ok(analHtml.includes("Thống kê Reels &amp; Bài Viết"), "Trang /analytics phải chứa giao diện Thống Kê & Bài Viết");
+
+  const pagesResp = await callWorker("/pages", { headers: { Cookie: `session_token=${tokenA}` } });
+  assert.equal(pagesResp.status, 200, "Route /pages phải trả về 200 OK");
+  const pagesHtml = await pagesResp.text();
+  assert.ok(pagesHtml.includes("Quản Lý Fanpage"), "Trang /pages phải chứa giao diện Quản Lý Fanpage");
+
+  // 2. Tạo 1 task pending và 1 task published trong D1 để kiểm tra bộ lọc exclude_published
+  await d1.prepare(`
+    INSERT INTO tasks (
+      owner_user_id, facebook_page_id, video_path, caption, schedule_date, schedule_time, status, created_at, updated_at
+    ) VALUES (?, 'page_exp_1', 'video_active.mp4', 'Task dang cho dang', '2026-11-10', '08:00', 'pending', unixepoch(), unixepoch())
+  `).bind(userAId).run();
+
+  await d1.prepare(`
+    INSERT INTO tasks (
+      owner_user_id, facebook_page_id, video_path, caption, schedule_date, schedule_time, status, created_at, updated_at
+    ) VALUES (?, 'page_exp_1', 'video_done.mp4', 'Task da xuat ban thanh cong', '2026-11-10', '09:00', 'published', unixepoch(), unixepoch())
+  `).bind(userAId).run();
+
+  // Gọi API /api/tasks?exclude_published=true (gọi từ Tab 1 Lên Lịch & Đăng Bài)
+  const activeTasksResp = await callWorker("/api/tasks?exclude_published=true", {
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(activeTasksResp.status, 200);
+  const activeTasks = await activeTasksResp.json();
+  const hasPublished = activeTasks.some(t => t.status === "published");
+  assert.equal(hasPublished, false, "Tab 1 (Lên Lịch & Đăng Bài) tuyệt đối không được chứa bài đã published");
+  const hasActive = activeTasks.some(t => t.caption === "Task dang cho dang");
+  assert.equal(hasActive, true, "Tab 1 phải chứa task pending/hoạt động");
+
+  console.log("  ✓ [Test 47] Hệ thống 3 Tab (/schedule, /analytics, /pages) và Bộ lọc tự động ẩn bài đã đăng đạt 100%");
 
   console.log("\n==================================================================");
-  console.log(" TẤT CẢ 45/45 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
+  console.log(" TẤT CẢ 47/47 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
   console.log("==================================================================");
 }
 
