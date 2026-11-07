@@ -824,9 +824,20 @@ export async function handleWorkerRequest(
     // 6.4. QUẢN LÝ TÁC VỤ REELS (/api/tasks*)
     // ------------------------------------------
     if (pathname === "/api/tasks" && method === "GET") {
-      const facebookPageId =
+      const pageIdsParam =
+        url.searchParams.get("facebook_page_ids") ||
         url.searchParams.get("facebook_page_id") ||
         url.searchParams.get("profile_id");
+      let facebookPageIds: string[] | undefined = undefined;
+      let facebookPageId: string | null = null;
+      if (pageIdsParam && pageIdsParam.includes(",")) {
+        facebookPageIds = pageIdsParam
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      } else {
+        facebookPageId = pageIdsParam ? pageIdsParam.trim() : null;
+      }
       const status = url.searchParams.get("status");
       const search = url.searchParams.get("search");
       const startDate = url.searchParams.get("start_date");
@@ -842,6 +853,7 @@ export async function handleWorkerRequest(
 
       const tasks = await getTasks(db, {
         facebookPageId,
+        facebookPageIds,
         status,
         search,
         startDate,

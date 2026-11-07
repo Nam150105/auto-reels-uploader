@@ -2003,7 +2003,11 @@ export async function getFacebookPages(
            (SELECT COUNT(*) FROM tasks t
             WHERE t.facebook_page_id = fp.facebook_page_id
               AND t.owner_user_id = fp.owner_user_id
-              AND t.status = 'failed') AS failed_count
+              AND t.status = 'failed') AS failed_count,
+           (SELECT COUNT(*) FROM tasks t
+            WHERE t.facebook_page_id = fp.facebook_page_id
+              AND t.owner_user_id = fp.owner_user_id
+              AND t.status IN ('published', 'success')) AS success_count
     FROM facebook_pages fp
     WHERE fp.owner_user_id = ?
   `;
@@ -2136,6 +2140,7 @@ export async function getFacebookPages(
       pending_count: Number(r.pending_count || 0),
       running_count: Number(r.running_count || 0),
       failed_count: Number(r.failed_count || 0),
+      success_count: Number(r.success_count || 0),
       admin_accounts: adminAccounts,
       admin_names: adminAccounts
         .map((a) => a.facebook_user_name)
@@ -2886,6 +2891,7 @@ export async function getTasks(
   db: D1Database,
   options: {
     facebookPageId?: string | null;
+    facebookPageIds?: string[] | null;
     status?: string | null;
     search?: string | null;
     accountIds?: string[];
@@ -2895,7 +2901,7 @@ export async function getTasks(
     excludePublished?: boolean;
   }
 ): Promise<TaskRecord[]> {
-  const { facebookPageId, status, search, accountIds = [], startDate, endDate, ownerUserId, excludePublished } = options;
+  const { facebookPageId, facebookPageIds, status, search, accountIds = [], startDate, endDate, ownerUserId, excludePublished } = options;
   const nowSec = nowUtcSeconds();
 
   let sql = `
@@ -2911,7 +2917,11 @@ export async function getTasks(
   `;
   const params: unknown[] = [ownerUserId];
 
-  if (facebookPageId) {
+  if (facebookPageIds && facebookPageIds.length > 0) {
+    const placeholders = facebookPageIds.map(() => "?").join(",");
+    sql += ` AND (t.facebook_page_id IN (${placeholders}) OR t.profile_id IN (${placeholders}))`;
+    params.push(...facebookPageIds, ...facebookPageIds);
+  } else if (facebookPageId) {
     sql += " AND (t.facebook_page_id = ? OR t.profile_id = ?)";
     params.push(facebookPageId, facebookPageId);
   }

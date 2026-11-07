@@ -267,6 +267,7 @@ export interface FacebookPageRecord {
   pending_count: number;
   running_count?: number;
   failed_count?: number;
+  success_count?: number;
   admin_accounts: AdminAccountLink[];
   admin_names: string[];
 }

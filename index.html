@@ -95,6 +95,22 @@
         </div>
       </div>
 
+      <!-- Navigation 2 Tab Chính: [Lên Lịch & Quản Lý] vs [Thống Kê] -->
+      <nav class="flex items-center gap-1 bg-slate-950/90 p-1 rounded-xl border border-slate-800">
+        <button @click="setMainView('schedule')"
+                :class="mainView === 'schedule' ? 'bg-blue-600 text-white shadow-sm font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/60 font-medium'"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition">
+          <span>📅</span>
+          <span>Lên Lịch &amp; Quản Lý Page</span>
+        </button>
+        <button @click="setMainView('analytics')"
+                :class="mainView === 'analytics' || mainView === 'insights' ? 'bg-blue-600 text-white shadow-sm font-bold' : 'text-slate-400 hover:text-white hover:bg-slate-800/60 font-medium'"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition">
+          <span>📊</span>
+          <span>Thống Kê</span>
+        </button>
+      </nav>
+
       <!-- Multi-Admin Connection Management Header Widget -->
       <div class="flex items-center gap-2 bg-slate-950/80 p-1.5 px-3 rounded-xl border border-slate-800">
         
@@ -196,9 +212,10 @@
       </div>
     </div>
 
-    <!-- ================= MAIN WORKSPACE ================= -->
-    <!-- ================= MAIN WORKSPACE: 1 TAB DUY NHẤT (KHU VỰC A & KHU VỰC B) ================= -->
-    <main class="flex-1 flex overflow-hidden p-3 gap-3 min-w-0">
+    <!-- ================= MAIN WORKSPACE: 2 VIEW CHÍNH ================= -->
+
+    <!-- VIEW 1: LÊN LỊCH & QUẢN LÝ PAGE (GỘP KHU VỰC A & B) -->
+    <main v-if="mainView === 'schedule'" class="flex-1 flex overflow-hidden p-3 gap-3 min-w-0">
 
       <!-- ================= KHU VỰC A: DANH SÁCH FANPAGE ================= -->
       <aside class="w-80 lg:w-96 shrink-0 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
@@ -207,13 +224,17 @@
           <div class="flex items-center gap-2">
             <span class="text-base">📢</span>
             <h2 class="font-bold text-white text-sm">Danh Sách Fanpage</h2>
-            <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">{{ displayPages.length }}</span>
+            <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
+              {{ selectedPageCount }} / {{ displayPages.length }} đã chọn
+            </span>
           </div>
           <div class="flex items-center gap-1.5">
-            <button @click="openConnectModal()" class="flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition shadow-sm" title="Thêm tài khoản Facebook Admin">
-              <span>+ Thêm</span>
+            <button @click="toggleSelectAllPages"
+                    class="text-[11px] px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition"
+                    :title="isAllPagesSelected ? 'Bỏ chọn tất cả Fanpage' : 'Chọn tất cả Fanpage'">
+              {{ isAllPagesSelected ? 'Bỏ chọn' : 'Chọn tất cả' }}
             </button>
-            <button @click="handleSyncPages" :disabled="isSyncingPages" class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition" title="Làm mới và đồng bộ danh sách Fanpage từ Facebook">
+            <button @click="handleSyncPages" :disabled="isSyncingPages" class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition" title="Làm mới danh sách Fanpage từ Facebook">
               <svg class="w-3.5 h-3.5" :class="isSyncingPages ? 'animate-spin text-blue-400' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
             </button>
           </div>
@@ -227,34 +248,8 @@
           </div>
         </div>
 
-        <!-- Danh sách Fanpage cuộn -->
+        <!-- Danh sách Fanpage cuộn gọn gàng: Không show id page, chỉ show ảnh, tên, chưa đăng, đã đăng -->
         <div class="flex-1 overflow-y-auto p-2 space-y-1.5">
-
-          <!-- Dòng đầu tiên: "🌐 Tất cả Fanpage" -->
-          <div @click="selectPageFilter('')"
-               class="p-2.5 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2.5 select-none"
-               :class="!filterPage
-                 ? 'border-blue-500 bg-blue-950/40 shadow-sm ring-1 ring-blue-500/50'
-                 : 'border-slate-800 bg-slate-950/60 hover:bg-slate-800/40 hover:border-slate-700'">
-            <div class="flex items-center gap-2.5 min-w-0">
-              <div class="w-8 h-8 rounded-lg bg-indigo-600/30 text-indigo-300 font-extrabold flex items-center justify-center text-sm shrink-0 border border-indigo-500/30">
-                🌐
-              </div>
-              <div class="min-w-0">
-                <div class="font-bold text-xs truncate" :class="!filterPage ? 'text-white' : 'text-slate-300'">
-                  Tất Cả Fanpage
-                </div>
-                <div class="flex items-center gap-1.5 mt-0.5 text-[10px]">
-                  <span class="text-amber-400 font-mono">{{ allPagesStats.pending || 0 }} chờ</span>
-                  <span v-if="allPagesStats.running > 0" class="text-blue-400 font-mono">• ⚡ {{ allPagesStats.running }} đang đăng</span>
-                  <span v-if="allPagesStats.failed > 0" class="text-rose-400 font-mono">• ❌ {{ allPagesStats.failed }} lỗi</span>
-                </div>
-              </div>
-            </div>
-            <span v-if="!filterPage" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
-              Đang chọn
-            </span>
-          </div>
 
           <!-- Trạng thái trống nếu chưa có Fanpage -->
           <div v-if="displayPages.length === 0" class="py-12 text-center text-xs text-slate-500 space-y-2">
@@ -264,20 +259,19 @@
             </button>
           </div>
 
-          <!-- Danh sách từng Fanpage -->
+          <!-- Danh sách từng Fanpage: Gọn gàng, chỉ có ảnh, tên, chưa đăng, đã đăng -->
           <div v-for="p in displayPages" :key="p.facebook_page_id"
-               @click="selectPageFilter(p.facebook_page_id)"
-               class="p-2.5 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2 select-none group"
-               :class="filterPage === p.facebook_page_id
-                 ? 'border-blue-500 bg-blue-950/50 shadow-md ring-1 ring-blue-500/50'
+               @click="togglePageSelection(p)"
+               class="p-2.5 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2.5 select-none group"
+               :class="p.is_selected
+                 ? 'border-blue-500 bg-blue-950/40 shadow-sm ring-1 ring-blue-500/50'
                  : 'border-slate-800 bg-slate-950/60 hover:bg-slate-800/40 hover:border-slate-700'">
             
             <div class="flex items-center gap-2.5 min-w-0 flex-1">
-              <!-- Checkbox chọn page cho bulk tasks -->
+              <!-- Checkbox chọn Page -->
               <input type="checkbox"
                      :checked="p.is_selected"
                      @click.stop="togglePageSelection(p)"
-                     title="Chọn Fanpage để nhận bài viết khi tạo hàng loạt từ Excel"
                      class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer shrink-0">
 
               <!-- Avatar Page -->
@@ -288,46 +282,31 @@
                 </div>
               </div>
 
-              <!-- Tên Page & Trạng thái -->
+              <!-- Tên Page & Thống kê Chưa đăng / Đã đăng -->
               <div class="min-w-0 flex-1">
-                <div class="font-bold text-xs truncate" :class="filterPage === p.facebook_page_id ? 'text-blue-300' : 'text-slate-200'" :title="p.name">
+                <div class="font-bold text-xs truncate" :class="p.is_selected ? 'text-white' : 'text-slate-200'" :title="p.name">
                   {{ p.name }}
                 </div>
-                
-                <!-- Trạng thái kết nối & quyền -->
-                <div class="flex items-center gap-1.5 mt-0.5 text-[10px] flex-wrap">
-                  <span v-if="p.is_token_expired || p.status === 'expired'" class="text-rose-400 font-semibold">⚠️ Token hết hạn</span>
-                  <span v-else class="text-emerald-400">🟢 Đang kết nối</span>
-                  
+                <div class="flex items-center gap-2 mt-0.5 text-[11px]">
+                  <span class="text-amber-400 font-medium">Chưa đăng: <b>{{ p.pending_count || 0 }}</b></span>
                   <span class="text-slate-600">•</span>
-                  <span v-if="p.can_post === 1 || p.has_all_required_permissions" class="text-emerald-400">✓ Đủ quyền</span>
-                  <span v-else class="text-amber-400 font-semibold">⚠️ Thiếu quyền</span>
-                </div>
-
-                <!-- Thống kê task của Page -->
-                <div class="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5">
-                  <span class="text-amber-400 font-mono">{{ p.pending_count || 0 }} chờ</span>
-                  <span v-if="p.running_count > 0" class="text-blue-400 font-mono">• ⚡ {{ p.running_count }} đang đăng</span>
-                  <span v-if="p.failed_count > 0" class="text-rose-400 font-mono">• ❌ {{ p.failed_count }} lỗi</span>
+                  <span class="text-emerald-400 font-medium">Đã đăng: <b>{{ p.success_count || 0 }}</b></span>
                 </div>
               </div>
             </div>
 
-            <!-- Nút thao tác nhanh bên phải -->
+            <!-- Thao tác nhanh cho từng page: Nút + 1-4 Bài -->
             <div class="flex items-center gap-1 shrink-0" @click.stop>
-              <!-- Nút Lên lịch 1-4 bài -->
               <button @click="openPageTasksModal(p)"
                       class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-blue-600 hover:text-white text-slate-300 text-[10px] font-semibold transition border border-slate-700/60"
-                      title="Lên lịch 1 đến 4 bài đăng cho Page này">
+                      title="Lên lịch 1 đến 4 bài đăng cho Fanpage này (chia đều sau bao nhiêu tiếng)">
                 + 1-4 Bài
               </button>
-              
-              <!-- Nút Cập nhật token nếu hết hạn / thiếu quyền -->
-              <button v-if="p.is_token_expired || p.status === 'expired' || p.can_post === 0"
+              <button v-if="p.is_token_expired || p.status === 'expired' || p.status === 'error'"
                       @click="openConnectModal(p.account_id)"
-                      class="px-1.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500 hover:text-slate-950 text-amber-300 text-[9px] font-bold transition border border-amber-500/30"
+                      class="px-1.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500 hover:text-white text-rose-300 text-[10px] font-bold border border-rose-500/40 transition"
                       title="Cập nhật lại quyền hoặc làm mới kết nối">
-                🔑 Cập nhật
+                ⚠️ Kết nối lại
               </button>
             </div>
 
@@ -337,8 +316,8 @@
 
         <!-- Footer Khu vực A -->
         <div class="p-2.5 border-t border-slate-800 bg-slate-950/60 text-[11px] text-slate-400 shrink-0 flex items-center justify-between">
-          <span>💡 Click chọn Page để lọc bài</span>
-          <span class="text-slate-500 font-mono">{{ selectedPages.length }} Page được chọn</span>
+          <span>💡 Tích chọn Page để lọc &amp; tạo Task</span>
+          <span class="text-slate-500 font-mono">{{ selectedPageCount }} Page được chọn</span>
         </div>
       </aside>
 
@@ -360,7 +339,7 @@
               <span>📋 Thêm Từ Excel</span>
             </button>
 
-            <button @click="handleCleanupCompletedTasks" class="flex items-center gap-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg text-xs transition" title="Xóa các bài đã đăng thành công khỏi database để giữ hệ thống sạch gọn">
+            <button @click="handleCleanupCompletedTasks" class="flex items-center gap-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg text-xs transition" title="Xóa các bài đã đăng thành công khỏi database để làm sạch hàng đợi">
               <span>🧹 Dọn dẹp bài đã đăng</span>
             </button>
           </div>
@@ -369,20 +348,20 @@
           <div class="flex items-center gap-2 flex-wrap">
             
             <!-- Chip hiển thị Fanpage đang lọc -->
-            <div v-if="activeFilterPageObj" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-300 border border-blue-500/40 text-xs font-semibold">
-              <span>Page: <b>{{ activeFilterPageObj.name }}</b></span>
-              <button @click="selectPageFilter('')" class="hover:text-white text-slate-400 font-bold ml-1" title="Bỏ lọc, xem toàn bộ Fanpage">✕</button>
+            <div v-if="selectedPageCount > 0" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-300 border border-blue-500/40 text-xs font-semibold">
+              <span v-if="selectedPageCount === 1">Page: <b>{{ selectedPages[0] ? selectedPages[0].name : '' }}</b></span>
+              <span v-else><b>{{ selectedPageCount }}</b> Page đang chọn</span>
+              <button @click="toggleSelectAllPages" class="hover:text-white text-slate-400 font-bold ml-1" title="Bỏ lọc, xem tất cả">✕</button>
             </div>
 
-            <!-- Dropdown lọc trạng thái task -->
+            <!-- Dropdown lọc trạng thái task (Đơn giản 5 mục chuẩn spec) -->
             <div class="flex items-center gap-1.5 text-xs text-slate-400">
               <select v-model="filterStatus" @change="loadTasks" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
-                <option value="">Bài cần xử lý (mặc định)</option>
+                <option value="">Tất cả Task đang cần xử lý (mặc định)</option>
                 <option value="scheduled">🕒 Chờ đăng</option>
                 <option value="running">🔄 Đang xử lý</option>
-                <option value="failed">❌ Đăng lỗi</option>
+                <option value="failed">❌ Đăng thất bại</option>
                 <option value="published">✅ Đã đăng thành công</option>
-                <option value="all">🌐 Tất cả bài viết</option>
               </select>
             </div>
 
@@ -423,7 +402,7 @@
           </div>
         </div>
 
-        <!-- Bảng danh sách Task compact ~45px rows, không id backend, caption 1 dòng -->
+        <!-- Bảng danh sách Task compact ~42px: Ẩn ID backend, Caption 1 dòng không vỡ chiều cao -->
         <div class="flex-1 overflow-auto">
           <table class="w-full text-left border-collapse">
             <thead class="sticky top-0 bg-slate-950/95 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider select-none z-10 backdrop-blur-sm">
@@ -435,12 +414,12 @@
                          title="Chọn tất cả bài viết"
                          class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer">
                 </th>
-                <th class="py-2.5 px-3 w-40">Fanpage</th>
                 <th class="py-2.5 px-3 w-36">Video</th>
+                <th class="py-2.5 px-3 w-40">Fanpage</th>
                 <th class="py-2.5 px-3 min-w-[200px]">Caption &amp; Bình luận</th>
-                <th class="py-2.5 px-3 w-32">Lịch Hẹn</th>
-                <th class="py-2.5 px-3 w-28 text-center">Trạng Thái</th>
-                <th class="py-2.5 px-3 w-28 text-center">Thao tác</th>
+                <th class="py-2.5 px-3 w-32">Ngày Giờ Đăng</th>
+                <th class="py-2.5 px-3 w-32 text-center">Trạng Thái</th>
+                <th class="py-2.5 px-3 w-36 text-center">Thao tác</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60 text-xs font-normal">
@@ -455,7 +434,7 @@
               <tr v-for="t in tasks" :key="t.id"
                   @click="openTaskDetailModal(t)"
                   :class="selectedTaskIds.includes(t.id) ? 'bg-blue-950/35' : 'hover:bg-slate-800/50'"
-                  class="cursor-pointer transition h-11 select-none group border-b border-slate-800/40"
+                  class="cursor-pointer transition h-12 select-none group border-b border-slate-800/40"
                   title="Nhấn để xem chi tiết bài viết">
                 
                 <!-- Checkbox -->
@@ -467,7 +446,15 @@
                          class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer">
                 </td>
 
-                <!-- Fanpage -->
+                <!-- Video / Clean File Name (Không show link R2 hay ID backend) -->
+                <td class="py-2 px-3 max-w-[140px]">
+                  <div class="flex items-center gap-1.5 font-mono text-xs text-cyan-300 truncate" :title="getCleanFileName(t)">
+                    <span class="w-6 h-6 rounded bg-slate-800 flex items-center justify-center text-xs shrink-0 border border-slate-700">🎬</span>
+                    <span class="truncate">{{ getCleanFileName(t) }}</span>
+                  </div>
+                </td>
+
+                <!-- Fanpage: Chỉ hiển thị ảnh + tên, không ID -->
                 <td class="py-2 px-3 max-w-[150px]">
                   <div class="flex items-center gap-2">
                     <div class="w-6 h-6 rounded-full bg-blue-600/30 text-blue-300 font-bold text-[10px] flex items-center justify-center shrink-0">
@@ -479,15 +466,7 @@
                   </div>
                 </td>
 
-                <!-- Video -->
-                <td class="py-2 px-3 max-w-[140px]">
-                  <div class="flex items-center gap-1 font-mono text-xs text-cyan-300 truncate" :title="getCleanFileName(t)">
-                    <span>🎬</span>
-                    <span class="truncate">{{ getCleanFileName(t) }}</span>
-                  </div>
-                </td>
-
-                <!-- Caption & Bình luận (1 dòng gọn gàng, hover xem trọn vẹn) -->
+                <!-- Caption & Bình luận: Cắt ngắn 1-2 dòng, không vỡ chiều cao table -->
                 <td class="py-2 px-3 max-w-[280px]">
                   <div class="text-slate-200 truncate font-medium text-xs" :title="t.caption || 'Không có caption'">
                     {{ getFirstLine(t.caption) || '—' }}
@@ -495,9 +474,12 @@
                   <div v-if="t.comment_text" class="text-slate-500 truncate text-[11px] mt-0.5" :title="'Bình luận: ' + t.comment_text">
                     💬 {{ getFirstLine(t.comment_text) }}
                   </div>
+                  <div v-if="t.status === 'failed' && t.log" class="text-rose-400 truncate text-[11px] mt-0.5 font-sans" :title="t.log">
+                    ⚠️ {{ getFriendlyError(t.log) }}
+                  </div>
                 </td>
 
-                <!-- Lịch Hẹn -->
+                <!-- Ngày Giờ Đăng (24h) -->
                 <td class="py-2 px-3 whitespace-nowrap">
                   <div v-if="t.schedule_date && t.schedule_time" class="font-mono text-xs">
                     <span class="text-slate-200">{{ t.schedule_date }}</span>
@@ -508,16 +490,16 @@
                   </div>
                 </td>
 
-                <!-- Trạng Thái -->
+                <!-- Trạng Thái Gọn Gàng (Không debug badge) -->
                 <td class="py-2 px-3 text-center whitespace-nowrap">
                   <span v-if="t.status === 'published' || t.status === 'success'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                    ✅ Đã đăng
+                    ✅ Đã đăng thành công
                   </span>
                   <span v-else-if="t.status === 'failed'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30">
-                    ❌ Đăng lỗi
+                    ❌ Đăng thất bại
                   </span>
                   <span v-else-if="t.status === 'running'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-300 border border-blue-500/30 animate-pulse">
-                    🔄 Đang đăng...
+                    🔄 Đang xử lý...
                   </span>
                   <span v-else-if="t.status === 'due_soon'" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30">
                     ⏰ Sắp đến giờ
@@ -529,9 +511,31 @@
 
                 <!-- Thao tác -->
                 <td class="py-2 px-3 text-center whitespace-nowrap" @click.stop>
-                  <div class="flex items-center justify-center gap-1">
+                  <!-- Nếu đã xuất bản thành công -->
+                  <div v-if="t.status === 'published' || t.status === 'success'" class="flex items-center justify-center gap-1.5">
+                    <button v-if="getPostUrl(t)"
+                            @click="openPostUrl(t)"
+                            title="Mở bài viết trực tiếp trên Facebook"
+                            class="px-2 py-1 bg-blue-600/20 hover:bg-blue-600 hover:text-white text-blue-300 rounded-lg text-xs font-semibold border border-blue-500/30 transition flex items-center gap-1">
+                      <span>🔗 Mở</span>
+                    </button>
+                    <button v-if="getPostUrl(t)"
+                            @click="copyPostUrl(t)"
+                            title="Sao chép đường dẫn bài viết"
+                            class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition text-xs">
+                      📋
+                    </button>
+                    <button @click="handleDeleteTask(t.id)"
+                            title="Xóa bài viết khỏi hệ thống"
+                            class="p-1 text-rose-400 hover:bg-rose-950/60 rounded-lg transition text-xs">
+                      🗑️
+                    </button>
+                  </div>
+
+                  <!-- Nếu đang chờ hoặc thất bại -->
+                  <div v-else class="flex items-center justify-center gap-1">
                     <button @click="handlePublishSingleTaskNow(t)"
-                            :disabled="isTaskInFlight(t) || publishingNowTaskId === t.id || t.status === 'published' || t.status === 'success'"
+                            :disabled="isTaskInFlight(t) || publishingNowTaskId === t.id"
                             title="Đăng ngay bài viết này"
                             class="p-1.5 text-emerald-400 hover:bg-emerald-950/60 rounded-lg transition disabled:opacity-30">
                       ⚡
@@ -548,6 +552,13 @@
                             class="p-1.5 text-rose-400 hover:bg-rose-950/60 rounded-lg transition">
                       🗑️
                     </button>
+                    <button v-if="t.status === 'failed'"
+                            @click="handlePublishSingleTaskNow(t)"
+                            :disabled="isTaskInFlight(t)"
+                            title="Thử lại đăng bài"
+                            class="p-1.5 text-amber-400 hover:bg-amber-950/60 rounded-lg transition">
+                      🔄
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -561,6 +572,149 @@
           <span class="text-[11px] text-slate-500">Auto Reels &amp; Page Uploader</span>
         </div>
       </section>
+
+    </main>
+
+    <!-- VIEW 2: THỐNG KÊ (CHUẨN 100% THEO ẢNH MẪU CỦA NGƯỜI DÙNG) -->
+    <main v-else-if="mainView === 'analytics' || mainView === 'insights'" class="flex-1 flex flex-col overflow-y-auto p-4 md:p-6 gap-5 bg-slate-950 min-w-0">
+      
+      <!-- Header Thống Kê -->
+      <div class="flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 p-4 rounded-2xl shadow-xl">
+        <div>
+          <h2 class="text-lg font-extrabold text-white flex items-center gap-2">
+            <span>📊</span> Thống kê Reels &amp; Bài Viết
+          </h2>
+          <p class="text-xs text-slate-400 mt-0.5">Tổng hợp số liệu hiệu quả hoạt động các Fanpage và bài viết đã đăng</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button @click="handleSyncAllInsights" :disabled="isSyncingInsights"
+                  class="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md">
+            <svg class="w-3.5 h-3.5" :class="isSyncingInsights ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            <span>{{ isSyncingInsights ? 'Đang đồng bộ...' : 'Làm mới từ Meta' }}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 4 THẺ CHỈ SỐ TỔNG HỢP Ở TRÊN (Y HỆT ẢNH MẪU) -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <!-- 1. FOLLOWERS -->
+        <div class="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between shadow-lg">
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">FOLLOWERS</span>
+          <div class="text-2xl lg:text-3xl font-extrabold text-white mt-3 font-mono">
+            {{ formatCompactNumber(analyticsSummary.followers) }}
+          </div>
+          <div class="text-[11px] text-slate-400 mt-1">
+            {{ displayPages.length }} page
+          </div>
+        </div>
+
+        <!-- 2. VIEWS 7 NGÀY -->
+        <div class="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between shadow-lg">
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">VIEWS 7 NGÀY</span>
+          <div class="text-2xl lg:text-3xl font-extrabold text-blue-400 mt-3 font-mono">
+            {{ formatCompactNumber(analyticsSummary.views_7d) }}
+          </div>
+          <div class="text-[11px] text-slate-400 mt-1">
+            7 ngày gần nhất
+          </div>
+        </div>
+
+        <!-- 3. VIEWS 30 NGÀY -->
+        <div class="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between shadow-lg">
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">VIEWS 30 NGÀY</span>
+          <div class="text-2xl lg:text-3xl font-extrabold text-cyan-400 mt-3 font-mono">
+            {{ formatCompactNumber(analyticsSummary.views_30d) }}
+          </div>
+          <div class="text-[11px] text-slate-400 mt-1">
+            mọi page trong nhóm của bạn
+          </div>
+        </div>
+
+        <!-- 4. FOLLOW MỚI 30 NGÀY -->
+        <div class="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between shadow-lg">
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">FOLLOW MỚI 30 NGÀY</span>
+          <div class="text-2xl lg:text-3xl font-extrabold text-emerald-400 mt-3 font-mono">
+            {{ formatCompactNumber(analyticsSummary.new_follows_30d) }}
+          </div>
+          <div class="text-[11px] text-slate-400 mt-1">
+            {{ analyticsSummary.posts_30d }} bài đăng
+          </div>
+        </div>
+      </div>
+
+      <!-- BẢNG CHI TIẾT TỪNG FANPAGE (Y HỆT BẢNG TRONG ẢNH MẪU) -->
+      <div class="border border-slate-800 rounded-2xl bg-slate-900/90 overflow-hidden shadow-2xl flex-1 flex flex-col">
+        <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+          <div>
+            <h3 class="font-bold text-white text-sm">Bảng Thống Kê Chi Tiết Từng Fanpage</h3>
+            <p class="text-[11px] text-slate-400">Nhấn vào từng trang để xem danh sách bài viết đã xuất bản và mở xem trực tiếp trên Facebook</p>
+          </div>
+          <span class="text-xs text-slate-400 font-mono">{{ pageComparisonList.length }} Page</span>
+        </div>
+
+        <div class="overflow-x-auto flex-1">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="bg-slate-950/80 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase select-none">
+              <tr>
+                <th class="py-3 px-4">PAGE</th>
+                <th class="py-3 px-4 text-right">FOLLOWERS</th>
+                <th class="py-3 px-4 text-right">VIEWS 7 NGÀY</th>
+                <th class="py-3 px-4 text-right">VIEWS 30 NGÀY</th>
+                <th class="py-3 px-4 text-right">FOLLOW MỚI 30N</th>
+                <th class="py-3 px-4 text-right">BÀI 30N</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/60 font-sans">
+              <tr v-for="item in pageComparisonList" :key="item.facebook_page_id || item.page_id"
+                  @click="viewPagePosts(item)"
+                  class="hover:bg-slate-800/60 transition cursor-pointer group select-none">
+                
+                <!-- PAGE Column -->
+                <td class="py-3.5 px-4">
+                  <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-blue-600/30 text-blue-300 font-bold flex items-center justify-center text-xs shrink-0 border border-blue-500/20">
+                      {{ (item.page_name || 'P').charAt(0) }}
+                    </div>
+                    <div class="min-w-0">
+                      <div class="font-bold text-white text-xs group-hover:text-blue-400 transition-colors truncate">
+                        {{ item.page_name }}
+                      </div>
+                      <div class="text-[11px] text-slate-400 truncate mt-0.5">
+                        <span class="text-blue-400 font-medium">Facebook</span> {{ item.admin_name || 'Nguyễn Anh Đức' }}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+
+                <!-- FOLLOWERS Column -->
+                <td class="py-3.5 px-4 text-right font-medium text-slate-200 font-mono">
+                  {{ item.followers }}
+                </td>
+
+                <!-- VIEWS 7 NGÀY Column -->
+                <td class="py-3.5 px-4 text-right font-bold text-white font-mono">
+                  {{ formatCompactNumber(item.views_7d) }}
+                </td>
+
+                <!-- VIEWS 30 NGÀY Column -->
+                <td class="py-3.5 px-4 text-right font-medium text-slate-300 font-mono">
+                  {{ formatCompactNumber(item.views_30d) }}
+                </td>
+
+                <!-- FOLLOW MỚI 30N Column -->
+                <td class="py-3.5 px-4 text-right font-medium text-slate-300 font-mono">
+                  {{ item.new_follows_30d }}
+                </td>
+
+                <!-- BÀI 30N Column -->
+                <td class="py-3.5 px-4 text-right font-medium text-slate-300 font-mono">
+                  {{ item.posts_30d }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
     </main>
 
@@ -1195,186 +1349,207 @@
 
     <div v-if="showBulkTaskModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh]">
-        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+        <!-- Header Modal -->
+        <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900 shrink-0">
           <div>
-            <h3 class="font-bold text-white text-base">Thêm Nhanh Hàng Loạt Task Từ Excel (Chia Đều Các Page • Chung 1 Mốc Giờ)</h3>
-            <p class="text-xs text-slate-400">Chọn 1 mốc thời gian đăng chung → Dán dữ liệu 3 cột từ Excel → Hệ thống tự động chia đều mỗi Page 1 task và so khớp video R2</p>
+            <h3 class="font-bold text-white text-base flex items-center gap-2">
+              <span>📋</span> Thêm Nhanh Bài Viết Từ Excel
+            </h3>
+            <p class="text-xs text-slate-400 mt-0.5">Dán dữ liệu từ Excel → Tự động chia đều cho các Fanpage đã chọn → Dùng chung 1 mốc giờ đăng</p>
           </div>
           <button @click="showBulkTaskModal = false" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
         </div>
 
         <form @submit.prevent="handleBulkSubmit" class="p-5 space-y-4 overflow-y-auto flex-1 flex flex-col">
-          <!-- BƯỚC 1: CHỌN MỐC THỜI GIAN ĐĂNG CHUNG -->
+          
+          <!-- 1. CHỌN FANPAGE NHẬN BÀI -->
+          <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                <span>📢</span> 1. Chọn Fanpage nhận bài:
+              </span>
+              <div class="flex items-center gap-2 text-xs">
+                <span class="font-mono text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-400/20">
+                  Đã chọn: <b>{{ bulkModalSelectedPages.length }}</b> Fanpage (Tối đa {{ maxBulkTasksAllowed }} bài)
+                </span>
+                <button type="button" @click="selectAllBulkModalPages" class="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">
+                  Chọn tất cả
+                </button>
+                <button type="button" @click="deselectAllBulkModalPages" class="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400">
+                  Bỏ chọn
+                </button>
+              </div>
+            </div>
+
+            <!-- Danh sách Fanpage dạng lưới gọn gàng để tick chọn -->
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-32 overflow-y-auto p-1">
+              <div v-for="p in pages" :key="p.facebook_page_id"
+                   @click="toggleBulkModalPage(p.facebook_page_id)"
+                   class="p-2 rounded-lg border transition cursor-pointer flex items-center gap-2 select-none text-xs"
+                   :class="bulkSelectedPageIds.includes(p.facebook_page_id)
+                     ? 'border-blue-500 bg-blue-950/50 text-white shadow-sm ring-1 ring-blue-500/40'
+                     : 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-700'">
+                <input type="checkbox"
+                       :checked="bulkSelectedPageIds.includes(p.facebook_page_id)"
+                       @click.stop="toggleBulkModalPage(p.facebook_page_id)"
+                       class="w-3.5 h-3.5 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer shrink-0">
+                <img v-if="p.avatar_url" :src="p.avatar_url" class="w-5 h-5 rounded-md object-cover shrink-0" alt="">
+                <span class="truncate font-medium">{{ p.name }}</span>
+              </div>
+            </div>
+
+            <div v-if="bulkModalSelectedPages.length === 0" class="p-2 rounded-lg bg-rose-950/60 border border-rose-800/80 text-xs text-rose-300">
+              ⚠️ Vui lòng chọn ít nhất 1 Fanpage nhận bài để tiếp tục!
+            </div>
+          </div>
+
+          <!-- 2. THỜI GIAN ĐĂNG CHUNG (DÙNG CHO TOÀN BỘ TASK • KHÔNG GỢI Ý RƯỜM RÀ) -->
           <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
             <div class="flex items-center justify-between flex-wrap gap-2">
               <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                <span>⏰</span> Bước 1: Thời gian đăng bài:
+                <span>⏰</span> 2. Thời gian đăng chung (Dùng cho toàn bộ bài viết):
               </span>
+              <span class="text-[11px] text-slate-400 font-mono">Giờ Việt Nam (24h)</span>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <!-- Ngày đăng chung -->
               <div>
                 <label class="block text-xs font-semibold text-slate-300 mb-1">Ngày đăng: *</label>
-                <input type="date" v-model="bulkScheduleForm.schedule_date" @change="recalculateBulkExcelSchedules" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
+                <input type="date" v-model="bulkScheduleForm.schedule_date"
+                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               </div>
 
-              <!-- Giờ đăng chung (24 tiếng) -->
+              <!-- Giờ đăng chung (24h) -->
               <div>
                 <label class="block text-xs font-semibold text-slate-300 mb-1">Giờ đăng (24h): *</label>
-                <input type="time"
-                       v-model="bulkScheduleForm.schedule_time"
-                       @change="recalculateBulkExcelSchedules"
+                <input type="time" v-model="bulkScheduleForm.schedule_time"
                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono">
               </div>
             </div>
 
-            <!-- Cảnh báo thời gian quá khứ -->
-            <div v-if="bulkSchedulePastWarning || isTimeInPastToday(bulkScheduleForm.schedule_time, bulkScheduleForm.schedule_date)"
-                 class="p-2.5 rounded-lg bg-amber-950/80 border border-amber-600/60 flex items-center justify-between gap-2 text-xs text-amber-200">
-              <span>⚠️ Mốc thời gian này đã trôi qua. Vui lòng chọn thời điểm trong tương lai!</span>
+            <div v-if="isTimeInPastToday(bulkScheduleForm.schedule_time, bulkScheduleForm.schedule_date)"
+                 class="p-2 rounded-lg bg-amber-950/80 border border-amber-600/60 text-xs text-amber-200">
+              ⚠️ Mốc thời gian này đã trôi qua. Vui lòng chọn thời điểm trong tương lai!
             </div>
           </div>
 
-          <!-- BƯỚC 2: PHÂN BỔ FANPAGE (CHIA ĐỀU MỖI PAGE 1 TASK, GIỚI HẠN N x 10) -->
-          <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+          <!-- 3. DÁN DỮ LIỆU TỪ EXCEL (3 CỘT TAB) -->
+          <div class="space-y-1.5">
             <div class="flex items-center justify-between flex-wrap gap-2">
-              <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                <span>📢</span> Bước 2: Phân bổ đều cho các Fanpage đã chọn (Chia đều mỗi Page 1 task):
-              </span>
-              <span class="text-[11px] font-mono px-2 py-0.5 rounded border"
-                    :class="isBulkOverLimit ? 'bg-rose-950/80 text-rose-300 border-rose-700/80' : 'bg-blue-950/60 text-blue-300 border-blue-800/60'">
-                Hạn mức: Tối đa {{ maxBulkTasksAllowed }} task ({{ selectedPages.length }} Page × 10 task)
-              </span>
-            </div>
-
-            <div v-if="selectedPages.length === 0" class="p-2.5 rounded-lg bg-rose-950/50 border border-rose-800/60 text-xs text-rose-300">
-              ⚠️ Bạn chưa chọn Fanpage nào ở danh sách bên trái! Hãy tick chọn ít nhất 1 Fanpage để thêm task.
-            </div>
-            <div v-else class="flex items-center gap-2 flex-wrap">
-              <span class="text-xs text-slate-400">Các Page nhận task:</span>
-              <span v-for="p in selectedPages" :key="p.facebook_page_id" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white">
-                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <span class="font-medium">{{ p.name }}</span>
-              </span>
-            </div>
-
-            <!-- Cảnh báo nếu số task dán vượt quá N x 10 -->
-            <div v-if="isBulkOverLimit" class="p-2.5 rounded-lg bg-rose-950/90 border border-rose-600 text-xs text-rose-200 font-semibold flex items-center gap-2">
-              <span>⚠️ Bạn đang dán {{ bulkParsedList.length }} task, vượt quá giới hạn tối đa cho phép là {{ maxBulkTasksAllowed }} task đối với {{ selectedPages.length }} Fanpage đã chọn! Vui lòng xóa bớt dòng thừa.</span>
-            </div>
-          </div>
-
-          <!-- BƯỚC 3: TEXTAREA DÁN DỮ LIỆU EXCEL -->
-          <div>
-            <div class="flex items-center justify-between mb-1.5">
               <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <span>📋</span> Bước 3: Dán dữ liệu từ Excel (Đúng 3 cột, phân cách bằng TAB):
+                <span>📋</span> 3. Dán dữ liệu từ Excel (Cột 1: Video, Cột 2: Caption, Cột 3: Bình luận):
               </label>
-              <span class="text-[11px] font-mono text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-400/20">
-                ĐƯỜNG DẪN VIDEO \t CAPTION \t BÌNH LUẬN (TÙY CHỌN)
-              </span>
-            </div>
-            <textarea v-model="bulkDataRaw"
-                      @input="handleBulkInputChanged"
-                      rows="5"
-                      placeholder="video01.mp4&#9;Caption video số 1 hay tuyệt&#9;Link mua hàng: bit.ly/123&#10;video02.mp4&#9;Tập 2 kịch tính cuốn hút&#9;&#10;https://example.com/video03.mp4&#9;Review sản phẩm mới&#9;Bình luận tương tác"
-                      class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono focus:outline-none focus:border-blue-500 leading-relaxed"></textarea>
-            <div class="flex items-center justify-between mt-1 text-[11px] text-slate-400">
-              <span>💡 Copy trực tiếp từ Excel (Ctrl+C) rồi dán vào đây (Ctrl+V). Tự động chia đều cho {{ selectedPages.length }} Fanpage.</span>
-              <span :class="isBulkOverLimit ? 'text-rose-400 font-bold' : 'text-slate-300'">{{ bulkParsedList.length }} / {{ maxBulkTasksAllowed }} dòng</span>
-            </div>
-          </div>
-
-          <!-- BẢNG LIVE PREVIEW (XEM TRƯỚC PHÂN BỔ) -->
-          <div class="flex-1 flex flex-col min-h-[180px]">
-            <div class="flex items-center justify-between mb-1.5 flex-wrap gap-2">
-              <span class="text-xs font-bold text-slate-300 flex items-center gap-2">
-                <span>Xem trước phân bổ:</span>
-                <span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-mono">{{ bulkParsedList.length }} dòng</span>
-              </span>
-              <div class="flex items-center gap-2 text-[11px]">
-                <input type="file"
-                       multiple
-                       accept="video/mp4,video/*"
-                       @change="handleBulkExcelFilesSelected"
-                       id="bulk-excel-files-input"
-                       class="hidden">
+              
+              <!-- Nút chọn video từ máy tính trực tiếp -->
+              <div class="flex items-center gap-2">
+                <input type="file" multiple accept="video/mp4,video/*" @change="handleBulkExcelFilesSelected" id="bulk-excel-files-input" class="hidden">
+                <input type="file" accept="video/mp4,video/*" @change="handleSingleRowFileSelected" id="single-row-file-input" class="hidden">
                 <button type="button"
                         @click="triggerBulkExcelFilePicker"
                         :disabled="isUploadingBulkExcelVideos"
-                        class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700 flex items-center gap-1 transition">
+                        class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition flex items-center gap-1">
                   <span v-if="isUploadingBulkExcelVideos">⏳ Đang tải ({{ bulkExcelUploadProgress.current }}/{{ bulkExcelUploadProgress.total }})...</span>
-                  <span v-else>📁 Nạp file video từ máy (nếu cần)</span>
+                  <span v-else>📁 Nạp video từ máy tính</span>
                 </button>
-                <span class="text-emerald-400 font-bold">✓ {{ validBulkRowCount }} hợp lệ</span>
-                <span v-if="errorBulkRowCount > 0" class="text-rose-400 font-bold">⚠️ {{ errorBulkRowCount }} dòng cần video</span>
               </div>
             </div>
 
-            <div class="flex-1 overflow-auto border border-slate-800 rounded-xl bg-slate-950 max-h-56">
+            <textarea v-model="bulkDataRaw"
+                      @input="handleBulkInputChanged"
+                      rows="4"
+                      placeholder="video01.mp4&#9;Caption bài viết số 1 hay tuyệt&#9;Link mua hàng: bit.ly/123&#10;video02.mp4&#9;Caption bài viết số 2&#10;video03.mp4"
+                      class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono focus:outline-none focus:border-blue-500 leading-relaxed"></textarea>
+            
+            <div class="flex items-center justify-between text-[11px] text-slate-400">
+              <span>💡 Caption và Bình luận có thể bỏ trống. Đường dẫn video là bắt buộc.</span>
+              <span :class="isBulkOverLimit ? 'text-rose-400 font-bold' : 'text-slate-300 font-mono'">
+                {{ bulkParsedList.length }} / {{ maxBulkTasksAllowed }} dòng
+              </span>
+            </div>
+
+            <div v-if="isBulkOverLimit" class="p-2 rounded-lg bg-rose-950/80 border border-rose-700 text-xs text-rose-200">
+              ⚠️ Bạn đã dán {{ bulkParsedList.length }} bài, vượt quá giới hạn tối đa {{ maxBulkTasksAllowed }} bài đối với {{ bulkModalSelectedPages.length }} Fanpage đã chọn! Vui lòng xóa bớt dòng thừa.
+            </div>
+          </div>
+
+          <!-- 4. BẢNG XEM TRƯỚC PHÂN BỔ BÀI VIẾT (CHIA ĐỀU MỖI PAGE 1 TASK) -->
+          <div class="space-y-1.5 flex-1 flex flex-col min-h-[160px]">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-2">
+                <span>Bản xem trước phân bổ (Chia đều mỗi Page 1 task):</span>
+                <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
+                  {{ bulkGeneratedTasks.length }} Task dự kiến
+                </span>
+              </span>
+              <div class="text-[11px] flex items-center gap-3">
+                <span class="text-emerald-400 font-bold">✓ {{ bulkGeneratedTasks.filter(t => t.video_status !== 'missing').length }} video sẵn sàng</span>
+                <span v-if="bulkGeneratedTasks.filter(t => t.video_status === 'missing').length > 0" class="text-amber-400 font-bold">
+                  ⚠️ {{ bulkGeneratedTasks.filter(t => t.video_status === 'missing').length }} dòng cần nạp video
+                </span>
+              </div>
+            </div>
+
+            <div class="flex-1 overflow-auto border border-slate-800 rounded-xl bg-slate-950 max-h-52">
               <table class="w-full text-left border-collapse text-xs">
-                <thead class="sticky top-0 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 uppercase font-mono">
+                <thead class="sticky top-0 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 font-mono uppercase">
                   <tr>
                     <th class="py-2 px-2.5 w-10 text-center">STT</th>
-                    <th class="py-2 px-2.5 w-40">FANPAGE NHẬN TASK</th>
-                    <th class="py-2 px-2.5">FILE VIDEO</th>
-                    <th class="py-2 px-2.5">CAPTION</th>
-                    <th class="py-2 px-2.5">BÌNH LUẬN</th>
+                    <th class="py-2 px-2.5 w-36">FANPAGE NHẬN</th>
+                    <th class="py-2 px-2.5 w-44">FILE VIDEO</th>
+                    <th class="py-2 px-2.5 min-w-[140px]">CAPTION</th>
+                    <th class="py-2 px-2.5 w-28">BÌNH LUẬN</th>
                     <th class="py-2 px-2.5 w-36 text-center">TRẠNG THÁI</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800/60 font-mono">
-                  <tr v-if="bulkParsedList.length === 0">
+                  <tr v-if="bulkGeneratedTasks.length === 0">
                     <td colspan="6" class="py-8 text-center text-slate-500 font-sans">
-                      Dán dữ liệu các dòng từ Excel vào ô bên trên để xem trước phân bổ lịch và kiểm tra trạng thái video.
+                      Dán dữ liệu các dòng từ Excel vào ô bên trên để xem trước phân bổ bài viết.
                     </td>
                   </tr>
 
-                  <tr v-for="(item, idx) in bulkParsedList" :key="idx" class="hover:bg-slate-900/50">
+                  <tr v-for="(task, idx) in bulkGeneratedTasks" :key="idx" class="hover:bg-slate-900/50">
                     <td class="py-2 px-2.5 text-center text-slate-500">{{ idx + 1 }}</td>
+                    
+                    <!-- Fanpage nhận bài (Chia đều round-robin) -->
+                    <td class="py-2 px-2.5 font-sans font-semibold text-slate-200 truncate max-w-[140px]" :title="task.page_name">
+                      {{ task.page_name }}
+                    </td>
 
-                    <!-- Fanpage nhận task (Chia đều mỗi page 1 task) -->
-                    <td class="py-2 px-2.5 font-sans">
-                      <div class="text-slate-200 font-semibold truncate max-w-[150px]" :title="item.assigned_page_name">
-                        {{ item.assigned_page_name }}
+                    <!-- File video & trạng thái -->
+                    <td class="py-2 px-2.5 font-sans truncate max-w-[180px]" :title="task.video_filename">
+                      <div class="truncate text-slate-200 font-mono text-xs">{{ task.video_filename }}</div>
+                      <div class="text-[10px] text-slate-400 truncate mt-0.5">
+                        {{ task.status_message }}
                       </div>
                     </td>
 
-                    <!-- File video & trạng thái R2 -->
-                    <td class="py-2 px-2.5 max-w-[200px]">
-                      <div class="truncate text-slate-200" :title="item.video_path">{{ item.filename || item.video_path }}</div>
-                      <div class="mt-0.5">
-                        <span v-if="item.video_status === 'ready'" class="text-[10px] text-emerald-400 font-sans font-semibold">
-                          ✓ Đã lưu trên R2
-                        </span>
-                        <span v-else-if="item.video_status === 'remote_url'" class="text-[10px] text-cyan-400 font-sans font-semibold">
-                          ✓ URL video trực tuyến
-                        </span>
-                        <span v-else class="text-[10px] text-amber-400 font-sans font-semibold">
-                          ⚠️ {{ item.status_message || 'Chưa tải lên R2' }}
-                        </span>
+                    <!-- Caption -->
+                    <td class="py-2 px-2.5 font-sans text-slate-300 truncate max-w-[180px]" :title="task.caption">
+                      {{ task.caption || '—' }}
+                    </td>
+
+                    <!-- Bình luận -->
+                    <td class="py-2 px-2.5 font-sans text-cyan-400 truncate max-w-[120px]" :title="task.comment_text">
+                      {{ task.comment_text || '—' }}
+                    </td>
+
+                    <!-- Trạng thái & Nút nạp riêng lẻ nếu thiếu video -->
+                    <td class="py-2 px-2.5 text-center whitespace-nowrap font-sans">
+                      <span v-if="task.video_status === 'ready' || task.video_status === 'remote_url'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[11px] font-bold">
+                        ✓ Sẵn sàng
+                      </span>
+                      <div v-else-if="task.video_status === 'missing'" class="inline-flex items-center gap-1.5">
+                        <span class="text-amber-400 text-[11px] font-bold">Chưa có video</span>
+                        <button type="button"
+                                @click="triggerSingleRowUpload(task.row_index - 1)"
+                                class="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold transition">
+                          Chọn file
+                        </button>
                       </div>
-                    </td>
-
-                    <td class="py-2 px-2.5 max-w-[160px] truncate text-slate-300 font-sans" :title="item.caption">
-                      {{ item.caption || '—' }}
-                    </td>
-
-                    <td class="py-2 px-2.5 max-w-[120px] truncate" :title="item.comment_text">
-                      <span v-if="item.comment_text" class="text-cyan-400 font-sans">{{ item.comment_text }}</span>
-                      <span v-else class="text-slate-500 italic text-[11px] font-sans">(Không cmt)</span>
-                    </td>
-
-                    <td class="py-2 px-2.5 whitespace-nowrap text-center">
-                      <span v-if="item.is_valid && (item.video_status === 'ready' || item.video_status === 'remote_url')" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[11px] font-bold">
-                        ✓ Hợp lệ
-                      </span>
-                      <span v-else-if="item.is_valid && item.video_status === 'missing'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-[11px] font-bold">
-                        ⚠️ Cần nạp R2
-                      </span>
-                      <span v-else class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 text-[11px] font-bold" :title="item.error_reason">
-                        ❌ {{ item.error_reason }}
+                      <span v-else class="text-rose-400 text-[11px] font-bold">
+                        ❌ Lỗi đường dẫn
                       </span>
                     </td>
                   </tr>
@@ -1383,16 +1558,16 @@
             </div>
           </div>
 
-          <!-- BƯỚC 6: TÓM TẮT & NÚT XÁC NHẬN -->
-          <div class="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
-            <div class="text-xs text-slate-300 space-y-0.5 font-mono">
+          <!-- TÓM TẮT & NÚT XÁC NHẬN -->
+          <div class="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 shrink-0">
+            <div class="text-xs text-slate-300 space-y-0.5">
               <div class="flex items-center gap-3 flex-wrap">
-                <span>Đã nhập: <strong class="text-white">{{ bulkParsedList.length }}</strong> / {{ maxBulkTasksAllowed }} dòng</span>
-                <span>Hợp lệ: <strong class="text-emerald-400">{{ validBulkRowCount }}</strong></span>
-                <span v-if="errorBulkRowCount > 0">Chưa có video R2: <strong class="text-amber-400">{{ errorBulkRowCount }}</strong></span>
+                <span>Dòng Excel: <strong class="text-white font-mono">{{ bulkParsedList.length }}</strong></span>
+                <span>Fanpage: <strong class="text-white font-mono">{{ bulkModalSelectedPages.length }}</strong></span>
+                <span>Tổng Task: <strong class="text-cyan-300 font-mono font-bold">{{ bulkGeneratedTasks.length }}</strong></span>
               </div>
-              <div v-if="bulkScheduleForm.schedule_date && bulkScheduleForm.schedule_time" class="text-[11px] text-slate-400 font-sans">
-                Lịch đăng chung: <strong class="text-cyan-300">{{ bulkScheduleForm.schedule_date }} {{ bulkScheduleForm.schedule_time }}</strong> (Giờ Việt Nam)
+              <div v-if="bulkScheduleForm.schedule_date && bulkScheduleForm.schedule_time" class="text-[11px] text-slate-400">
+                Thời gian đăng: <strong class="text-white font-mono">{{ bulkScheduleForm.schedule_date }} {{ bulkScheduleForm.schedule_time }}</strong> (Giờ Việt Nam)
               </div>
             </div>
 
@@ -1401,9 +1576,9 @@
                 Hủy
               </button>
               <button type="submit"
-                      :disabled="validBulkRowCount === 0 || isSubmittingBulkTasks || isBulkOverLimit || selectedPages.length === 0"
+                      :disabled="bulkGeneratedTasks.length === 0 || isSubmittingBulkTasks || isBulkOverLimit || bulkModalSelectedPages.length === 0"
                       class="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-indigo-900/40 transition active:scale-95 flex items-center gap-1.5">
-                <span>{{ isSubmittingBulkTasks ? 'Đang tạo task...' : ('Xác Nhận Tạo ' + validBulkRowCount + ' Task') }}</span>
+                <span>{{ isSubmittingBulkTasks ? 'Đang tạo task...' : ('Xác Nhận Tạo ' + bulkGeneratedTasks.length + ' Task') }}</span>
               </button>
             </div>
           </div>
