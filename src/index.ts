@@ -1866,10 +1866,12 @@ export async function handleWorkerRequest(
         return jsonResponse({
           success: true,
           synced_count: syncRes.count,
+          new_count: syncRes.new_count,
+          updated_count: syncRes.updated_count,
           next_cursor: syncRes.next_cursor,
           has_more: syncRes.has_more,
           total_synced: syncRes.total_synced,
-          message: `Đã đồng bộ thành công ${syncRes.count} bài viết từ Fanpage.`
+          message: syncRes.message || `Đã đồng bộ thành công ${syncRes.count} bài viết từ Fanpage.`
         });
       } else {
         return jsonResponse({

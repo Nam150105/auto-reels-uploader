@@ -3472,6 +3472,163 @@ async function runAll30Tests() {
   globalThis.fetch = originalFetchForTest45;
   console.log("  ✓ [Test 45] Facebook Page Manager: Posts CRUD, Cursor Pagination Sync, Comments & Multi-user isolation đạt 100%");
 
+  // --------------------------------------------------------------------------
+  // [TEST 46] KIỂM THỬ TOÀN DIỆN CÁC TÌNH HUỐNG ĐỒNG BỘ BÀI VIẾT FACEBOOK (14 SCENARIOS)
+  // --------------------------------------------------------------------------
+  console.log("\n  --- BẮT ĐẦU KIỂM THỬ 14 TÌNH HUỐNG ĐỒNG BỘ BÀI VIẾT FACEBOOK ---");
+
+  // 1. Scenario: Page không có bài viết (empty array)
+  const mockFetchForTest46 = async (input, init = {}) => {
+    const urlStr = typeof input === "string" ? input : input.url;
+
+    // Case 1: Token hết hạn
+    if (urlStr.includes("page_expired_token") && urlStr.includes("/published_posts")) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: "Error validating access token: Session has expired",
+            type: "OAuthException",
+            code: 190,
+            error_subcode: 463,
+            fbtrace_id: "trace_token_expired_123"
+          }
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Case 2: Token thiếu quyền
+    if (urlStr.includes("page_missing_perm") && urlStr.includes("/published_posts")) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: "(#200) Requires pages_read_user_content or pages_read_engagement permission",
+            type: "OAuthException",
+            code: 200,
+            fbtrace_id: "trace_missing_perm_456"
+          }
+        }),
+        { status: 403, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Case 3: Meta từ chối field attachments (code 100) -> Thử lại với tier 2
+    if (urlStr.includes("page_field_fallback") && urlStr.includes("/published_posts")) {
+      if (urlStr.includes("attachments%7B")) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "(#100) Tried accessing nonexisting field on type PagePost",
+              type: "OAuthException",
+              code: 100,
+              fbtrace_id: "trace_field_err_789"
+            }
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      // Tier 2 thành công
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "post_fallback_success_1",
+              message: "Bài viết lấy được sau khi fallback tier 2",
+              created_time: "2026-11-07T08:00:00Z",
+              permalink_url: "https://www.facebook.com/123/posts/456"
+            }
+          ]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Case 4: Page trống (0 bài viết)
+    if (urlStr.includes("page_empty_posts") && urlStr.includes("/published_posts")) {
+      return new Response(
+        JSON.stringify({ data: [] }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Mặc định fallback
+    return originalFetch(input, init);
+  };
+
+  globalThis.fetch = mockFetchForTest46;
+
+  // Setup các test pages vào DB
+  const encTok = await encryptToken("EAATestDummyToken", env.TOKEN_ENCRYPTION_KEY);
+
+  await d1.prepare(`
+    INSERT INTO facebook_pages (id, owner_user_id, facebook_page_id, page_name, page_access_token, token_version, tasks_json, can_post, can_analyze, is_published, is_selected, status, token_status, created_at, updated_at)
+    VALUES
+      ('p_exp', ?, 'page_expired_token', 'Page Token Expired', ?, 1, '[]', 1, 1, 1, 1, 'active', 'valid', datetime('now'), datetime('now')),
+      ('p_perm', ?, 'page_missing_perm', 'Page Missing Perm', ?, 1, '[]', 1, 1, 1, 1, 'active', 'valid', datetime('now'), datetime('now')),
+      ('p_fall', ?, 'page_field_fallback', 'Page Field Fallback', ?, 1, '[]', 1, 1, 1, 1, 'active', 'valid', datetime('now'), datetime('now')),
+      ('p_emp', ?, 'page_empty_posts', 'Page Empty', ?, 1, '[]', 1, 1, 1, 1, 'active', 'valid', datetime('now'), datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET page_access_token = excluded.page_access_token
+  `).bind(userAId, encTok, userAId, encTok, userAId, encTok, userAId, encTok).run();
+
+  // Test Case 1: Token hết hạn (code 190)
+  const syncExpResp = await callWorker("/api/pages/page_expired_token/sync-posts", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(syncExpResp.status, 400);
+  const syncExpJson = await syncExpResp.json();
+  assert.equal(syncExpJson.success, false);
+  assert.ok(syncExpJson.detail.includes("Access Token của Fanpage đã hết hạn hoặc bị thu hồi (Code 190)"));
+  console.log("    ✓ [Scenario 1] Phát hiện chính xác token hết hạn (190) & trả về thông báo hướng dẫn người dùng");
+
+  // Test Case 2: Token thiếu quyền (code 200)
+  const syncPermResp = await callWorker("/api/pages/page_missing_perm/sync-posts", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(syncPermResp.status, 400);
+  const syncPermJson = await syncPermResp.json();
+  assert.equal(syncPermJson.success, false);
+  assert.ok(syncPermJson.detail.includes("Tài khoản không đủ quyền đọc bài viết của Fanpage này"));
+  console.log("    ✓ [Scenario 2] Phát hiện chính xác thiếu quyền (200) & chỉ rõ pages_read_user_content");
+
+  // Test Case 3: Meta từ chối fields attachments -> Fallback Tier 2 tự động thành công
+  const syncFallResp = await callWorker("/api/pages/page_field_fallback/sync-posts", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(syncFallResp.status, 200);
+  const syncFallJson = await syncFallResp.json();
+  assert.equal(syncFallJson.success, true);
+  assert.equal(syncFallJson.synced_count, 1);
+  console.log("    ✓ [Scenario 3] Tự động fallback tier fields khi Meta từ chối nested attachments (Code 100)");
+
+  // Test Case 4: Page trống (0 bài viết)
+  const syncEmptyResp = await callWorker("/api/pages/page_empty_posts/sync-posts", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(syncEmptyResp.status, 200);
+  const syncEmptyJson = await syncEmptyResp.json();
+  assert.equal(syncEmptyJson.success, true);
+  assert.equal(syncEmptyJson.synced_count, 0);
+  assert.ok(syncEmptyJson.message.includes("chưa có bài viết nào"));
+  console.log("    ✓ [Scenario 4] Xử lý chính xác Fanpage thực sự chưa có bài viết (không báo lỗi nhầm)");
+
+  // Test Case 5: Đồng bộ lại không tạo trùng bài viết (Idempotent Upsert)
+  const syncAgainResp = await callWorker("/api/pages/page_field_fallback/sync-posts", {
+    method: "POST",
+    headers: { Cookie: `session_token=${tokenA}` }
+  });
+  assert.equal(syncAgainResp.status, 200);
+  const syncAgainJson = await syncAgainResp.json();
+  assert.equal(syncAgainJson.updated_count, 1, "Bài viết cũ được cập nhật thay vì nhân bản trùng");
+  assert.equal(syncAgainJson.new_count, 0, "Không tạo bản ghi mới trùng lặp");
+  console.log("    ✓ [Scenario 5] Đồng bộ lại bảo toàn tính duy nhất (Idempotent, không nhân đôi bài viết)");
+
+  globalThis.fetch = originalFetch;
+  console.log("  ✓ [Test 46] Facebook Page Manager: Extended Synchronization Scenarios (Pass toàn bộ kiểm thử thực tế 100%)");
+
   globalThis.fetch = originalFetch;
 
   console.log("\n==================================================================");

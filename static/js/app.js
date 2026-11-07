@@ -2829,11 +2829,12 @@ function setDatePreset(offsetDays) {
           method: 'POST'
         });
         const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          showToast(`Đã đồng bộ thành công ${data.synced_count || 0} bài viết từ Fanpage ${page.name}!`, 'success');
+        if (res.ok && data.success) {
+          showToast(data.message || `Đã đồng bộ thành công ${data.synced_count || 0} bài viết từ Fanpage ${page.name}!`, 'success');
           await loadTasks();
+          await loadFacebookPosts();
         } else {
-          showToast(data.detail || 'Không thể đồng bộ bài viết từ Fanpage.', 'error');
+          showToast(data.detail || data.message || 'Không thể đồng bộ bài viết từ Fanpage.', 'error');
         }
       } catch (err) {
         showToast('Lỗi kết nối khi đồng bộ bài viết.', 'error');
@@ -3408,11 +3409,12 @@ async function handleDeleteTask(taskId) {
         params.append('limit', String(postsLimit.value));
 
         const res = await apiFetch(`/api/posts?${params.toString()}`);
-        if (res && res.success) {
-          posts.value = res.posts || [];
-          totalPosts.value = res.total || 0;
-          postsTotalPages.value = res.total_pages || 1;
-          pageSyncStates.value = res.sync_states || {};
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          posts.value = data.posts || [];
+          totalPosts.value = data.total || 0;
+          postsTotalPages.value = data.total_pages || 1;
+          pageSyncStates.value = data.sync_states || {};
         }
       } catch (err) {
         console.error("Lỗi tải bài viết:", err);
@@ -3434,11 +3436,12 @@ async function handleDeleteTask(taskId) {
           method: 'POST',
           body: JSON.stringify({ limit: 30 })
         });
-        if (res && res.success) {
-          showToast(`Đồng bộ thành công ${res.synced_count} bài viết!`, "success");
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          showToast(data.message || `Đồng bộ thành công ${data.synced_count || 0} bài viết!`, "success");
           await loadFacebookPosts();
         } else {
-          showToast(res.detail || "Không thể đồng bộ bài viết từ Fanpage.", "error");
+          showToast(data.detail || data.message || "Không thể đồng bộ bài viết từ Fanpage.", "error");
         }
       } catch (err) {
         showToast(err?.message || "Lỗi đồng bộ bài viết.", "error");
@@ -3462,11 +3465,12 @@ async function handleDeleteTask(taskId) {
           method: 'POST',
           body: JSON.stringify({ cursor: st.next_cursor, limit: 30 })
         });
-        if (res && res.success) {
-          showToast(`Đã lấy thêm ${res.synced_count} bài viết cũ!`, "success");
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          showToast(data.message || `Đã lấy thêm ${data.synced_count || 0} bài viết cũ!`, "success");
           await loadFacebookPosts();
         } else {
-          showToast(res.detail || "Lỗi tải bài viết cũ.", "error");
+          showToast(data.detail || data.message || "Lỗi tải bài viết cũ.", "error");
         }
       } catch (e) {
         showToast(e?.message || "Lỗi tải bài viết cũ.", "error");
@@ -3483,10 +3487,11 @@ async function handleDeleteTask(taskId) {
       postAuditLogs.value = [];
       try {
         const res = await apiFetch(`/api/posts/${encodeURIComponent(post.post_id)}`);
-        if (res && res.success) {
-          selectedPost.value = res.post || post;
-          postComments.value = res.comments || [];
-          postAuditLogs.value = res.audit_logs || [];
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          selectedPost.value = data.post || post;
+          postComments.value = data.comments || [];
+          postAuditLogs.value = data.audit_logs || [];
         }
       } catch (e) {
         console.error("Lỗi lấy chi tiết bài viết:", e);
@@ -3516,7 +3521,8 @@ async function handleDeleteTask(taskId) {
           method: 'PUT',
           body: JSON.stringify({ message: editPostCaptionText.value })
         });
-        if (res && res.success) {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
           showToast("Đã cập nhật bài viết thành công!", "success");
           isEditPostModalOpen.value = false;
           await loadFacebookPosts();
@@ -3524,7 +3530,7 @@ async function handleDeleteTask(taskId) {
             await openPostDetail(selectedPost.value);
           }
         } else {
-          showToast(res.detail || "Không thể cập nhật bài viết.", "error");
+          showToast(data.detail || data.message || "Không thể cập nhật bài viết.", "error");
         }
       } catch (e) {
         showToast(e?.message || "Lỗi cập nhật bài viết.", "error");
@@ -3546,13 +3552,14 @@ async function handleDeleteTask(taskId) {
         const res = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}?delete_facebook=${deletePostOnFacebook.value}`, {
           method: 'DELETE'
         });
-        if (res && res.success) {
-          showToast(res.message || "Đã xóa bài viết thành công!", "success");
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          showToast(data.message || "Đã xóa bài viết thành công!", "success");
           isDeletePostModalOpen.value = false;
           isPostDetailOpen.value = false;
           await loadFacebookPosts();
         } else {
-          showToast(res.detail || "Không thể xóa bài viết.", "error");
+          showToast(data.detail || data.message || "Không thể xóa bài viết.", "error");
         }
       } catch (e) {
         showToast(e?.message || "Lỗi xóa bài viết.", "error");
@@ -3569,15 +3576,17 @@ async function handleDeleteTask(taskId) {
           method: 'POST',
           body: JSON.stringify({ message: postNewComment.value.trim() })
         });
-        if (res && res.success) {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
           showToast("Đã gửi bình luận thành công!", "success");
           postNewComment.value = '';
           const cRes = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`);
-          if (cRes && cRes.success) {
-            postComments.value = cRes.comments || [];
+          const cData = await cRes.json().catch(() => ({}));
+          if (cRes.ok && cData.success) {
+            postComments.value = cData.comments || [];
           }
         } else {
-          showToast(res.detail || "Không thể gửi bình luận.", "error");
+          showToast(data.detail || data.message || "Không thể gửi bình luận.", "error");
         }
       } catch (e) {
         showToast(e?.message || "Lỗi gửi bình luận.", "error");
@@ -3594,16 +3603,18 @@ async function handleDeleteTask(taskId) {
           method: 'POST',
           body: JSON.stringify({ message: postReplyText.value.trim(), post_id: selectedPost.value.post_id })
         });
-        if (res && res.success) {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
           showToast("Đã trả lời bình luận thành công!", "success");
           postReplyText.value = '';
           postReplyTargetId.value = null;
           const cRes = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`);
-          if (cRes && cRes.success) {
-            postComments.value = cRes.comments || [];
+          const cData = await cRes.json().catch(() => ({}));
+          if (cRes.ok && cData.success) {
+            postComments.value = cData.comments || [];
           }
         } else {
-          showToast(res.detail || "Không thể gửi câu trả lời.", "error");
+          showToast(data.detail || data.message || "Không thể gửi câu trả lời.", "error");
         }
       } catch (e) {
         showToast(e?.message || "Lỗi gửi trả lời.", "error");
@@ -3616,16 +3627,18 @@ async function handleDeleteTask(taskId) {
       if (!confirm("Bạn có chắc chắn muốn xóa bình luận này trên Facebook?")) return;
       try {
         const res = await apiFetch(`/api/comments/${encodeURIComponent(commentId)}`, { method: 'DELETE' });
-        if (res && res.success) {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
           showToast("Đã xóa bình luận thành công!", "success");
           if (selectedPost.value) {
             const cRes = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`);
-            if (cRes && cRes.success) {
-              postComments.value = cRes.comments || [];
+            const cData = await cRes.json().catch(() => ({}));
+            if (cRes.ok && cData.success) {
+              postComments.value = cData.comments || [];
             }
           }
         } else {
-          showToast(res.detail || "Không thể xóa bình luận.", "error");
+          showToast(data.detail || data.message || "Không thể xóa bình luận.", "error");
         }
       } catch (e) {
         showToast(e?.message || "Lỗi xóa bình luận.", "error");
@@ -3638,16 +3651,18 @@ async function handleDeleteTask(taskId) {
           method: 'POST',
           body: JSON.stringify({ hide })
         });
-        if (res && res.success) {
-          showToast(hide ? "Đã ẩn bình luận!" : "Đã hiện lại bình luận!", "success");
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          showToast(data.message || (hide ? "Đã ẩn bình luận!" : "Đã hiện lại bình luận!"), "success");
           if (selectedPost.value) {
             const cRes = await apiFetch(`/api/posts/${encodeURIComponent(selectedPost.value.post_id)}/comments`);
-            if (cRes && cRes.success) {
-              postComments.value = cRes.comments || [];
+            const cData = await cRes.json().catch(() => ({}));
+            if (cRes.ok && cData.success) {
+              postComments.value = cData.comments || [];
             }
           }
         } else {
-          showToast(res.detail || "Không thể đổi trạng thái ẩn.", "error");
+          showToast(data.detail || data.message || "Không thể đổi trạng thái ẩn.", "error");
         }
       } catch (e) {
         showToast(e?.message || "Lỗi thao tác bình luận.", "error");

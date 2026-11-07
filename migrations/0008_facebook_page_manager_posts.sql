@@ -112,3 +112,4 @@ CREATE TABLE IF NOT EXISTS facebook_post_audit_logs (
 
 CREATE INDEX IF NOT EXISTS idx_fb_post_audit_post
   ON facebook_post_audit_logs(post_id, id DESC);
+

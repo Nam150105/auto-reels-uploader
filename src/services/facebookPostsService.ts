@@ -7,6 +7,7 @@
 import type { Env } from "../types.ts";
 import { getEncryptionKeyMaterial, decryptToken } from "../utils/crypto.ts";
 import { deleteFacebookReelOrPost } from "./metaGraphService.ts";
+import { getFacebookPageByFbId } from "../db.ts";
 
 export interface FacebookPostRecord {
   id: number;
@@ -76,34 +77,45 @@ export interface PageSyncStateRecord {
 }
 
 /**
- * Lấy Access Token của Fanpage đã giải mã an toàn
+ * Lấy Access Token của Fanpage đã giải mã an toàn từ candidate tokens
  */
 async function getDecryptedPageToken(
   db: D1Database,
   env: Env,
   pageId: string,
   ownerUserId: string
-): Promise<{ pageToken: string; pageName: string } | null> {
+): Promise<{ pageToken: string; pageName: string; pageFbId: string } | null> {
   const encKey = getEncryptionKeyMaterial(env);
-  const pageRow = await db
-    .prepare(
-      `SELECT page_access_token, page_name FROM facebook_pages WHERE facebook_page_id = ? AND owner_user_id = ? LIMIT 1`
-    )
-    .bind(pageId, ownerUserId)
-    .first<{ page_access_token: string; page_name: string }>();
+  const page = await getFacebookPageByFbId(db, encKey, pageId, true, ownerUserId);
+  if (!page || !page.page_access_token) return null;
+  return {
+    pageToken: page.page_access_token,
+    pageName: page.page_name || page.name || pageId,
+    pageFbId: page.facebook_page_id || pageId
+  };
+}
 
-  if (!pageRow || !pageRow.page_access_token) return null;
-
-  let pageToken = pageRow.page_access_token;
-  if (pageToken.startsWith("enc:v1:") || pageToken.startsWith("enc:v2:")) {
-    try {
-      pageToken = await decryptToken(pageToken, encKey);
-    } catch {
-      return null;
-    }
-  }
-
-  return { pageToken, pageName: pageRow.page_name || pageId };
+/**
+ * Log có cấu trúc an toàn (Tuyệt đối không log Access Token hay App Secret)
+ */
+function logPostSync(event: {
+  sync_id: string;
+  page_id: string;
+  owner_user_id: string;
+  endpoint: string;
+  graph_version: string;
+  status: "success" | "partial" | "failed";
+  http_status?: number;
+  meta_error_code?: number;
+  meta_error_subcode?: number;
+  fbtrace_id?: string;
+  posts_fetched: number;
+  posts_new: number;
+  posts_updated: number;
+  duration_ms: number;
+  error?: string;
+}) {
+  console.log(`[FB_PAGE_SYNC] ${JSON.stringify(event)}`);
 }
 
 /**
@@ -158,7 +170,101 @@ function extractThumbnailUrl(item: any): string {
 }
 
 /**
- * 1. ĐỒNG BỘ BÀI VIẾT TỪ FACEBOOK PAGE VÀO D1 (HỖ TRỢ CURSOR PAGINATION)
+ * Fetch một trang bài viết từ Meta Graph API với cơ chế fallback field nhiều tầng (Tiered Fallback)
+ * 1. Tier 1: Toàn diện attachments và media metadata (bỏ unshimmed_url)
+ * 2. Tier 2: An toàn không lồng attachments (khi Meta từ chối nested fields)
+ * 3. Tier 3: Tối thiểu theo đặc tả Meta
+ */
+interface MetaFetchPageResult {
+  res: Response;
+  rawJson: any;
+  usedEndpoint: string;
+  usedFields: string;
+}
+
+async function fetchMetaPostsPage(
+  graphVersion: string,
+  pageId: string,
+  pageToken: string,
+  cursor?: string | null,
+  limit: number = 25
+): Promise<MetaFetchPageResult> {
+  const endpoints = ["published_posts", "posts"];
+  const fieldTiers = [
+    // Tier 1: Đầy đủ (bỏ unshimmed_url)
+    "id,message,created_time,updated_time,permalink_url,status_type,full_picture,attachments{media_type,url,title,description,type,subattachments,target,media}",
+    // Tier 2: Không lồng attachments
+    "id,message,created_time,updated_time,permalink_url,status_type,full_picture",
+    // Tier 3: Cốt lõi tối thiểu
+    "id,message,created_time,permalink_url"
+  ];
+
+  let lastRes: Response | null = null;
+  let lastJson: any = null;
+  let lastEndpoint = endpoints[0];
+  let lastFields = fieldTiers[0];
+
+  for (const ep of endpoints) {
+    for (const fds of fieldTiers) {
+      lastEndpoint = ep;
+      lastFields = fds;
+      let url = `https://graph.facebook.com/${graphVersion}/${pageId}/${ep}?fields=${encodeURIComponent(
+        fds
+      )}&limit=${limit}&access_token=${encodeURIComponent(pageToken)}`;
+      if (cursor) {
+        url += `&after=${encodeURIComponent(cursor)}`;
+      }
+
+      try {
+        const res = await fetch(url);
+        const json = (await res.json()) as any;
+        lastRes = res;
+        lastJson = json;
+
+        if (res.ok && !json.error) {
+          return { res, rawJson: json, usedEndpoint: ep, usedFields: fds };
+        }
+
+        const errCode = json.error?.code;
+        const errMsg = String(json.error?.message || "");
+
+        // Nếu token hết hạn (190) hoặc thiếu quyền (200/10): dừng ngay, không thử thêm
+        if (errCode === 190 || errCode === 200 || errCode === 10) {
+          return { res, rawJson: json, usedEndpoint: ep, usedFields: fds };
+        }
+
+        // Nếu lỗi do field không hỗ trợ (code 100): thử tier field tiếp theo
+        const isFieldIssue =
+          errCode === 100 &&
+          (errMsg.includes("field") || errMsg.includes("exist") || errMsg.includes("Unknown"));
+        if (isFieldIssue) {
+          console.warn(`[FB_PAGE_SYNC] Meta API từ chối fields "${fds}": ${errMsg}. Đang thử fallback tier thấp hơn...`);
+          continue;
+        }
+
+        // Nếu published_posts trả về mã 12, 3 hoặc endpoint không hỗ trợ: thử sang 'posts'
+        if (ep === "published_posts" && (errCode === 12 || errCode === 3 || errMsg.includes("endpoint") || errMsg.includes("Unknown path"))) {
+          console.warn(`[FB_PAGE_SYNC] Endpoint published_posts không khả dụng (${errMsg}), chuyển sang endpoint posts...`);
+          break; // chuyển sang ep tiếp theo
+        }
+
+        return { res, rawJson: json, usedEndpoint: ep, usedFields: fds };
+      } catch (netErr: any) {
+        throw netErr;
+      }
+    }
+  }
+
+  return {
+    res: lastRes || new Response(JSON.stringify({ error: { message: "Không thể kết nối Meta Graph API" } }), { status: 500 }),
+    rawJson: lastJson || { error: { message: "Lỗi phản hồi từ Meta" } },
+    usedEndpoint: lastEndpoint,
+    usedFields: lastFields
+  };
+}
+
+/**
+ * 1. ĐỒNG BỘ BÀI VIẾT TỪ FACEBOOK PAGE VÀO D1 (HỖ TRỢ CURSOR PAGINATION & BATCHING)
  */
 export async function syncFacebookPagePosts(
   db: D1Database,
@@ -169,32 +275,41 @@ export async function syncFacebookPagePosts(
     cursor?: string;
     limit?: number;
     forceResetCursor?: boolean;
+    maxPages?: number;
   }
 ): Promise<{
   success: boolean;
   count: number;
+  new_count: number;
+  updated_count: number;
   next_cursor: string | null;
   has_more: boolean;
   total_synced: number;
+  message?: string;
   error?: string;
 }> {
+  const syncStartTime = Date.now();
+  const syncId = `sync_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const { pageId, ownerUserId, limit = 25, forceResetCursor = false } = options;
+  const maxPages = options.maxPages || 1;
 
   const pageInfo = await getDecryptedPageToken(db, env, pageId, ownerUserId);
   if (!pageInfo) {
     return {
       success: false,
       count: 0,
+      new_count: 0,
+      updated_count: 0,
       next_cursor: null,
       has_more: false,
       total_synced: 0,
-      error: "Không tìm thấy Fanpage hoặc Access Token của Fanpage đã hết hạn."
+      error: "Không tìm thấy Fanpage hoặc Access Token của Fanpage chưa được lưu. Vui lòng kết nối lại tài khoản Facebook."
     };
   }
 
   const nowIso = new Date().toISOString();
 
-  // Đọc sync state hiện tại
+  // Đọc sync state hiện tại từ D1
   const existingSync = await db
     .prepare(
       `SELECT next_cursor, total_synced FROM facebook_page_sync_states WHERE page_id = ? AND owner_user_id = ? LIMIT 1`
@@ -207,7 +322,7 @@ export async function syncFacebookPagePosts(
     activeCursor = existingSync.next_cursor;
   }
 
-  // Đánh dấu đang đồng bộ
+  // Đánh dấu trạng thái đang đồng bộ
   await db
     .prepare(
       `INSERT INTO facebook_page_sync_states (page_id, owner_user_id, sync_status, last_synced_at, created_at, updated_at)
@@ -218,187 +333,289 @@ export async function syncFacebookPagePosts(
     .run();
 
   const graphVersion = env.META_GRAPH_VERSION || "v27.0";
-  const fields =
-    "id,message,created_time,updated_time,permalink_url,status_type,full_picture,picture,attachments{media_type,unshimmed_url,title,description,type,subattachments,target,url,media}";
 
-  let endpointUrl = `https://graph.facebook.com/${graphVersion}/${pageId}/published_posts?fields=${encodeURIComponent(
-    fields
-  )}&limit=${limit}&access_token=${encodeURIComponent(pageInfo.pageToken)}`;
+  let totalBatchSaved = 0;
+  let totalNewSaved = 0;
+  let totalUpdatedSaved = 0;
+  let nextCursorOut: string | null = null;
+  let hasMoreOut = false;
+  let lastUsedEndpoint = "published_posts";
 
-  if (activeCursor) {
-    endpointUrl += `&after=${encodeURIComponent(activeCursor)}`;
-  }
+  for (let pageIdx = 0; pageIdx < maxPages; pageIdx++) {
+    let fetchRes: MetaFetchPageResult;
+    try {
+      fetchRes = await fetchMetaPostsPage(graphVersion, pageId, pageInfo.pageToken, activeCursor, limit);
+    } catch (netErr: any) {
+      const durationMs = Date.now() - syncStartTime;
+      logPostSync({
+        sync_id: syncId,
+        page_id: pageId,
+        owner_user_id: ownerUserId,
+        endpoint: lastUsedEndpoint,
+        graph_version: graphVersion,
+        status: "failed",
+        posts_fetched: 0,
+        posts_new: 0,
+        posts_updated: 0,
+        duration_ms: durationMs,
+        error: netErr?.message
+      });
 
-  let res: Response;
-  try {
-    res = await fetch(endpointUrl);
-  } catch (netErr: any) {
-    await db
-      .prepare(
-        `UPDATE facebook_page_sync_states SET sync_status = 'failed', last_error = ?, updated_at = ? WHERE page_id = ? AND owner_user_id = ?`
-      )
-      .bind(netErr?.message || "Lỗi mạng khi kết nối Meta Graph API", nowIso, pageId, ownerUserId)
-      .run();
-    return {
-      success: false,
-      count: 0,
-      next_cursor: activeCursor || null,
-      has_more: false,
-      total_synced: existingSync?.total_synced || 0,
-      error: `Lỗi kết nối tới Meta Graph API: ${netErr?.message}`
-    };
-  }
+      await db
+        .prepare(
+          `UPDATE facebook_page_sync_states SET sync_status = 'failed', last_error = ?, updated_at = ? WHERE page_id = ? AND owner_user_id = ?`
+        )
+        .bind(netErr?.message || "Lỗi mạng khi kết nối Meta Graph API", nowIso, pageId, ownerUserId)
+        .run();
 
-  const rawJson = (await res.json()) as any;
-  if (!res.ok || rawJson.error) {
-    const errMsg = rawJson.error?.message || `Meta Graph API HTTP ${res.status}`;
-    const errCode = rawJson.error?.code;
-
-    await db
-      .prepare(
-        `UPDATE facebook_page_sync_states SET sync_status = 'failed', last_error = ?, updated_at = ? WHERE page_id = ? AND owner_user_id = ?`
-      )
-      .bind(errMsg, nowIso, pageId, ownerUserId)
-      .run();
-
-    let friendlyError = errMsg;
-    if (errCode === 190) {
-      friendlyError = "Access Token của Fanpage đã hết hạn hoặc bị thu hồi. Vui lòng cập nhật lại Access Token.";
-    } else if (errCode === 200 || errCode === 10) {
-      friendlyError = "Tài khoản không đủ quyền truy cập bài viết trên Fanpage này (cần quyền pages_read_user_content / pages_read_engagement).";
+      return {
+        success: false,
+        count: totalBatchSaved,
+        new_count: totalNewSaved,
+        updated_count: totalUpdatedSaved,
+        next_cursor: activeCursor || null,
+        has_more: false,
+        total_synced: (existingSync?.total_synced || 0) + totalBatchSaved,
+        error: `Lỗi kết nối tới Meta Graph API: ${netErr?.message}`
+      };
     }
 
-    return {
-      success: false,
-      count: 0,
-      next_cursor: activeCursor || null,
-      has_more: false,
-      total_synced: existingSync?.total_synced || 0,
-      error: friendlyError
-    };
-  }
+    const { res, rawJson, usedEndpoint } = fetchRes;
+    lastUsedEndpoint = usedEndpoint;
 
-  const postsData: any[] = Array.isArray(rawJson.data) ? rawJson.data : [];
-  let savedCount = 0;
+    if (!res.ok || rawJson.error) {
+      const errMsg = rawJson.error?.message || `Meta Graph API HTTP ${res.status}`;
+      const errCode = rawJson.error?.code;
+      const errSubcode = rawJson.error?.error_subcode;
+      const fbtraceId = rawJson.error?.fbtrace_id;
+      const durationMs = Date.now() - syncStartTime;
 
-  for (const item of postsData) {
-    const postId = String(item.id || "");
-    if (!postId) continue;
+      logPostSync({
+        sync_id: syncId,
+        page_id: pageId,
+        owner_user_id: ownerUserId,
+        endpoint: usedEndpoint,
+        graph_version: graphVersion,
+        status: "failed",
+        http_status: res.status,
+        meta_error_code: errCode,
+        meta_error_subcode: errSubcode,
+        fbtrace_id: fbtraceId,
+        posts_fetched: 0,
+        posts_new: 0,
+        posts_updated: 0,
+        duration_ms: durationMs,
+        error: errMsg
+      });
 
-    const message = item.message || "";
-    const createdTime = item.created_time || nowIso;
-    const updatedTime = item.updated_time || createdTime;
-    const permalinkUrl = item.permalink_url || `https://www.facebook.com/${postId}`;
-    const postType = determinePostType(item, permalinkUrl);
-    const thumbnailUrl = extractThumbnailUrl(item);
-    const statusType = item.status_type || "";
-    const attachmentsJson = JSON.stringify(item.attachments?.data || []);
-    const rawDataJson = JSON.stringify(item);
+      await db
+        .prepare(
+          `UPDATE facebook_page_sync_states SET sync_status = 'failed', last_error = ?, updated_at = ? WHERE page_id = ? AND owner_user_id = ?`
+        )
+        .bind(errMsg, nowIso, pageId, ownerUserId)
+        .run();
 
-    // Kiểm tra xem bài viết này đã có trong D1 chưa để bảo toàn source 'app_published' và task_id
-    const existingPost = await db
-      .prepare(
-        `SELECT id, source, task_id FROM facebook_posts WHERE page_id = ? AND post_id = ? LIMIT 1`
-      )
-      .bind(pageId, postId)
-      .first<{ id: number; source: string; task_id: number | null }>();
+      let friendlyError = errMsg;
+      if (errCode === 190) {
+        friendlyError = "Access Token của Fanpage đã hết hạn hoặc bị thu hồi (Code 190). Vui lòng cập nhật lại Access Token trong Quản lý Tài khoản.";
+      } else if (errCode === 200 || errCode === 10) {
+        friendlyError = "Tài khoản không đủ quyền đọc bài viết của Fanpage này (Yêu cầu quyền pages_read_user_content hoặc pages_read_engagement).";
+      } else if (errCode === 4 || errCode === 17 || errCode === 32) {
+        friendlyError = "Đã chạm giới hạn tần suất truy vấn Meta Graph API (Rate limit). Vui lòng thử lại sau vài phút.";
+      }
 
-    const source = existingPost?.source === "app_published" ? "app_published" : "facebook_external";
-    const taskId = existingPost?.task_id || null;
-
-    let mediaUrl = "";
-    if (item.attachments?.data?.[0]?.unshimmed_url) {
-      mediaUrl = item.attachments.data[0].unshimmed_url;
-    } else if (item.attachments?.data?.[0]?.url) {
-      mediaUrl = item.attachments.data[0].url;
+      return {
+        success: false,
+        count: totalBatchSaved,
+        new_count: totalNewSaved,
+        updated_count: totalUpdatedSaved,
+        next_cursor: activeCursor || null,
+        has_more: false,
+        total_synced: (existingSync?.total_synced || 0) + totalBatchSaved,
+        error: friendlyError
+      };
     }
 
-    await db
-      .prepare(
-        `INSERT INTO facebook_posts (
-          owner_user_id, page_id, post_id, message, post_type, status_type,
-          permalink_url, thumbnail_url, media_url, attachments_json, source, task_id,
-          created_time, updated_time, synced_at, raw_data_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(page_id, post_id) DO UPDATE SET
-          message = excluded.message,
-          post_type = excluded.post_type,
-          status_type = excluded.status_type,
-          permalink_url = excluded.permalink_url,
-          thumbnail_url = CASE WHEN excluded.thumbnail_url != '' THEN excluded.thumbnail_url ELSE facebook_posts.thumbnail_url END,
-          media_url = CASE WHEN excluded.media_url != '' THEN excluded.media_url ELSE facebook_posts.media_url END,
-          attachments_json = excluded.attachments_json,
-          updated_time = excluded.updated_time,
-          synced_at = excluded.synced_at,
-          raw_data_json = excluded.raw_data_json,
-          updated_at = excluded.updated_at`
-      )
-      .bind(
-        ownerUserId,
-        pageId,
-        postId,
-        message,
-        postType,
-        statusType,
-        permalinkUrl,
-        thumbnailUrl,
-        mediaUrl,
-        attachmentsJson,
-        source,
-        taskId,
-        createdTime,
-        updatedTime,
-        nowIso,
-        rawDataJson,
-        nowIso,
-        nowIso
-      )
-      .run();
+    const postsData: any[] = Array.isArray(rawJson.data) ? rawJson.data : [];
+    if (postsData.length === 0) {
+      nextCursorOut = null;
+      hasMoreOut = false;
+      break;
+    }
 
-    savedCount++;
+    let pageSavedCount = 0;
+    for (const item of postsData) {
+      const postId = String(item.id || "");
+      if (!postId) continue;
+
+      const message = item.message || "";
+      const createdTime = item.created_time || nowIso;
+      const updatedTime = item.updated_time || createdTime;
+      const permalinkUrl = item.permalink_url || `https://www.facebook.com/${postId}`;
+      const postType = determinePostType(item, permalinkUrl);
+      const thumbnailUrl = extractThumbnailUrl(item);
+      const statusType = item.status_type || "";
+      const attachmentsJson = JSON.stringify(item.attachments?.data || []);
+      const rawDataJson = JSON.stringify(item);
+
+      // Kiểm tra bản ghi đã tồn tại chưa để bảo toàn source và task_id
+      const existingPost = await db
+        .prepare(
+          `SELECT id, source, task_id, thumbnail_url, media_url FROM facebook_posts WHERE page_id = ? AND post_id = ? LIMIT 1`
+        )
+        .bind(pageId, postId)
+        .first<{ id: number; source: string; task_id: number | null; thumbnail_url: string; media_url: string }>();
+
+      const isNew = !existingPost;
+      const source = existingPost?.source === "app_published" ? "app_published" : "facebook_external";
+      const taskId = existingPost?.task_id || null;
+
+      let mediaUrl = "";
+      if (item.attachments?.data?.[0]?.url) {
+        mediaUrl = item.attachments.data[0].url;
+      }
+
+      await db
+        .prepare(
+          `INSERT INTO facebook_posts (
+            owner_user_id, page_id, post_id, message, post_type, status_type,
+            permalink_url, thumbnail_url, media_url, attachments_json, source, task_id,
+            created_time, updated_time, synced_at, raw_data_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(page_id, post_id) DO UPDATE SET
+            message = excluded.message,
+            post_type = excluded.post_type,
+            status_type = excluded.status_type,
+            permalink_url = excluded.permalink_url,
+            thumbnail_url = CASE WHEN excluded.thumbnail_url != '' THEN excluded.thumbnail_url ELSE facebook_posts.thumbnail_url END,
+            media_url = CASE WHEN excluded.media_url != '' THEN excluded.media_url ELSE facebook_posts.media_url END,
+            attachments_json = excluded.attachments_json,
+            updated_time = excluded.updated_time,
+            synced_at = excluded.synced_at,
+            raw_data_json = excluded.raw_data_json,
+            updated_at = excluded.updated_at`
+        )
+        .bind(
+          ownerUserId,
+          pageId,
+          postId,
+          message,
+          postType,
+          statusType,
+          permalinkUrl,
+          thumbnailUrl,
+          mediaUrl,
+          attachmentsJson,
+          source,
+          taskId,
+          createdTime,
+          updatedTime,
+          nowIso,
+          rawDataJson,
+          nowIso,
+          nowIso
+        )
+        .run();
+
+      pageSavedCount++;
+      if (isNew) {
+        totalNewSaved++;
+      } else {
+        totalUpdatedSaved++;
+      }
+    }
+
+    totalBatchSaved += pageSavedCount;
+
+    const currentAfter = rawJson.paging?.cursors?.after || null;
+    if (currentAfter && currentAfter !== activeCursor) {
+      activeCursor = currentAfter;
+      nextCursorOut = currentAfter;
+      hasMoreOut = true;
+    } else {
+      nextCursorOut = null;
+      hasMoreOut = false;
+      break;
+    }
   }
 
-  const nextCursor = rawJson.paging?.cursors?.after || null;
-  const prevCursor = rawJson.paging?.cursors?.before || null;
-  const newTotalSynced = (existingSync?.total_synced || 0) + savedCount;
-  const newSyncStatus = nextCursor ? "partial" : "completed";
+  const durationMs = Date.now() - syncStartTime;
+  const newTotalSynced = (existingSync?.total_synced || 0) + totalBatchSaved;
+  const finalSyncStatus = hasMoreOut ? "partial" : "completed";
+
+  logPostSync({
+    sync_id: syncId,
+    page_id: pageId,
+    owner_user_id: ownerUserId,
+    endpoint: lastUsedEndpoint,
+    graph_version: graphVersion,
+    status: finalSyncStatus === "completed" ? "success" : "partial",
+    posts_fetched: totalBatchSaved,
+    posts_new: totalNewSaved,
+    posts_updated: totalUpdatedSaved,
+    duration_ms: durationMs
+  });
+
+  const metadataJson = JSON.stringify({
+    last_batch_new: totalNewSaved,
+    last_batch_updated: totalUpdatedSaved,
+    last_endpoint: lastUsedEndpoint,
+    duration_ms: durationMs
+  });
 
   await db
     .prepare(
       `INSERT INTO facebook_page_sync_states (
         page_id, owner_user_id, sync_status, next_cursor, previous_cursor, total_synced,
-        last_synced_at, last_success_at, last_error, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+        last_synced_at, last_success_at, last_error, metadata_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?)
       ON CONFLICT(page_id, owner_user_id) DO UPDATE SET
         sync_status = excluded.sync_status,
         next_cursor = excluded.next_cursor,
-        previous_cursor = excluded.previous_cursor,
         total_synced = excluded.total_synced,
         last_synced_at = excluded.last_synced_at,
         last_success_at = excluded.last_success_at,
         last_error = NULL,
+        metadata_json = excluded.metadata_json,
         updated_at = excluded.updated_at`
     )
     .bind(
       pageId,
       ownerUserId,
-      newSyncStatus,
-      nextCursor,
-      prevCursor,
+      finalSyncStatus,
+      nextCursorOut,
       newTotalSynced,
       nowIso,
       nowIso,
+      metadataJson,
       nowIso,
       nowIso
     )
     .run();
 
+  let message = "";
+  if (totalBatchSaved === 0) {
+    if (newTotalSynced === 0) {
+      message = "Fanpage hiện tại chưa có bài viết nào được xuất bản trên Facebook.";
+    } else {
+      message = "Đã đồng bộ toàn bộ bài viết trên Facebook của Fanpage này.";
+    }
+  } else {
+    message = `Đã đồng bộ thành công ${totalBatchSaved} bài viết (${totalNewSaved} bài mới, ${totalUpdatedSaved} bài cập nhật).`;
+    if (hasMoreOut) {
+      message += " Vẫn còn bài viết cũ, bạn có thể nhấn 'Tải thêm bài cũ'.";
+    }
+  }
+
   return {
     success: true,
-    count: savedCount,
-    next_cursor: nextCursor,
-    has_more: Boolean(nextCursor),
-    total_synced: newTotalSynced
+    count: totalBatchSaved,
+    new_count: totalNewSaved,
+    updated_count: totalUpdatedSaved,
+    next_cursor: nextCursorOut,
+    has_more: hasMoreOut,
+    total_synced: newTotalSynced,
+    message
   };
 }
 
