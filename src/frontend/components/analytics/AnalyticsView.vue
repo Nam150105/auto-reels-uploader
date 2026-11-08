@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col p-4 lg:p-6 overflow-y-auto select-none">
+  <div class="h-full p-4 lg:p-6 overflow-y-auto select-none">
     <!-- Top bar -->
     <div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
       <div>
@@ -43,7 +43,7 @@
       </div>
     </div>
 
-    <div v-if="isLoading && !dashboard" class="flex-1 flex items-center justify-center text-xs text-slate-400 py-20">
+    <div v-if="isLoading && !dashboard" class="flex items-center justify-center text-xs text-slate-400 py-20">
       Loading numbers from Facebook...
     </div>
 
