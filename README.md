@@ -10,7 +10,7 @@ Hệ thống quản lý đa tài khoản Facebook Admin, đồng bộ Fanpage v�
 | :--- | :--- |
 | **Tên ứng dụng Meta** | `Quản lý page` / `Quản lý fanpage` |
 | **Meta App ID** | `1469615908436980` |
-| **Worker Name** | `auto-reels-uploader` |
+| **Worker Name** | `reels-uploader` |
 | **Production Domain** | `https://pagefb.namnangno.click` |
 | **Facebook OAuth Redirect URI** | `https://pagefb.namnangno.click/api/meta/callback` |
 | **Chính Sách Quyền Riêng Tư** | `https://pagefb.namnangno.click/privacy` |
@@ -25,54 +25,45 @@ Hệ thống quản lý đa tài khoản Facebook Admin, đồng bộ Fanpage v�
 
 ```text
 auto-reels-uploader/
-├── wrangler.jsonc                     # Cấu hình Cloudflare Worker, Assets, D1, R2, Cron Trigger & Custom Domain
-├── package.json                       # Scripts dev, test, d1 migrations, r2 create, deploy
-├── tsconfig.json                      # Cấu hình TypeScript chuẩn WebWorker ES2022
+├── wrangler.jsonc                     # Cấu hình Worker, Assets (./static), D1, R2, Cron Trigger & Custom Domain
+├── package.json                       # Scripts build, typecheck, test, d1 migrations, deploy
+├── tsconfig.json / tsconfig.app.json  # TypeScript cho Worker (src/) và giao diện Vue (src/frontend)
+├── vite.config.ts                     # Build giao diện Vue -> static/ (index.html + assets/)
+├── tailwind.config.js, postcss.config.js
 ├── deploy_cloudflare.ps1              # Script tự động khởi tạo D1/R2, chạy Migrations, Test và Deploy
-├── migrations/
-│   ├── 0001_initial_schema.sql        # Schema 12 bảng chuẩn Multi-User (users, sessions, oauth_states, media_files, tasks...)
-│   ├── 0002_indexes.sql               # Indexes tối ưu Cloudflare Free Plan (user_id, facebook_page_id, status, scheduled_at)
-│   └── 0003_security_and_tokens.sql   # View user_page_permissions & bảng security_key_metadata
+├── r2-lifecycle.json                  # Quy tắc tự xóa video R2 sau 30 ngày
+├── migrations/                        # 0001 → 0009: schema D1 (không sửa các file đã áp dụng)
 ├── scripts/
-│   ├── ci_prepare_cloudflare.mjs      # Tự động xử lý D1/R2 binding khi build trên Cloudflare Workers Builds CI
-│   └── migrate_manager_db_to_d1.mjs   # Trích xuất dữ liệu từ manager.db cũ sang SQL D1 (tự động tạo backup trước)
+│   ├── ci_prepare_cloudflare.mjs      # Tự xử lý D1/R2 binding khi build trên Cloudflare Workers Builds CI
+│   ├── migrate_manager_db_to_d1.mjs   # Chuyển dữ liệu manager.db (hệ thống cũ) sang SQL D1
+│   └── prune_static_assets.mjs        # Sau mỗi lần build: xóa bundle cũ không còn dùng trong static/assets
 ├── src/
-│   ├── index.ts                       # Worker Entrypoint (fetch, scheduled, queue handlers)
-│   ├── types.ts                       # Định nghĩa kiểu dữ liệu TypeScript cho D1, R2, Queue, Cron & Domain Models
-│   ├── db.ts                          # Tầng truy vấn D1 (Zero N+1 query, cô lập dữ liệu theo owner_user_id)
-│   ├── fallback_d1.ts                 # Bộ nhớ dự phòng an toàn khi chưa gắn D1 binding
-│   ├── middleware/
-│   │   └── auth.ts                    # Xác thực Session D1 có thể thu hồi, CSRF Protection & Rate Limiting
-│   ├── services/
-│   │   ├── metaOAuthService.ts        # Luồng Facebook OAuth 2.0 Authorization Code & Long-Lived Token (~60 ngày)
-│   │   ├── metaGraphService.ts        # Đồng bộ /me/accounts phân trang, Run Test & Xuất bản Reels /{page_id}/video_reels
-│   │   └── r2MediaService.ts          # Streaming Upload Video trực tiếp lên Cloudflare R2 (auto-reels-media)
-│   ├── queue/
-│   │   └── publishQueue.ts            # Queue Producer & Consumer (Lease Lock, Idempotency, Exponential Backoff)
-│   ├── scheduler/
-│   │   └── cronDispatcher.ts          # Cron Trigger Scheduler chuyển đổi Asia/Ho_Chi_Minh <-> UTC
-│   ├── routes/
-│   │   ├── complianceRoutes.ts        # /privacy, /terms, /data-deletion, /api/meta/data-deletion
-│   │   ├── mediaRoutes.ts             # /api/media/upload-init, /api/media/upload-stream/*, /api/media/upload-complete
-│   │   └── responseHelpers.ts         # Helpers phản hồi JSON/HTML
-│   └── utils/
-│       ├── crypto.ts                  # AES-256-GCM (enc:v2:...), Key Rotation, Masking & PBKDF2-HMAC-SHA256
-│       ├── timezone.ts                # Chuyển đổi múi giờ Asia/Ho_Chi_Minh (+07:00) <-> UTC timestamp
-│       └── sanitize.ts                # Tự động ẩn mọi Access Token / App Secret khỏi log và thông báo lỗi
-├── static/
-│   ├── index.html                     # Giao diện Bảng điều khiển Quản lý Fanpage & Lên lịch Reels
-│   ├── login.html                     # Giao diện Đăng nhập & Đăng ký thành viên
-│   ├── privacy.html                   # Trang Chính sách Quyền riêng tư
-│   ├── terms.html                     # Trang Điều khoản Dịch vụ
-│   ├── data-deletion.html             # Trang Hướng dẫn Xóa dữ liệu người dùng
-│   └── js/app.js                      # Logic Frontend Vue 3 (Smart Polling tối ưu Free Plan + Upload R2)
+│   ├── index.ts                       # Worker Entrypoint (fetch, scheduled, queue) & định tuyến API
+│   ├── types.ts                       # Kiểu dữ liệu Worker: D1, R2, Queue, Cron & Domain Models
+│   ├── db.ts                          # Tầng truy vấn D1 (cô lập dữ liệu theo owner_user_id)
+│   ├── fallback_d1.ts                 # Bộ nhớ dự phòng khi chưa gắn D1 binding
+│   ├── middleware/auth.ts             # Session D1 thu hồi được, CSRF & Rate Limiting
+│   ├── routes/                        # compliance, media (upload video/ảnh), composer (đăng bài mới), response helpers
+│   ├── services/                      # Meta OAuth, Graph API (đăng Reels, bình luận), R2 media,
+│   │                                  # thống kê trực tiếp từ Meta (liveInsightsService), Reels insights, Facebook posts
+│   ├── queue/publishQueue.ts          # Hàng đợi đăng bài: Lease Lock, Idempotency, Backoff, nhiều bình luận / bài
+│   ├── scheduler/cronDispatcher.ts    # Cron mỗi phút: bài đến hạn, bình luận hẹn giờ, dọn R2
+│   ├── utils/                         # crypto (AES-256-GCM, PBKDF2), timezone (Asia/Ho_Chi_Minh), sanitize
+│   ├── shared/types.ts                # Kiểu dữ liệu dùng chung cho giao diện
+│   └── frontend/                      # Giao diện Vue 3 + Tailwind (App.vue, components/, composables/, services/api.ts)
+├── static/                            # Thư mục Assets được Worker phục vụ
+│   ├── index.html, assets/            # Do `npm run build:ui` sinh ra (không sửa tay)
+│   ├── login.html                     # Trang Đăng nhập & Đăng ký
+│   ├── privacy.html, terms.html, data-deletion.html, favicon.svg
 └── tests/
-    └── test_worker.mjs                # Bộ 30 bài kiểm thử tự động bắt buộc (Unit & Integration Tests)
+    └── test_worker.mjs                # 47 bài kiểm thử tự động (Unit & Integration)
 ```
 
 ---
 
 ## 3. Hướng Dẫn Triển Khai Nhanh (Windows PowerShell)
+
+> Nếu PowerShell báo "running scripts is disabled", dùng `npx.cmd` thay cho `npx`.
 
 ```powershell
 # 1. Cài đặt dependencies
@@ -81,7 +72,7 @@ npm install
 # 2. Đăng nhập Cloudflare
 npx wrangler login
 
-# 3. Tạo D1 Database và R2 Bucket (hoặc chạy .\deploy_cloudflare.ps1 để tự động hóa)
+# 3. Tạo D1 Database và R2 Bucket (lần đầu; hoặc chạy .\deploy_cloudflare.ps1 để tự động hóa)
 npx wrangler d1 create auto-reels-db
 npx wrangler r2 bucket create auto-reels-media
 
@@ -93,7 +84,11 @@ npx wrangler secret put META_APP_SECRET
 npx wrangler secret put SESSION_SECRET
 npx wrangler secret put TOKEN_ENCRYPTION_KEY
 
-# 6. Chạy kiểm thử 30 bài test và Deploy
+# 6. Kiểm tra, build giao diện và Deploy
+npm run typecheck
 npm test
+npm run build:ui
 npx wrangler deploy
 ```
+
+> Ứng dụng Python/FastAPI cũ đã được gỡ khỏi repository. Có thể xem lại tại commit `ad00013` (trước khi dọn dẹp).

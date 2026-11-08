@@ -4,7 +4,6 @@
  * Canonical Database Storage: UTC Unix Timestamp in seconds (scheduled_at)
  */
 
-export const VN_TIMEZONE = "Asia/Ho_Chi_Minh";
 export const VN_OFFSET_SECONDS = 7 * 3600; // +07:00 (25,200 seconds)
 
 export function nowUtcSeconds(): number {

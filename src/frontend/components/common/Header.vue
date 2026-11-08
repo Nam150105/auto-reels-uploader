@@ -131,7 +131,7 @@ import { ref } from "vue";
 import { usePages } from "../../composables/usePages";
 import { useAuth } from "../../composables/useAuth";
 
-const props = defineProps<{
+defineProps<{
   activeTab: "compose" | "schedule" | "analytics";
   composeMode: "single" | "bulk";
 }>();

@@ -34,10 +34,6 @@ export function createEmptyComment(delayMinutes = 0): ComposerComment {
   };
 }
 
-export function cloneComments(list: ComposerComment[]): ComposerComment[] {
-  return list.map((c) => ({ ...c, id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 7)}` }));
-}
-
 /** Comments with text or a ready image, in order. Empty rows are dropped. */
 export function filledComments(list: ComposerComment[]): ComposerComment[] {
   return list.filter((c) => c.text.trim() || c.imageMediaId);

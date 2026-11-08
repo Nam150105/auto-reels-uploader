@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import workerDefault from "../src/index.ts";
@@ -381,7 +382,7 @@ async function runAll30Tests() {
   console.log("  ✓ [Test 01] Worker khởi động với đầy đủ handlers (fetch, scheduled, queue)");
 
   // --------------------------------------------------------------------------
-  // [TEST 2] Frontend tải thành công (/login, /privacy, /terms, /data-deletion, /static/js/app.js)
+  // [TEST 2] Frontend tải thành công (/login, /privacy, /terms, /data-deletion, static assets)
   // --------------------------------------------------------------------------
   const loginPageResp = await callWorker("/login");
   assert.equal(loginPageResp.status, 200);
@@ -400,9 +401,13 @@ async function runAll30Tests() {
   assert.equal(unauthSchedResp.status, 302);
   assert.ok(unauthSchedResp.headers.get("Location")?.includes("/login"), "Chưa đăng nhập truy cập /schedules phải chuyển đến /login");
 
-  const appJsResp = await callWorker("/static/js/app.js");
+  // Bundle Vue thật được static/index.html tham chiếu: phục vụ được qua /assets/... và qua tiền tố /static/...
+  const builtIndexHtml = fs.readFileSync(path.join(process.cwd(), "static/index.html"), "utf8");
+  const bundlePath = (/src="(\/assets\/app\.[^"]+\.js)"/.exec(builtIndexHtml) || [])[1];
+  assert.ok(bundlePath, "static/index.html phải tham chiếu bundle /assets/app.*.js");
+  const appJsResp = await callWorker(`/static${bundlePath}`);
   assert.equal(appJsResp.status, 200);
-  const directAppJsResp = await callWorker("/js/app.js");
+  const directAppJsResp = await callWorker(bundlePath);
   assert.equal(directAppJsResp.status, 200);
   console.log("  ✓ [Test 02] Frontend & Static Assets tải thành công");
 
@@ -2223,7 +2228,6 @@ async function runAll30Tests() {
     "static/privacy.html",
     "static/terms.html",
     "static/data-deletion.html",
-    "static/js/app.js",
     "src/index.ts",
     "src/db.ts",
     "src/services/metaOAuthService.ts",
@@ -2235,16 +2239,19 @@ async function runAll30Tests() {
     "package.json"
   ];
 
+  // SHA-256 của META_APP_SECRET đã từng bị lộ (không lưu secret dạng chữ thường trong repo)
+  const LEAKED_SECRET_SHA256 = "f1af0fe1017f36745aa55e68bbda8f1e86c74dc5b833f89f9706345ca088d51b";
+  const containsLeakedSecret = (text) =>
+    (text.match(/\b[0-9a-f]{32}\b/g) || []).some(
+      (tok) => createHash("sha256").update(tok).digest("hex") === LEAKED_SECRET_SHA256
+    );
   for (const relPath of filesToAudit) {
     const content = fs.readFileSync(path.join(process.cwd(), relPath), "utf8");
     // Test 27: Không còn localhost:8000 / 127.0.0.1:8000
     assert.ok(!content.includes("localhost:8000"), `File ${relPath} còn chứa localhost:8000`);
     assert.ok(!content.includes("127.0.0.1:8000"), `File ${relPath} còn chứa 127.0.0.1:8000`);
     // Test 28: Không chứa App Secret thật
-    assert.ok(
-      !content.includes("d595b9fcf01101b510315c2c08950863"),
-      `File ${relPath} làm lộ META_APP_SECRET!`
-    );
+    assert.ok(!containsLeakedSecret(content), `File ${relPath} làm lộ META_APP_SECRET!`);
     // Test 29: Không còn đường dẫn Windows mẫu D:\Videos trong luồng production
     assert.ok(!content.includes("D:\\Videos\\"), `File ${relPath} còn chứa đường dẫn Windows D:\\Videos\\`);
   }
@@ -2257,17 +2264,18 @@ async function runAll30Tests() {
   assert.ok(!allDeps.includes("playwright"), "package.json không được chứa playwright");
   assert.ok(!allDeps.includes("puppeteer"), "package.json không được chứa puppeteer");
   assert.ok(!allDeps.includes("gemlogin"), "package.json không được chứa gemlogin");
-  assert.ok(!fs.existsSync(path.join(process.cwd(), "requirements.txt")), "requirements.txt ở root phải được dời sang legacy/");
+  assert.ok(!fs.existsSync(path.join(process.cwd(), "requirements.txt")), "Không còn requirements.txt (Python) trong dự án");
 
   // Kiểm tra UI Thêm Admin mới (Yêu cầu 1: Graph API Explorer 6 bước & Yêu cầu 2: Loại bỏ nút Chạy Thử)
   const indexHtmlContent = fs.readFileSync(path.join(process.cwd(), "static/index.html"), "utf8");
-  const appJsContent = fs.readFileSync(path.join(process.cwd(), "static/js/app.js"), "utf8");
+  const usePagesSource = fs.readFileSync(path.join(process.cwd(), "src/frontend/composables/usePages.ts"), "utf8");
+  const dateUtilsSource = fs.readFileSync(path.join(process.cwd(), "src/frontend/utils/date.ts"), "utf8");
   assert.ok(indexHtmlContent.includes("Graph API Explorer"), "static/index.html phải có hướng dẫn Graph API Explorer");
   assert.ok(indexHtmlContent.includes("1469615908436980"), "static/index.html phải hiển thị Meta App ID 1469615908436980");
   assert.ok(indexHtmlContent.includes("Connect Facebook"), "static/index.html phải có nút Liên kết Facebook");
   assert.ok(indexHtmlContent.includes("directAccessToken"), "static/index.html phải có ô nhập directAccessToken");
-  assert.ok(appJsContent.includes("handleConnectToken"), "static/js/app.js phải có hàm handleConnectToken");
-  assert.ok(appJsContent.includes("validateVnScheduleClient"), "static/js/app.js phải có hàm validateVnScheduleClient");
+  assert.ok(usePagesSource.includes("connectWithToken"), "Giao diện phải có hàm kết nối bằng access token (connectWithToken)");
+  assert.ok(dateUtilsSource.includes("isScheduleSlotAllowed"), "Giao diện phải kiểm tra giờ hẹn phía client (isScheduleSlotAllowed)");
   // Yêu cầu 2: Loại bỏ hoàn toàn nút Chạy Thử và modal test diagnostic khỏi UI
   assert.ok(!indexHtmlContent.includes(">Chạy Thử</span>"), "static/index.html không được chứa nút Chạy Thử");
   assert.ok(!indexHtmlContent.includes("showRunTestModal"), "static/index.html không được chứa modal Chạy Thử (showRunTestModal)");

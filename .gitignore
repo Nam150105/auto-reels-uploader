@@ -18,9 +18,3 @@ dist/
 backups/
 logs/
 profiles/
-
-# Python Legacy Cache
-__pycache__/
-*.py[cod]
-.pytest_cache/
-

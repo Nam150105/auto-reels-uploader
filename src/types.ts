@@ -412,19 +412,3 @@ export interface TaskAuditLogRecord {
   error_message: string;
   created_at: string;
 }
-
-export interface MetaApiTelemetryRecord {
-  endpoint_key: string;
-  total_requests: number;
-  cache_hits: number;
-  cache_misses: number;
-  error_requests: number;
-  rate_limited_requests: number;
-  retry_count: number;
-  last_status_code: number;
-  app_usage_json: string;
-  page_usage_json: string;
-  buc_usage_json: string;
-  throttle_level: "normal" | "elevated" | "high" | "rate_limited";
-  updated_at: string;
-}

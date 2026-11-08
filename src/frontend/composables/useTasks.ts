@@ -1,6 +1,6 @@
 import { ref, computed } from "vue";
 import { api } from "../services/api";
-import type { TaskRecord, TaskStatus } from "@shared/types";
+import type { TaskRecord } from "@shared/types";
 import { useToast } from "./useToast";
 
 const tasks = ref<TaskRecord[]>([]);

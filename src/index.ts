@@ -1,5 +1,5 @@
 /**
- * Cloudflare Worker Entrypoint - Facebook Fanpage & Reels Scheduler (auto-reels-uploader)
+ * Cloudflare Worker Entrypoint - Facebook Fanpage & Reels Scheduler (Worker: reels-uploader)
  * Production Domain : https://pagefb.namnangno.click
  * Facebook App ID   : 1469615908436980
  * OAuth Callback    : https://pagefb.namnangno.click/api/meta/callback
@@ -78,7 +78,6 @@ import {
   postReelCommentViaGraphApi,
   getMetaApiTelemetrySummary,
   deleteFacebookReelOrPost,
-  syncRecentPageVideos,
   refreshPageFollowerCounts
 } from "./services/metaGraphService.ts";
 import {

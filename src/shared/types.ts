@@ -13,8 +13,6 @@ export type TaskStatus =
   | "failed"
   | "canceled";
 
-export type PublishMode = "now" | "schedule";
-
 export interface UserSession {
   id: string;
   username: string;
@@ -135,25 +133,6 @@ export interface BulkComposerRow {
   isSubmitting?: boolean;
   status?: "draft" | "queued" | "error";
   errorMessage?: string;
-}
-
-export interface SingleComposerState {
-  selectedPageIds: string[];
-  caption: string;
-  mediaFile: File | null;
-  mediaFileName: string;
-  mediaPreviewUrl: string;
-  mediaId: string;
-  uploadProgress: number;
-  isUploading: boolean;
-  publishMode: PublishMode;
-  scheduleDate: string;
-  scheduleTime: string;
-  enableComment: boolean;
-  commentText: string;
-  commentDelayOption: string;
-  commentDelayMinutes: number;
-  isSubmitting: boolean;
 }
 
 /** Analytics read live from the Meta Graph API. null = Facebook did not return this number. */

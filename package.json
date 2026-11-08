@@ -1,5 +1,5 @@
 {
-  "name": "auto-reels-uploader",
+  "name": "reels-uploader",
   "version": "3.0.0",
   "private": true,
   "description": "Hệ thống Quản lý Facebook Fanpage & Hẹn lịch đăng Reels trên Cloudflare Workers Free (D1 + R2 + Queues + Cron + Meta Graph API)",
@@ -9,9 +9,9 @@
     "dev": "wrangler dev",
     "dev:ui": "vite",
     "dev:worker": "wrangler dev",
-    "build:ui": "vite build",
+    "build:ui": "vite build && node scripts/prune_static_assets.mjs",
     "build:worker": "node scripts/ci_prepare_cloudflare.mjs",
-    "build": "vite build && node scripts/ci_prepare_cloudflare.mjs",
+    "build": "vite build && node scripts/prune_static_assets.mjs && node scripts/ci_prepare_cloudflare.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && vue-tsc -p tsconfig.app.json --noEmit",
     "typecheck:worker": "tsc -p tsconfig.json --noEmit",
     "typecheck:ui": "vue-tsc -p tsconfig.app.json --noEmit",
@@ -28,7 +28,6 @@
     "vue": "^3.4.21"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261107.1",
     "@vitejs/plugin-vue": "^5.0.4",
     "autoprefixer": "^10.4.19",
     "postcss": "^8.4.38",

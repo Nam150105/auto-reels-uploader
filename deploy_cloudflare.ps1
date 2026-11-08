@@ -1,6 +1,6 @@
 # ==============================================================================
 # KỊCH BẢN TỰ ĐỘNG HÓA DEPLOY LÊN CLOUDFLARE WORKERS + D1 + R2 (POWERSHELL)
-# Worker Name : auto-reels-uploader
+# Worker Name : reels-uploader
 # Domain      : https://pagefb.namnangno.click
 # Meta App ID : 1469615908436980
 # ==============================================================================
@@ -8,7 +8,7 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "  DEPLOY CLOUDFLARE WORKER + D1 + R2: auto-reels-uploader       " -ForegroundColor Cyan
+Write-Host "  DEPLOY CLOUDFLARE WORKER + D1 + R2: reels-uploader            " -ForegroundColor Cyan
 Write-Host "  Production URL: https://pagefb.namnangno.click                " -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 

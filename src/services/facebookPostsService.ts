@@ -5,7 +5,7 @@
  */
 
 import type { Env, D1Database } from "../types.ts";
-import { getEncryptionKeyMaterial, decryptToken } from "../utils/crypto.ts";
+import { getEncryptionKeyMaterial } from "../utils/crypto.ts";
 import { deleteFacebookReelOrPost } from "./metaGraphService.ts";
 import { getFacebookPageByFbId } from "../db.ts";
 

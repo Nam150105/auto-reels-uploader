@@ -2,11 +2,6 @@
  * Date and Time utilities for Vietnam Timezone (Asia/Ho_Chi_Minh - UTC+7)
  */
 
-export function getVietnamNow(): Date {
-  // Return current Date adjusted for calculations
-  return new Date();
-}
-
 export function padZero(num: number): string {
   return num < 10 ? `0${num}` : `${num}`;
 }
@@ -47,23 +42,6 @@ export function vnDateTimeToUtcSeconds(dateStr: string, timeStr: string): number
   const ms = Date.parse(isoStr);
   if (isNaN(ms)) return 0;
   return Math.floor(ms / 1000);
-}
-
-/**
- * Convert UTC Unix timestamp (seconds) to readable VN string: "DD/MM/YYYY HH:mm"
- */
-export function formatUtcToVnDisplay(utcSeconds: number | null | undefined): string {
-  if (!utcSeconds || utcSeconds <= 0) return "--";
-  const d = new Date(utcSeconds * 1000);
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Ho_Chi_Minh",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(d);
 }
 
 /**
@@ -113,18 +91,4 @@ export function isScheduleSlotAllowed(
   const sec = vnDateTimeToUtcSeconds(dateStr, timeStr);
   if (!sec) return false;
   return sec >= getEarliestScheduleSlot(leadMinutes).utcSeconds;
-}
-
-/**
- * Add minutes to a Vietnam-time slot and return the new Vietnam date/time
- * (independent of the browser's time zone).
- */
-export function addMinutesToVnSlot(
-  dateStr: string,
-  timeStr: string,
-  minutes: number
-): { date: string; time: string } {
-  const sec = vnDateTimeToUtcSeconds(dateStr, timeStr);
-  const d = new Date((sec + minutes * 60) * 1000);
-  return { date: formatVnDate(d), time: formatVnTime(d) };
 }

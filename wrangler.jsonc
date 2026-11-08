@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "auto-reels-uploader",
+	"name": "reels-uploader",
 	"main": "src/index.ts",
 	"compatibility_date": "2024-11-01",
 	// Phục vụ giao diện Frontend từ thư mục ./static kết hợp Worker xử lý API và Auth routing

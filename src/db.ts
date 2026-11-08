@@ -15,8 +15,7 @@ import type {
   AdminAccountLink,
   MediaFileRecord,
   TaskRecord,
-  TaskAuditLogRecord,
-  MetaApiTelemetryRecord
+  TaskAuditLogRecord
 } from "./types.ts";
 import {
   hashPassword,
@@ -906,18 +905,6 @@ export async function revokeSessionByTokenHash(
   return (res.meta?.changes || 0) > 0;
 }
 
-export async function revokeAllUserSessions(
-  db: D1Database,
-  userId: string
-): Promise<number> {
-  const now = new Date().toISOString();
-  const res = await db
-    .prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
-    .bind(now, userId)
-    .run();
-  return res.meta?.changes || 0;
-}
-
 export async function getUserByUsername(
   db: D1Database,
   username: string
@@ -1672,15 +1659,6 @@ export async function deleteFacebookAccountWithPages(
     deleted_page_ids: deletedPageIds,
     shared_pages_kept_count: sharedPagesKeptCount
   };
-}
-
-export async function deleteFacebookAccountLocal(
-  db: D1Database,
-  accountId: string,
-  ownerUserId: string
-): Promise<boolean> {
-  const res = await deleteFacebookAccountWithPages(db, accountId, ownerUserId);
-  return res.deleted;
 }
 
 export async function removeStaleAccountPages(
@@ -4565,25 +4543,6 @@ export function normalizeCommentDelayMinutes(v: unknown): number {
   const n = Math.round(Number(v) || 0);
   if (!Number.isFinite(n) || n <= 0) return 0;
   return Math.min(n, MAX_COMMENT_DELAY_MINUTES);
-}
-
-/**
- * Lưu độ trễ đăng bình luận (phút) cho task. Bình luận sẽ được đăng sau khi video xuất bản + độ trễ.
- */
-export async function setTaskCommentDelay(
-  db: D1Database,
-  taskId: number,
-  ownerUserId: string,
-  delayMinutes: number
-): Promise<void> {
-  const minutes = normalizeCommentDelayMinutes(delayMinutes);
-  const sql = "UPDATE tasks SET comment_delay_minutes = ? WHERE id = ? AND owner_user_id = ?";
-  try {
-    await db.prepare(sql).bind(minutes, taskId, ownerUserId).run();
-  } catch {
-    await ensureTaskCommentColumns(db);
-    await db.prepare(sql).bind(minutes, taskId, ownerUserId).run();
-  }
 }
 
 /**

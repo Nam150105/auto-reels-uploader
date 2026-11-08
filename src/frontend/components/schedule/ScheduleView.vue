@@ -353,7 +353,6 @@ import type { TaskRecord, TaskStatus } from "@shared/types";
 import EditTaskModal from "../dialogs/EditTaskModal.vue";
 
 const {
-  tasks,
   isLoading,
   activeFilter,
   searchQuery,

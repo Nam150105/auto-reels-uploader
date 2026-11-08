@@ -20,15 +20,6 @@ export function bytesToHex(bytes: Uint8Array): string {
   return hex;
 }
 
-export function hexToBytes(hex: string): Uint8Array {
-  const clean = hex.length % 2 === 0 ? hex : "0" + hex;
-  const out = new Uint8Array(clean.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
-
 export function bytesToBase64Url(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.length; i++) {
@@ -178,14 +169,6 @@ export async function generateSessionToken(
   return bytesToBase64Url(encoder.encode(rawToken));
 }
 
-export async function verifySessionToken(
-  token: string,
-  secretKey: string
-): Promise<string | null> {
-  const parsed = await verifySessionTokenDetailed(token, secretKey);
-  return parsed ? parsed.userId : null;
-}
-
 export async function verifySessionTokenDetailed(
   token: string,
   secretKey: string
@@ -239,11 +222,6 @@ async function deriveAesGcmKey(rawSecret: string): Promise<CryptoKey> {
     false,
     ["encrypt", "decrypt"]
   );
-}
-
-export function isEncryptedToken(value: string | null | undefined): boolean {
-  if (!value) return false;
-  return value.startsWith("enc:v1:") || value.startsWith("enc:v2:") || value.startsWith("enc:v3:");
 }
 
 export function detectTokenVersion(value: string | null | undefined): string {

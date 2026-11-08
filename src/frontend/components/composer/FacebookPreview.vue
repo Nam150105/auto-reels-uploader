@@ -148,7 +148,7 @@
     <!-- Auto-comments -->
     <div v-if="visibleComments.length" class="mt-3 max-w-[270px] mx-auto space-y-2">
       <p class="text-[10px] font-bold uppercase tracking-wide text-slate-400">Comments</p>
-      <div v-for="(c, i) in visibleComments" :key="c.id" class="flex items-start gap-2">
+      <div v-for="c in visibleComments" :key="c.id" class="flex items-start gap-2">
         <div class="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 bg-slate-200">
           <img v-if="pageAvatar" :src="pageAvatar" alt="" class="w-full h-full object-cover" />
         </div>
