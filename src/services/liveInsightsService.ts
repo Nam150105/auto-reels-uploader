@@ -1,14 +1,15 @@
 /**
  * Live analytics straight from the Meta Graph API (no numbers computed from local task data).
  *
- * Per Page:
- * - Page info (followers)
- * - Daily Page insights over complete days only (views, engagement, new follows), like Meta Business Suite
- * - Every Reel created in the range (paginated, including Reels not posted through this tool)
- * - Per-Reel lifetime insights: plays, reach, reactions (all types), comments (incl. replies), shares
+ * Per Page, five numbers:
+ * - followers    : Page followers_count (fan_count as fallback)
+ * - views        : sum of daily page_media_view (page_video_views as fallback) over the complete days in range
+ * - views_7d     : the same, last 7 complete days
+ * - engagement   : sum of daily page_post_engagements over the range
+ * - reels_count  : Reels created on the Page in the range (paginated video_reels)
  *
- * All calls go through Graph Batch requests (max 50 operations per HTTP call), so loading the dashboard
- * stays within the Workers subrequest limit even with many Pages and Reels.
+ * Totals are simply these five numbers added up across Pages.
+ * All calls go through Graph Batch requests (max 50 operations per HTTP call).
  * A number Meta does not return stays null. Nothing is estimated or invented.
  */
 
@@ -19,50 +20,25 @@ import { getMetaConfig } from "./metaGraphService.ts";
 const BATCH_MAX = 50;
 const REELS_PAGE_SIZE = 100;
 const MAX_REEL_PAGINATION_ROUNDS = 5;
-const MAX_REELS_WITH_INSIGHTS = 300;
-const MAX_FALLBACK_REELS = 60;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MIN_REFRESH_INTERVAL_MS = 20 * 1000;
 const DAY_SEC = 86400;
 
 /** Daily Page metrics, one per batch operation so an unsupported metric does not hide the others. */
-const PAGE_DAILY_METRICS = [
-  "page_media_view",
-  "page_video_views",
-  "page_post_engagements",
-  "page_daily_follows_unique"
-] as const;
+const PAGE_DAILY_METRICS = ["page_media_view", "page_video_views", "page_post_engagements"] as const;
 type PageMetric = (typeof PAGE_DAILY_METRICS)[number];
-
-/** Lifetime Reel metrics, requested together; per-metric fallback when Meta rejects the combination. */
-const REEL_METRICS = [
-  "fb_reels_total_plays",
-  "blue_reels_play_count",
-  "post_impressions_unique",
-  "post_video_social_actions",
-  "post_video_likes_by_reaction_type"
-] as const;
-
-export interface LiveReel {
-  video_id: string;
-  page_id: string;
-  page_name: string;
-  description: string;
-  created_time: string;
-  permalink_url: string;
-  length_seconds: number | null;
-  plays: number | null;
-  reach: number | null;
-  reactions: number | null;
-  comments: number | null;
-  shares: number | null;
-}
 
 export interface LiveDailyPoint {
   date: string;
   views: number | null;
   engagement: number | null;
-  new_follows: number | null;
+}
+
+export interface LiveReelItem {
+  video_id: string;
+  description: string;
+  created_time: string;
+  permalink_url: string;
 }
 
 export interface LivePageStats {
@@ -70,22 +46,24 @@ export interface LivePageStats {
   page_name: string;
   avatar_url: string;
   followers: number | null;
-  new_follows: number | null;
   views: number | null;
   views_7d: number | null;
   engagement: number | null;
-  reels_count: number;
-  reel_plays: number | null;
-  reel_reach: number | null;
-  reactions: number | null;
-  comments: number | null;
-  shares: number | null;
+  reels_count: number | null;
   status: "ok" | "partial" | "reconnect" | "error";
   status_message: string;
   /** Which Meta metric fed "views" (page_media_view or page_video_views) */
   views_metric: string | null;
   daily: LiveDailyPoint[];
-  reels: LiveReel[];
+  reels: LiveReelItem[];
+}
+
+export interface LiveTotals {
+  followers: number | null;
+  views: number | null;
+  views_7d: number | null;
+  engagement: number | null;
+  reels_count: number | null;
 }
 
 export interface LiveAnalyticsDashboard {
@@ -96,17 +74,9 @@ export interface LiveAnalyticsDashboard {
   fetched_at: string;
   cached: boolean;
   total_pages: number;
-  total_followers: number | null;
-  new_follows: number | null;
-  views: number | null;
-  views_7d: number | null;
-  engagement: number | null;
-  reels_count: number;
-  reels_count_7d: number;
-  reel_plays: number | null;
+  totals: LiveTotals;
   pages: LivePageStats[];
   time_series: LiveDailyPoint[];
-  top_reels: LiveReel[];
   warnings: string[];
 }
 
@@ -206,41 +176,16 @@ const num = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-const addNullable = (a: number | null, b: number | null): number | null =>
-  a === null ? b : b === null ? a : a + b;
-
-/** Date (YYYY-MM-DD) a daily insight value belongs to: end_time marks the end of that day. */
-function insightDate(endTime: string): string {
-  const t = Date.parse(endTime);
-  if (!Number.isFinite(t)) return "";
-  return new Date(t - 12 * 3600 * 1000).toISOString().slice(0, 10);
+/** Adds numbers, ignoring nulls; null only when every value is null. */
+function sumNullable(values: Array<number | null>): number | null {
+  let total: number | null = null;
+  for (const v of values) if (v !== null) total = (total ?? 0) + v;
+  return total;
 }
 
-/** Value of a lifetime insight entry. Objects (e.g. reactions by type) are summed, or one key is picked. */
-function entryValue(entry: any, mode: "number" | "sum" | { key: string }): number | null {
-  if (!entry) return null;
-  const values = Array.isArray(entry.values) ? entry.values : [];
-  const raw = values.length > 0 ? values[values.length - 1]?.value : entry.value;
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw !== "object") return num(raw);
-  const obj = raw as Record<string, unknown>;
-  if (mode === "sum") {
-    let total = 0;
-    let any = false;
-    for (const v of Object.values(obj)) {
-      const n = num(v);
-      if (n !== null) {
-        total += n;
-        any = true;
-      }
-    }
-    return any ? total : 0;
-  }
-  if (typeof mode === "object") {
-    const k = Object.keys(obj).find((x) => x.toLowerCase().startsWith(mode.key));
-    return k ? num(obj[k]) : 0; // Meta omits zero keys
-  }
-  return null;
+/** Date (YYYY-MM-DD) a daily insight value belongs to: end_time marks the end of that day. */
+function insightDate(endMs: number): string {
+  return new Date(endMs - 12 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
 function describeError(r: BatchResult): { reconnect: boolean; message: string } {
@@ -280,25 +225,23 @@ export async function getLiveAnalyticsDashboard(
   }
 
   const allPages = await getFacebookPages(db, options.encryptionKey, { includeToken: true, ownerUserId });
-  const pages = allPages.filter((p) => p.page_access_token);
+  // One entry per Facebook Page, so nothing is ever counted twice
+  const seen = new Set<string>();
+  const pages = allPages.filter((p) => {
+    if (!p.page_access_token || seen.has(p.facebook_page_id)) return false;
+    seen.add(p.facebook_page_id);
+    return true;
+  });
   const warnings: string[] = [];
-  const missingToken = allPages.length - pages.length;
+  const missingToken = new Set(allPages.map((p) => p.facebook_page_id)).size - pages.length;
   if (missingToken > 0) warnings.push(`${missingToken} Page(s) need to be reconnected before their data can be read.`);
 
   const nowSec = Math.floor(nowMs / 1000);
   const rangeStartSec = nowSec - days * DAY_SEC;
-  const since7 = nowSec - 7 * DAY_SEC;
   // Ask for a few extra days, then keep only the last `days` complete days (Business Suite style)
   const insightsSince = nowSec - (days + 3) * DAY_SEC;
-
   const tokenOf = (p: FacebookPageRecord) => p.page_access_token!;
-  const reelFields =
-    "id,description,created_time,permalink_url,length," +
-    "comments.filter(stream).limit(0).summary(true)," +
-    "reactions.limit(0).summary(total_count)";
-  /** Used when Meta rejects the richer field set for a Page */
-  const reelFieldsBasic = "id,description,created_time,permalink_url,length,comments.limit(0).summary(true)";
-  const reelFieldsByPage = new Map<string, string>();
+  const reelFields = "id,description,created_time,permalink_url";
 
   const stats = new Map<string, LivePageStats>();
   for (const page of pages) {
@@ -307,16 +250,10 @@ export async function getLiveAnalyticsDashboard(
       page_name: page.page_name || page.name || page.facebook_page_id,
       avatar_url: page.avatar_url || "",
       followers: null,
-      new_follows: null,
       views: null,
       views_7d: null,
       engagement: null,
-      reels_count: 0,
-      reel_plays: null,
-      reel_reach: null,
-      reactions: null,
-      comments: null,
-      shares: null,
+      reels_count: null,
       status: "ok",
       status_message: "",
       views_metric: null,
@@ -360,9 +297,11 @@ export async function getLiveAnalyticsDashboard(
 
   const series = new Map<string, Partial<Record<PageMetric, Map<string, number>>>>();
   const reelCursor = new Map<string, string>(); // pageId -> "after" cursor while more Reels are in range
+  const reelsLoaded = new Set<string>();
 
   const takeReels = (page: FacebookPageRecord, body: any) => {
     const s = stats.get(page.facebook_page_id)!;
+    reelsLoaded.add(page.facebook_page_id);
     const list: any[] = Array.isArray(body?.data) ? body.data : [];
     let reachedOlder = false;
     for (const v of list) {
@@ -372,19 +311,13 @@ export async function getLiveAnalyticsDashboard(
         reachedOlder = true;
         continue;
       }
+      const id = String(v.id || "");
+      if (s.reels.some((r) => r.video_id === id)) continue;
       s.reels.push({
-        video_id: String(v.id || ""),
-        page_id: page.facebook_page_id,
-        page_name: s.page_name,
+        video_id: id,
         description: String(v.description || "").slice(0, 160),
         created_time: String(v.created_time),
-        permalink_url: toPermalink(v),
-        length_seconds: num(v.length),
-        plays: null,
-        reach: null,
-        reactions: num(v.reactions?.summary?.total_count),
-        comments: num(v.comments?.summary?.total_count),
-        shares: null
+        permalink_url: toPermalink(v)
       });
     }
     const after = body?.paging?.cursors?.after;
@@ -392,16 +325,19 @@ export async function getLiveAnalyticsDashboard(
     else reelCursor.delete(page.facebook_page_id);
   };
 
-  const reelsRetryBasic: FacebookPageRecord[] = [];
+  const metricErrors = new Map<string, Partial<Record<PageMetric, BatchResult>>>();
   res1.forEach((r, idx) => {
     const { page, kind } = meta1[idx];
     const s = stats.get(page.facebook_page_id)!;
-    if (!r.ok && kind === "reels" && r.errorCode === 100) {
-      reelsRetryBasic.push(page);
-      return;
-    }
     if (!r.ok) {
-      markProblem(page.facebook_page_id, r, kind === "info" || kind === "reels");
+      if (kind === "info" || kind === "reels") {
+        markProblem(page.facebook_page_id, r, kind === "info");
+      } else {
+        // Judged later: a failed fallback metric is fine when the main one worked
+        const errs = metricErrors.get(page.facebook_page_id) || {};
+        errs[kind] = r;
+        metricErrors.set(page.facebook_page_id, errs);
+      }
       return;
     }
     if (kind === "info") {
@@ -425,37 +361,17 @@ export async function getLiveAnalyticsDashboard(
       .slice(-days);
     if (points.length === 0) return;
     const m = new Map<string, number>();
-    for (const p of points) m.set(insightDate(new Date(p.end).toISOString()), p.value as number);
+    for (const p of points) m.set(insightDate(p.end), p.value as number);
     const pageSeries = series.get(page.facebook_page_id) || {};
     pageSeries[kind] = m;
     series.set(page.facebook_page_id, pageSeries);
   });
 
-  // Pages whose Reels list rejected the richer fields: read again with basic fields
-  if (reelsRetryBasic.length > 0) {
-    const res = await runGraphBatch(
-      env,
-      reelsRetryBasic.map((p) => ({
-        relative_url: `${encodeURIComponent(p.facebook_page_id)}/video_reels?fields=${reelFieldsBasic}&limit=${REELS_PAGE_SIZE}`,
-        token: tokenOf(p)
-      }))
-    );
-    res.forEach((r, i) => {
-      const page = reelsRetryBasic[i];
-      if (r.ok) {
-        reelFieldsByPage.set(page.facebook_page_id, reelFieldsBasic);
-        takeReels(page, r.body);
-      } else {
-        markProblem(page.facebook_page_id, r, true);
-      }
-    });
-  }
-
   // ---- Reels pagination: keep reading until Reels are older than the range ----
   for (let round = 0; round < MAX_REEL_PAGINATION_ROUNDS && reelCursor.size > 0; round++) {
     const pending = pages.filter((p) => reelCursor.has(p.facebook_page_id));
     const ops: BatchOp[] = pending.map((p) => ({
-      relative_url: `${encodeURIComponent(p.facebook_page_id)}/video_reels?fields=${reelFieldsByPage.get(p.facebook_page_id) || reelFields}&limit=${REELS_PAGE_SIZE}&after=${encodeURIComponent(reelCursor.get(p.facebook_page_id)!)}`,
+      relative_url: `${encodeURIComponent(p.facebook_page_id)}/video_reels?fields=${reelFields}&limit=${REELS_PAGE_SIZE}&after=${encodeURIComponent(reelCursor.get(p.facebook_page_id)!)}`,
       token: tokenOf(p)
     }));
     const res = await runGraphBatch(env, ops);
@@ -465,17 +381,25 @@ export async function getLiveAnalyticsDashboard(
     });
   }
   if (reelCursor.size > 0) {
-    warnings.push("Some Pages have more Reels in this period than could be loaded. Choose a shorter period for exact totals.");
+    warnings.push("Some Pages have more Reels in this period than could be loaded. Choose a shorter period for an exact count.");
   }
 
-  // ---- Daily series per Page ----
+  // ---- The five numbers per Page ----
   for (const page of pages) {
     const s = stats.get(page.facebook_page_id)!;
     const m = series.get(page.facebook_page_id) || {};
     const viewKey: PageMetric | null = m.page_media_view ? "page_media_view" : m.page_video_views ? "page_video_views" : null;
     s.views_metric = viewKey;
+    const errs = metricErrors.get(page.facebook_page_id) || {};
+    if (!viewKey) {
+      const err = errs.page_media_view || errs.page_video_views;
+      if (err) markProblem(page.facebook_page_id, err, false);
+    }
+    if (!m.page_post_engagements && errs.page_post_engagements) {
+      markProblem(page.facebook_page_id, errs.page_post_engagements, false);
+    }
     const dates = new Set<string>();
-    for (const key of [viewKey, "page_post_engagements", "page_daily_follows_unique"] as const) {
+    for (const key of [viewKey, "page_post_engagements"] as const) {
       if (key && m[key]) for (const d of m[key]!.keys()) dates.add(d);
     }
     s.daily = Array.from(dates)
@@ -483,96 +407,33 @@ export async function getLiveAnalyticsDashboard(
       .map((date) => ({
         date,
         views: viewKey ? m[viewKey]!.get(date) ?? null : null,
-        engagement: m.page_post_engagements?.get(date) ?? null,
-        new_follows: m.page_daily_follows_unique?.get(date) ?? null
+        engagement: m.page_post_engagements?.get(date) ?? null
       }));
-    const sumOf = (field: "views" | "engagement" | "new_follows", fromDate = "") =>
-      s.daily.reduce<number | null>((acc, d) => (d.date >= fromDate ? addNullable(acc, d[field]) : acc), null);
-    s.views = viewKey ? sumOf("views") : null;
-    s.engagement = m.page_post_engagements ? sumOf("engagement") : null;
-    s.new_follows = m.page_daily_follows_unique ? sumOf("new_follows") : null;
-    const last7 = s.daily.slice(-7)[0]?.date || "";
-    s.views_7d = viewKey ? sumOf("views", last7) : null;
-  }
-
-  // ---- Reel insights (combined request, per-metric fallback) ----
-  const allReels = pages.flatMap((p) => stats.get(p.facebook_page_id)!.reels);
-  allReels.sort((a, b) => Date.parse(b.created_time) - Date.parse(a.created_time));
-  const reelsForInsights = allReels.slice(0, MAX_REELS_WITH_INSIGHTS);
-  if (allReels.length > MAX_REELS_WITH_INSIGHTS) {
-    warnings.push(`Plays and reach are shown for the ${MAX_REELS_WITH_INSIGHTS} most recent Reels only.`);
-  }
-  const tokenByPage = new Map(pages.map((p) => [p.facebook_page_id, tokenOf(p)]));
-
-  const applyReelInsights = (reel: LiveReel, entries: any[]) => {
-    const byName = new Map<string, any>(entries.map((e) => [String(e?.name || ""), e]));
-    const total = entryValue(byName.get("fb_reels_total_plays"), "number");
-    const initial = entryValue(byName.get("blue_reels_play_count"), "number");
-    if (total !== null || initial !== null) reel.plays = total ?? initial;
-    const reach = entryValue(byName.get("post_impressions_unique"), "number");
-    if (reach !== null) reel.reach = reach;
-    if (byName.has("post_video_social_actions")) {
-      reel.shares = entryValue(byName.get("post_video_social_actions"), { key: "share" });
-    }
-    if (reel.reactions === null && byName.has("post_video_likes_by_reaction_type")) {
-      reel.reactions = entryValue(byName.get("post_video_likes_by_reaction_type"), "sum");
-    }
-  };
-
-  const combinedOps: BatchOp[] = reelsForInsights.map((reel) => ({
-    relative_url: `${encodeURIComponent(reel.video_id)}/video_insights?metric=${REEL_METRICS.join(",")}`,
-    token: tokenByPage.get(reel.page_id)!
-  }));
-  const combined = combinedOps.length > 0 ? await runGraphBatch(env, combinedOps) : [];
-  const fallbackReels: LiveReel[] = [];
-  combined.forEach((r, i) => {
-    const reel = reelsForInsights[i];
-    if (r.ok) applyReelInsights(reel, Array.isArray(r.body?.data) ? r.body.data : []);
-    else if (r.errorCode === 100 && fallbackReels.length < MAX_FALLBACK_REELS) fallbackReels.push(reel);
-  });
-  if (fallbackReels.length > 0) {
-    const ops: BatchOp[] = [];
-    const owners: LiveReel[] = [];
-    for (const reel of fallbackReels) {
-      for (const metric of REEL_METRICS) {
-        ops.push({
-          relative_url: `${encodeURIComponent(reel.video_id)}/video_insights?metric=${metric}`,
-          token: tokenByPage.get(reel.page_id)!
-        });
-        owners.push(reel);
-      }
-    }
-    const res = await runGraphBatch(env, ops);
-    res.forEach((r, i) => {
-      if (r.ok) applyReelInsights(owners[i], Array.isArray(r.body?.data) ? r.body.data : []);
-    });
-  }
-
-  // ---- Per-Page Reel totals ----
-  for (const s of stats.values()) {
+    s.views = viewKey ? sumNullable(s.daily.map((d) => d.views)) : null;
+    s.views_7d = viewKey ? sumNullable(s.daily.slice(-7).map((d) => d.views)) : null;
+    s.engagement = m.page_post_engagements ? sumNullable(s.daily.map((d) => d.engagement)) : null;
     s.reels.sort((a, b) => Date.parse(b.created_time) - Date.parse(a.created_time));
-    s.reels_count = s.reels.length;
-    for (const reel of s.reels) {
-      s.reel_plays = addNullable(s.reel_plays, reel.plays);
-      s.reel_reach = addNullable(s.reel_reach, reel.reach);
-      s.reactions = addNullable(s.reactions, reel.reactions);
-      s.comments = addNullable(s.comments, reel.comments);
-      s.shares = addNullable(s.shares, reel.shares);
-    }
+    s.reels_count = reelsLoaded.has(page.facebook_page_id) ? s.reels.length : null;
   }
 
   const pageStats = Array.from(stats.values());
-  const sumField = (field: "followers" | "new_follows" | "views" | "views_7d" | "engagement" | "reel_plays") =>
-    pageStats.reduce<number | null>((acc, p) => addNullable(acc, p[field]), null);
 
-  // Overall daily series = sum across Pages per day
+  // Totals: the five per-Page numbers added up
+  const totals: LiveTotals = {
+    followers: sumNullable(pageStats.map((p) => p.followers)),
+    views: sumNullable(pageStats.map((p) => p.views)),
+    views_7d: sumNullable(pageStats.map((p) => p.views_7d)),
+    engagement: sumNullable(pageStats.map((p) => p.engagement)),
+    reels_count: sumNullable(pageStats.map((p) => p.reels_count))
+  };
+
+  // Daily series across Pages (chart)
   const overall = new Map<string, LiveDailyPoint>();
   for (const s of pageStats) {
     for (const d of s.daily) {
-      const cur = overall.get(d.date) || { date: d.date, views: null, engagement: null, new_follows: null };
-      cur.views = addNullable(cur.views, d.views);
-      cur.engagement = addNullable(cur.engagement, d.engagement);
-      cur.new_follows = addNullable(cur.new_follows, d.new_follows);
+      const cur = overall.get(d.date) || { date: d.date, views: null, engagement: null };
+      cur.views = sumNullable([cur.views, d.views]);
+      cur.engagement = sumNullable([cur.engagement, d.engagement]);
       overall.set(d.date, cur);
     }
   }
@@ -595,18 +456,10 @@ export async function getLiveAnalyticsDashboard(
     range_end: timeSeries[timeSeries.length - 1]?.date || new Date(nowMs).toISOString().slice(0, 10),
     fetched_at: new Date(nowMs).toISOString(),
     cached: false,
-    total_pages: allPages.length,
-    total_followers: sumField("followers"),
-    new_follows: sumField("new_follows"),
-    views: sumField("views"),
-    views_7d: sumField("views_7d"),
-    engagement: sumField("engagement"),
-    reels_count: allReels.length,
-    reels_count_7d: allReels.filter((r) => Date.parse(r.created_time) / 1000 >= since7).length,
-    reel_plays: sumField("reel_plays"),
+    total_pages: seen.size + missingToken,
+    totals,
     pages: pageStats,
     time_series: timeSeries,
-    top_reels: [...allReels].sort((a, b) => (b.plays ?? -1) - (a.plays ?? -1)).slice(0, 10),
     warnings
   };
   cache.set(cacheKey, { at: nowMs, data });

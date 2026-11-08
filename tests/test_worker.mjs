@@ -1701,13 +1701,16 @@ async function runAll30Tests() {
   console.log("  ✓ [Test 15d] Nhiều bình luận / bài, bình luận kèm ảnh, độ trễ riêng từng bình luận");
 
   // --------------------------------------------------------------------------
-  // [TEST 15e] Thống kê lấy trực tiếp từ Meta Graph API (batch), không dùng số liệu nội bộ
+  // [TEST 15e] Thống kê lấy trực tiếp từ Meta: 5 số / Page, tổng = cộng các Page
   // --------------------------------------------------------------------------
   const fetchBeforeLive = globalThis.fetch;
   let liveBatchCalls = 0;
+  const requestedPaths = [];
   const dayIso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString().replace(/\.\d+Z$/, "+0000");
   const graphOk = (body) => ({ code: 200, body: JSON.stringify(body) });
   const graphErr = (code, message) => ({ code: 400, body: JSON.stringify({ error: { code, message } }) });
+  // Mỗi Page có số liệu khác nhau để kiểm tra phép cộng tổng
+  const pageNumber = (pageId) => Number(String(pageId).replace(/\D/g, "").slice(-1) || 1);
   globalThis.fetch = async (input, init = {}) => {
     const u = typeof input === "string" ? input : input.url;
     if (/graph\.facebook\.com\/v[\d.]+\/$/.test(u) && String(init.method || "").toUpperCase() === "POST") {
@@ -1718,63 +1721,40 @@ async function runAll30Tests() {
         const rel = op.relative_url;
         assert.ok(/access_token=/.test(rel), "Mỗi lệnh batch phải mang token của Page");
         const path = rel.split("?")[0];
+        requestedPaths.push(rel);
+        const pageId = path.split("/")[0];
+        const k = pageNumber(pageId);
         if (/\/video_reels$/.test(path)) {
-          const pageId = path.split("/")[0];
-          assert.ok(/comments\.filter\(stream\)/.test(rel), "Đếm cả trả lời bình luận (filter=stream)");
-          assert.ok(/reactions\./.test(rel), "Đếm mọi loại cảm xúc, không chỉ Like");
           if (/after=CURSOR_2/.test(rel)) {
-            // Trang 2: 1 Reel trong khoảng + 1 Reel quá cũ -> dừng phân trang
             return graphOk({
               data: [
-                {
-                  id: `reel2_${pageId}`,
-                  description: "Second page reel",
-                  created_time: dayIso(10),
-                  length: 42,
-                  reactions: { summary: { total_count: 5 } },
-                  comments: { summary: { total_count: 3 } }
-                },
+                { id: `reel2_${pageId}`, description: "Second page reel", created_time: dayIso(10) },
                 { id: `old_${pageId}`, description: "Too old", created_time: dayIso(120) }
               ]
             });
           }
           return graphOk({
-            data: [
-              {
-                id: `reel_${pageId}`,
-                description: "Live reel",
-                created_time: dayIso(2),
-                permalink_url: `/reel/reel_${pageId}`,
-                reactions: { summary: { total_count: 5 } },
-                comments: { summary: { total_count: 2 } }
-              }
-            ],
+            data: [{ id: `reel_${pageId}`, description: "Live reel", created_time: dayIso(2), permalink_url: `/reel/reel_${pageId}` }],
             paging: { cursors: { after: "CURSOR_2" }, next: "https://graph.facebook.com/next" }
           });
         }
         if (/\/insights$/.test(path)) {
           const metric = /metric=([a-z_]+)/.exec(rel)[1];
-          if (metric === "page_media_view" || metric === "page_post_engagements") {
-            return graphOk({ data: [{ name: metric, values: [{ value: 10, end_time: dayIso(1) }, { value: 20, end_time: dayIso(0) }] }] });
+          if (metric === "page_media_view") {
+            // 9 ngày: 8 ngày cũ (mỗi ngày 1*k) + ngày gần nhất 10*k; ngày chưa trọn (end_time tương lai) bị bỏ
+            const values = [];
+            for (let d = 9; d >= 2; d--) values.push({ value: k, end_time: dayIso(d) });
+            values.push({ value: 10 * k, end_time: dayIso(1) });
+            values.push({ value: 999, end_time: dayIso(-1) });
+            return graphOk({ data: [{ name: metric, values }] });
           }
-          if (metric === "page_daily_follows_unique") return graphErr(10, "(#10) Requires read_insights permission");
+          if (metric === "page_post_engagements") {
+            return graphOk({ data: [{ name: metric, values: [{ value: 2 * k, end_time: dayIso(3) }, { value: k, end_time: dayIso(1) }] }] });
+          }
           return graphErr(100, "(#100) The value must be a valid insights metric");
         }
-        if (/\/video_insights$/.test(path)) {
-          const metrics = /metric=([a-z_,]+)/.exec(rel)[1].split(",");
-          const valueOf = {
-            fb_reels_total_plays: 300,
-            blue_reels_play_count: 250,
-            post_impressions_unique: 200,
-            post_video_social_actions: { SHARE: 4, COMMENT: 2, REACTION: 5 },
-            post_video_likes_by_reaction_type: { REACTION_LIKE: 4, REACTION_LOVE: 1 }
-          };
-          return graphOk({
-            data: metrics.map((m) => ({ name: m, period: "lifetime", values: [{ value: valueOf[m] }] }))
-          });
-        }
         if (!path.includes("/")) {
-          return graphOk({ id: path, name: `Live ${path}`, followers_count: 1000, fan_count: 900 });
+          return graphOk({ id: path, name: `Live ${path}`, followers_count: 100 * k, fan_count: 1 });
         }
         return graphErr(100, "unknown");
       });
@@ -1789,31 +1769,25 @@ async function runAll30Tests() {
     assert.equal(liveResp.status, 200);
     const live = await liveResp.json();
     assert.equal(live.source, "meta_graph_api");
-    const readable = live.pages.filter((pg) => pg.status === "partial");
+    const readable = live.pages.filter((pg) => pg.status === "ok");
     assert.ok(readable.length >= 1, "Phải đọc được ít nhất 1 Page qua Graph API");
     for (const pg of readable) {
-      assert.equal(pg.followers, 1000);
-      assert.equal(pg.views, 30, "Lượt xem lấy từ page_media_view của Meta");
+      const k = pageNumber(pg.page_id);
+      assert.equal(pg.followers, 100 * k);
       assert.equal(pg.views_metric, "page_media_view");
-      assert.equal(pg.engagement, 30);
-      assert.equal(pg.new_follows, null, "Thiếu quyền -> null, không tự bịa");
-      assert.equal(pg.daily.length, 2, "Có số liệu từng ngày cho từng Page");
+      assert.equal(pg.views, 8 * k + 10 * k, "Views = tổng các ngày trọn vẹn");
+      assert.equal(pg.views_7d, 6 * k + 10 * k, "Views 7 ngày = 7 ngày trọn vẹn gần nhất");
+      assert.equal(pg.engagement, 3 * k);
       assert.equal(pg.reels_count, 2, "Đọc hết các trang Reels; Reels quá khoảng thời gian bị loại");
-      assert.deepEqual(pg.reels.map((r) => r.video_id), [`reel_${pg.page_id}`, `reel2_${pg.page_id}`]);
-      assert.equal(pg.reels[1].length_seconds, 42);
-      assert.equal(pg.reel_plays, 600);
-      assert.equal(pg.reel_reach, 400);
-      assert.equal(pg.reactions, 10);
-      assert.equal(pg.comments, 5);
-      assert.equal(pg.shares, 8);
+      assert.equal(pg.daily.length, 9);
+      assert.ok(!("reel_plays" in pg) && !("reactions" in pg), "Không còn số liệu cộng từ từng Reels");
     }
-    assert.equal(live.total_followers, 1000 * readable.length);
-    assert.equal(live.new_follows, null);
-    assert.equal(live.reels_count, 2 * readable.length);
-    assert.equal(live.top_reels[0].plays, 300);
-    assert.ok(live.top_reels[0].permalink_url.startsWith("https://www.facebook.com/reel/"));
-    assert.ok(live.warnings.some((w) => /read_insights/.test(w)), "Phải cảnh báo thiếu quyền read_insights");
-    assert.ok(liveBatchCalls <= 6, `Gọi Meta theo batch, không gọi từng request (${liveBatchCalls})`);
+    const sum = (field) => live.pages.reduce((acc, pg) => (pg[field] == null ? acc : (acc ?? 0) + pg[field]), null);
+    for (const field of ["followers", "views", "views_7d", "engagement", "reels_count"]) {
+      assert.equal(live.totals[field], sum(field), `Tổng ${field} = cộng các Page`);
+    }
+    assert.ok(!requestedPaths.some((r) => /video_insights|page_daily_follows_unique/.test(r)), "Chỉ gọi các số liệu cần thiết");
+    assert.ok(liveBatchCalls <= 3, `Gọi Meta theo batch (${liveBatchCalls})`);
 
     const callsBefore = liveBatchCalls;
     const cachedResp = await (
@@ -1824,7 +1798,7 @@ async function runAll30Tests() {
   } finally {
     globalThis.fetch = fetchBeforeLive;
   }
-  console.log("  ✓ [Test 15e] Thống kê lấy trực tiếp từ Meta (Graph batch), thiếu quyền trả null + cảnh báo");
+  console.log("  ✓ [Test 15e] Thống kê từ Meta: followers / views / views_7d / engagement / reels mỗi Page, tổng = cộng các Page");
 
   // Dọn dẹp để không ảnh hưởng các bài kiểm thử sau
   for (const id of composerTaskIds) {

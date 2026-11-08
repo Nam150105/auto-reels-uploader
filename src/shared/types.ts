@@ -161,44 +161,33 @@ export interface LiveDailyPoint {
   date: string;
   views: number | null;
   engagement: number | null;
-  new_follows: number | null;
 }
 
-export interface LiveReel {
+export interface LiveReelItem {
   video_id: string;
-  page_id: string;
-  page_name: string;
   description: string;
   created_time: string;
   permalink_url: string;
-  length_seconds: number | null;
-  plays: number | null;
-  reach: number | null;
-  reactions: number | null;
-  comments: number | null;
-  shares: number | null;
 }
 
-export interface LivePageStats {
-  page_id: string;
-  page_name: string;
-  avatar_url: string;
+/** The five numbers shown per Page (and added up for the totals) */
+export interface LiveTotals {
   followers: number | null;
-  new_follows: number | null;
   views: number | null;
   views_7d: number | null;
   engagement: number | null;
-  reels_count: number;
-  reel_plays: number | null;
-  reel_reach: number | null;
-  reactions: number | null;
-  comments: number | null;
-  shares: number | null;
+  reels_count: number | null;
+}
+
+export interface LivePageStats extends LiveTotals {
+  page_id: string;
+  page_name: string;
+  avatar_url: string;
   status: "ok" | "partial" | "reconnect" | "error";
   status_message: string;
   views_metric: string | null;
   daily: LiveDailyPoint[];
-  reels: LiveReel[];
+  reels: LiveReelItem[];
 }
 
 export interface AnalyticsDashboard {
@@ -209,16 +198,8 @@ export interface AnalyticsDashboard {
   fetched_at: string;
   cached: boolean;
   total_pages: number;
-  total_followers: number | null;
-  new_follows: number | null;
-  views: number | null;
-  views_7d: number | null;
-  engagement: number | null;
-  reels_count: number;
-  reels_count_7d: number;
-  reel_plays: number | null;
+  totals: LiveTotals;
   pages: LivePageStats[];
   time_series: LiveDailyPoint[];
-  top_reels: LiveReel[];
   warnings: string[];
 }

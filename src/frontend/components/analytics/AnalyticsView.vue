@@ -80,14 +80,9 @@
         </button>
       </div>
 
-      <!-- Metric cards -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div
-          v-for="card in cards"
-          :key="card.label"
-          class="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs"
-          :title="card.help"
-        >
+      <!-- The five numbers -->
+      <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+        <div v-for="card in cards" :key="card.label" class="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs" :title="card.help">
           <span class="text-[11px] font-bold tracking-wider uppercase text-slate-500">{{ card.label }}</span>
           <p class="text-2xl font-black text-slate-900 tracking-tight mt-2">{{ formatNumber(card.value) }}</p>
           <span class="text-[10px] font-semibold mt-1 block" :class="card.tone">{{ card.hint }}</span>
@@ -134,11 +129,11 @@
         </div>
       </div>
 
-      <!-- ALL PAGES: comparison table -->
-      <div v-if="!selectedPage" class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs mb-6">
+      <!-- ALL PAGES: per-Page numbers + total row -->
+      <div v-if="!selectedPage" class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
         <div class="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
           <h3 class="font-bold text-sm text-slate-800">Pages</h3>
-          <span class="text-xs text-slate-500 font-medium">Click a Page for its full details · "—" = not returned by Facebook</span>
+          <span class="text-xs text-slate-500 font-medium">Click a Page for day-by-day details · "—" = not returned by Facebook</span>
         </div>
         <div class="overflow-x-auto scrollbar-thin">
           <table class="w-full text-xs text-left">
@@ -146,14 +141,10 @@
               <tr>
                 <th class="py-3 px-4">Page</th>
                 <th class="py-3 px-4 text-right">Followers</th>
-                <th class="py-3 px-4 text-right">New followers</th>
                 <th class="py-3 px-4 text-right">Views</th>
+                <th class="py-3 px-4 text-right">Views (7 days)</th>
                 <th class="py-3 px-4 text-right">Engagement</th>
                 <th class="py-3 px-4 text-right">Reels</th>
-                <th class="py-3 px-4 text-right">Reel plays</th>
-                <th class="py-3 px-4 text-right">Reactions</th>
-                <th class="py-3 px-4 text-right">Comments</th>
-                <th class="py-3 px-4 text-right">Shares</th>
                 <th class="py-3 px-4 text-center">Status</th>
               </tr>
             </thead>
@@ -170,18 +161,14 @@
                       <img v-if="page.avatar_url" :src="page.avatar_url" class="w-full h-full object-cover" />
                       <span v-else class="w-full h-full flex items-center justify-center font-bold text-slate-500 text-[10px]">FB</span>
                     </div>
-                    <p class="font-bold text-slate-800 truncate text-xs max-w-[180px]">{{ page.page_name }}</p>
+                    <p class="font-bold text-slate-800 truncate text-xs max-w-[200px]">{{ page.page_name }}</p>
                   </div>
                 </td>
-                <td class="py-3 px-4 text-right font-bold text-slate-900">{{ formatNumber(page.followers) }}</td>
-                <td class="py-3 px-4 text-right text-emerald-600 font-semibold">{{ formatNumber(page.new_follows) }}</td>
-                <td class="py-3 px-4 text-right font-bold text-blue-600">{{ formatNumber(page.views) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.engagement) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.reels_count) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.reel_plays) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.reactions) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.comments) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.shares) }}</td>
+                <td class="py-3 px-4 text-right font-semibold text-slate-900">{{ formatNumber(page.followers) }}</td>
+                <td class="py-3 px-4 text-right font-semibold text-blue-600">{{ formatNumber(page.views) }}</td>
+                <td class="py-3 px-4 text-right text-indigo-600">{{ formatNumber(page.views_7d) }}</td>
+                <td class="py-3 px-4 text-right text-emerald-600">{{ formatNumber(page.engagement) }}</td>
+                <td class="py-3 px-4 text-right text-purple-600">{{ formatNumber(page.reels_count) }}</td>
                 <td class="py-3 px-4 text-center">
                   <span
                     class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold"
@@ -193,88 +180,75 @@
                 </td>
               </tr>
               <tr v-if="!dashboard.pages.length">
-                <td colspan="11" class="text-center py-10 text-slate-400 text-xs">
+                <td colspan="7" class="text-center py-10 text-slate-400 text-xs">
                   No Pages yet. Connect a Facebook Page to see its numbers.
                 </td>
               </tr>
             </tbody>
+            <tfoot v-if="dashboard.pages.length > 1" class="bg-slate-50 border-t-2 border-slate-200 font-bold text-slate-900">
+              <tr>
+                <td class="py-3 px-4">Total ({{ dashboard.pages.length }} Pages)</td>
+                <td class="py-3 px-4 text-right">{{ formatNumber(dashboard.totals.followers) }}</td>
+                <td class="py-3 px-4 text-right">{{ formatNumber(dashboard.totals.views) }}</td>
+                <td class="py-3 px-4 text-right">{{ formatNumber(dashboard.totals.views_7d) }}</td>
+                <td class="py-3 px-4 text-right">{{ formatNumber(dashboard.totals.engagement) }}</td>
+                <td class="py-3 px-4 text-right">{{ formatNumber(dashboard.totals.reels_count) }}</td>
+                <td></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>
 
-      <!-- ONE PAGE: daily breakdown -->
-      <div v-if="selectedPage" class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs mb-6">
-        <div class="p-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 class="font-bold text-sm text-slate-800">Day by day</h3>
-          <span class="text-xs text-slate-500 font-medium">{{ selectedPage.daily.length }} days</span>
+      <!-- ONE PAGE: day by day + Reels list -->
+      <div v-if="selectedPage" class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+          <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h3 class="font-bold text-sm text-slate-800">Day by day</h3>
+            <span class="text-xs text-slate-500 font-medium">{{ selectedPage.daily.length }} days</span>
+          </div>
+          <div class="overflow-x-auto max-h-96 overflow-y-auto scrollbar-thin">
+            <table class="w-full text-xs text-left">
+              <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200 sticky top-0">
+                <tr>
+                  <th class="py-2.5 px-4">Date</th>
+                  <th class="py-2.5 px-4 text-right">Views</th>
+                  <th class="py-2.5 px-4 text-right">Engagement</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="d in [...selectedPage.daily].reverse()" :key="d.date">
+                  <td class="py-2 px-4 font-mono text-slate-600">{{ formatDay(d.date) }}</td>
+                  <td class="py-2 px-4 text-right font-semibold text-blue-600">{{ formatNumber(d.views) }}</td>
+                  <td class="py-2 px-4 text-right text-emerald-600">{{ formatNumber(d.engagement) }}</td>
+                </tr>
+                <tr v-if="!selectedPage.daily.length">
+                  <td colspan="3" class="text-center py-8 text-slate-400">Facebook did not return daily insights for this Page.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div class="overflow-x-auto max-h-80 overflow-y-auto scrollbar-thin">
-          <table class="w-full text-xs text-left">
-            <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200 sticky top-0">
-              <tr>
-                <th class="py-2.5 px-4">Date</th>
-                <th class="py-2.5 px-4 text-right">Views</th>
-                <th class="py-2.5 px-4 text-right">Engagement</th>
-                <th class="py-2.5 px-4 text-right">New followers</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100">
-              <tr v-for="d in [...selectedPage.daily].reverse()" :key="d.date">
-                <td class="py-2 px-4 font-mono text-slate-600">{{ formatDay(d.date) }}</td>
-                <td class="py-2 px-4 text-right font-semibold text-blue-600">{{ formatNumber(d.views) }}</td>
-                <td class="py-2 px-4 text-right text-slate-700">{{ formatNumber(d.engagement) }}</td>
-                <td class="py-2 px-4 text-right text-emerald-600">{{ formatNumber(d.new_follows) }}</td>
-              </tr>
-              <tr v-if="!selectedPage.daily.length">
-                <td colspan="4" class="text-center py-8 text-slate-400">Facebook did not return daily insights for this Page.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
 
-      <!-- Reels table (top Reels for all Pages, every Reel for one Page) -->
-      <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
-        <div class="p-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 class="font-bold text-sm text-slate-800">{{ selectedPage ? `Reels (${selectedPage.reels.length})` : "Top Reels" }}</h3>
-          <span class="text-xs text-slate-500 font-medium">
-            {{ selectedPage ? "Every Reel posted on this Page in the period" : "Most played Reels across all Pages" }}
-          </span>
-        </div>
-        <div class="overflow-x-auto scrollbar-thin">
-          <table class="w-full text-xs text-left">
-            <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
-              <tr>
-                <th class="py-3 px-4">Reel</th>
-                <th class="py-3 px-4 text-right">Plays</th>
-                <th class="py-3 px-4 text-right">Reach</th>
-                <th class="py-3 px-4 text-right">Reactions</th>
-                <th class="py-3 px-4 text-right">Comments</th>
-                <th class="py-3 px-4 text-right">Shares</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100">
-              <tr v-for="reel in reelRows" :key="reel.video_id" class="hover:bg-slate-50/70 transition">
-                <td class="py-3 px-4 max-w-[340px]">
-                  <a :href="reel.permalink_url" target="_blank" rel="noopener noreferrer" class="font-semibold text-slate-800 hover:text-blue-600 line-clamp-2 break-words">
-                    {{ reel.description || "(no caption)" }}
-                  </a>
-                  <p class="text-[10px] text-slate-400 mt-0.5">
-                    <span v-if="!selectedPage">{{ reel.page_name }} · </span>{{ formatDateTime(reel.created_time) }}
-                    <span v-if="reel.length_seconds"> · {{ formatLength(reel.length_seconds) }}</span>
-                  </p>
-                </td>
-                <td class="py-3 px-4 text-right font-bold text-blue-600">{{ formatNumber(reel.plays) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(reel.reach) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(reel.reactions) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(reel.comments) }}</td>
-                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(reel.shares) }}</td>
-              </tr>
-              <tr v-if="!reelRows.length">
-                <td colspan="6" class="text-center py-10 text-slate-400 text-xs">No Reels were posted in this period.</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+          <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h3 class="font-bold text-sm text-slate-800">Reels ({{ formatNumber(selectedPage.reels_count) }})</h3>
+            <span class="text-xs text-slate-500 font-medium">Posted in this period</span>
+          </div>
+          <div class="max-h-96 overflow-y-auto divide-y divide-slate-100 scrollbar-thin">
+            <a
+              v-for="reel in selectedPage.reels"
+              :key="reel.video_id"
+              :href="reel.permalink_url"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="block px-4 py-3 hover:bg-slate-50 transition"
+            >
+              <p class="text-xs font-semibold text-slate-800 line-clamp-2 break-words">{{ reel.description || "(no caption)" }}</p>
+              <p class="text-[10px] text-slate-400 mt-0.5">{{ formatDateTime(reel.created_time) }}</p>
+            </a>
+            <p v-if="!selectedPage.reels.length" class="text-center py-8 text-slate-400 text-xs">No Reels were posted in this period.</p>
+          </div>
         </div>
       </div>
     </template>
@@ -314,84 +288,47 @@ const fmt = (iso: string, opts: Intl.DateTimeFormatOptions) => {
 const formatTime = (iso: string) => fmt(iso, { hour: "2-digit", minute: "2-digit", hour12: false });
 const formatDateTime = (iso: string) =>
   fmt(iso, { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-/** YYYY-MM-DD -> "07 Nov" (no timezone shift for plain dates) */
+/** YYYY-MM-DD -> "07 Nov" (plain date, no timezone shift) */
 const formatDay = (date: string) => {
   const [y, m, d] = (date || "").split("-").map(Number);
   if (!y || !m || !d) return date;
   return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", timeZone: "UTC" }).format(Date.UTC(y, m - 1, d));
 };
-const formatLength = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
 
+/** Same five numbers for one Page or for the total of all Pages */
 const cards = computed(() => {
-  const d = dashboard.value;
-  const p = selectedPage.value;
-  const days = d?.range_days || rangeDays.value;
-  const viewsHelp =
-    "Content views on the Page from Facebook Page insights (page_media_view, or page_video_views when not available).";
-  if (p) {
-    return [
-      { label: "Followers", value: p.followers, hint: "Current total", tone: "text-blue-600", help: "Page followers right now." },
-      {
-        label: `New followers`,
-        value: p.new_follows,
-        hint: p.new_follows == null ? "Not provided by Facebook" : `Last ${days} days`,
-        tone: "text-emerald-600",
-        help: "Sum of daily new follows (page_daily_follows_unique)."
-      },
-      {
-        label: "Views",
-        value: p.views,
-        hint: p.views_7d != null ? `${formatNumber(p.views_7d)} in the last 7 days` : `Last ${days} days`,
-        tone: "text-indigo-600",
-        help: viewsHelp
-      },
-      {
-        label: "Engagement",
-        value: p.engagement,
-        hint: `Last ${days} days`,
-        tone: "text-emerald-600",
-        help: "Reactions, comments, shares and clicks on the Page's posts (page_post_engagements)."
-      },
-      { label: "Reels posted", value: p.reels_count, hint: `Last ${days} days`, tone: "text-purple-600", help: "Reels created on this Page in the period." },
-      {
-        label: "Reel plays",
-        value: p.reel_plays,
-        hint: "Lifetime plays of those Reels",
-        tone: "text-blue-600",
-        help: "Total plays including replays (fb_reels_total_plays) of the Reels posted in the period."
-      },
-      { label: "Reel reach", value: p.reel_reach, hint: "Sum of each Reel's reach", tone: "text-slate-500", help: "Accounts reached per Reel, added up." },
-      {
-        label: "Reactions",
-        value: p.reactions,
-        hint: `${formatNumber(p.comments)} comments · ${formatNumber(p.shares)} shares`,
-        tone: "text-rose-600",
-        help: "All reaction types, comments including replies, and shares on the Reels posted in the period."
-      }
-    ];
-  }
+  const days = dashboard.value?.range_days || rangeDays.value;
+  const src = selectedPage.value || dashboard.value?.totals;
+  const scope = selectedPage.value ? "This Page" : `Across ${dashboard.value?.pages.length || 0} Page(s)`;
   return [
-    { label: "Followers", value: d?.total_followers ?? null, hint: `Across ${d?.total_pages || 0} Page(s)`, tone: "text-blue-600", help: "Current followers of all Pages." },
-    {
-      label: "New followers",
-      value: d?.new_follows ?? null,
-      hint: d?.new_follows == null ? "Not provided by Facebook" : `Last ${days} days`,
-      tone: "text-emerald-600",
-      help: "Sum of daily new follows (page_daily_follows_unique)."
-    },
+    { label: "Followers", value: src?.followers ?? null, hint: scope, tone: "text-slate-500", help: "Current Page followers." },
     {
       label: "Views",
-      value: d?.views ?? null,
-      hint: d?.views_7d != null ? `${formatNumber(d.views_7d)} in the last 7 days` : `Last ${days} days`,
-      tone: "text-indigo-600",
-      help: viewsHelp
+      value: src?.views ?? null,
+      hint: `Last ${days} days`,
+      tone: "text-blue-600",
+      help: "Content views on the Page (Facebook Page insights: page_media_view), summed per day."
     },
     {
-      label: "Reels posted",
-      value: d ? d.reels_count : null,
-      hint: d?.reel_plays != null ? `${formatNumber(d.reel_plays)} plays in total` : `${d?.reels_count_7d || 0} in the last 7 days`,
+      label: "Views (7 days)",
+      value: src?.views_7d ?? null,
+      hint: "Last 7 complete days",
+      tone: "text-indigo-600",
+      help: "Page views of the last 7 complete days."
+    },
+    {
+      label: "Engagement",
+      value: src?.engagement ?? null,
+      hint: `Last ${days} days`,
+      tone: "text-emerald-600",
+      help: "Reactions, comments, shares and clicks on the Page's posts (page_post_engagements), summed per day."
+    },
+    {
+      label: "Reels",
+      value: src?.reels_count ?? null,
+      hint: `Posted in the last ${days} days`,
       tone: "text-purple-600",
-      help: "Reels created in the period and their lifetime plays."
+      help: "Reels created on the Page in the period."
     }
   ];
 });
@@ -400,8 +337,6 @@ const statusLabel = (s: string) =>
   s === "ok" ? "✓ OK" : s === "partial" ? "Partial data" : s === "reconnect" ? "Reconnect" : "Unavailable";
 const statusClass = (s: string) =>
   s === "ok" ? "bg-emerald-50 text-emerald-700" : s === "partial" ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700";
-
-const reelRows = computed(() => (selectedPage.value ? selectedPage.value.reels : dashboard.value?.top_reels || []));
 
 // Chart
 const chartPoints = computed(() => {
