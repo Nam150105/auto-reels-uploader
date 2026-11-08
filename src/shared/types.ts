@@ -157,22 +157,11 @@ export interface SingleComposerState {
 }
 
 /** Analytics read live from the Meta Graph API. null = Facebook did not return this number. */
-export interface LivePageStats {
-  page_id: string;
-  page_name: string;
-  avatar_url: string;
-  followers: number | null;
-  new_follows: number | null;
+export interface LiveDailyPoint {
+  date: string;
   views: number | null;
   engagement: number | null;
-  reels_count: number;
-  reel_plays: number | null;
-  reel_reach: number | null;
-  likes: number | null;
-  comments: number | null;
-  shares: number | null;
-  status: "ok" | "partial" | "reconnect" | "error";
-  status_message: string;
+  new_follows: number | null;
 }
 
 export interface LiveReel {
@@ -182,16 +171,41 @@ export interface LiveReel {
   description: string;
   created_time: string;
   permalink_url: string;
+  length_seconds: number | null;
   plays: number | null;
   reach: number | null;
-  likes: number | null;
+  reactions: number | null;
   comments: number | null;
   shares: number | null;
+}
+
+export interface LivePageStats {
+  page_id: string;
+  page_name: string;
+  avatar_url: string;
+  followers: number | null;
+  new_follows: number | null;
+  views: number | null;
+  views_7d: number | null;
+  engagement: number | null;
+  reels_count: number;
+  reel_plays: number | null;
+  reel_reach: number | null;
+  reactions: number | null;
+  comments: number | null;
+  shares: number | null;
+  status: "ok" | "partial" | "reconnect" | "error";
+  status_message: string;
+  views_metric: string | null;
+  daily: LiveDailyPoint[];
+  reels: LiveReel[];
 }
 
 export interface AnalyticsDashboard {
   source: "meta_graph_api";
   range_days: number;
+  range_start: string;
+  range_end: string;
   fetched_at: string;
   cached: boolean;
   total_pages: number;
@@ -204,7 +218,7 @@ export interface AnalyticsDashboard {
   reels_count_7d: number;
   reel_plays: number | null;
   pages: LivePageStats[];
-  time_series: Array<{ date: string; views: number | null; engagement: number | null; new_follows: number | null }>;
+  time_series: LiveDailyPoint[];
   top_reels: LiveReel[];
   warnings: string[];
 }

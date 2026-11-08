@@ -6,7 +6,7 @@ import { useToast } from "./useToast";
 const dashboard = ref<AnalyticsDashboard | null>(null);
 const isLoading = ref<boolean>(false);
 const isSyncing = ref<boolean>(false);
-const rangeDays = ref<number>(30);
+const rangeDays = ref<number>(28);
 let lastFetchedTime = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // the server also caches Facebook data for 10 minutes
 

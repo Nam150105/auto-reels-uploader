@@ -355,11 +355,11 @@ export const api = {
   },
 
   // Analytics (read live from Facebook)
-  async getAnalytics(days = 30): Promise<AnalyticsDashboard> {
+  async getAnalytics(days = 28): Promise<AnalyticsDashboard> {
     return request<AnalyticsDashboard>(`/api/insights/live?days=${days}`);
   },
 
-  async syncAnalytics(days = 30): Promise<AnalyticsDashboard> {
+  async syncAnalytics(days = 28): Promise<AnalyticsDashboard> {
     return request<AnalyticsDashboard>(`/api/insights/live?days=${days}&refresh=1`);
   }
 };

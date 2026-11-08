@@ -2030,7 +2030,7 @@ export async function handleWorkerRequest(
     // ------------------------------------------
     // Live analytics straight from the Meta Graph API (Pages, Page insights, Reels and Reel insights)
     if (pathname === "/api/insights/live" && method === "GET") {
-      const days = parseInt(url.searchParams.get("days") || "30", 10) || 30;
+      const days = parseInt(url.searchParams.get("days") || "28", 10) || 28;
       const refresh = url.searchParams.get("refresh") === "1";
       const data = await getLiveAnalyticsDashboard(db, env, ownerUserId, { days, refresh, encryptionKey });
       return jsonResponse(data);

@@ -1720,6 +1720,24 @@ async function runAll30Tests() {
         const path = rel.split("?")[0];
         if (/\/video_reels$/.test(path)) {
           const pageId = path.split("/")[0];
+          assert.ok(/comments\.filter\(stream\)/.test(rel), "Đếm cả trả lời bình luận (filter=stream)");
+          assert.ok(/reactions\./.test(rel), "Đếm mọi loại cảm xúc, không chỉ Like");
+          if (/after=CURSOR_2/.test(rel)) {
+            // Trang 2: 1 Reel trong khoảng + 1 Reel quá cũ -> dừng phân trang
+            return graphOk({
+              data: [
+                {
+                  id: `reel2_${pageId}`,
+                  description: "Second page reel",
+                  created_time: dayIso(10),
+                  length: 42,
+                  reactions: { summary: { total_count: 5 } },
+                  comments: { summary: { total_count: 3 } }
+                },
+                { id: `old_${pageId}`, description: "Too old", created_time: dayIso(120) }
+              ]
+            });
+          }
           return graphOk({
             data: [
               {
@@ -1727,11 +1745,11 @@ async function runAll30Tests() {
                 description: "Live reel",
                 created_time: dayIso(2),
                 permalink_url: `/reel/reel_${pageId}`,
-                likes: { summary: { total_count: 5 } },
+                reactions: { summary: { total_count: 5 } },
                 comments: { summary: { total_count: 2 } }
-              },
-              { id: `old_${pageId}`, description: "Too old", created_time: dayIso(120) }
-            ]
+              }
+            ],
+            paging: { cursors: { after: "CURSOR_2" }, next: "https://graph.facebook.com/next" }
           });
         }
         if (/\/insights$/.test(path)) {
@@ -1743,14 +1761,17 @@ async function runAll30Tests() {
           return graphErr(100, "(#100) The value must be a valid insights metric");
         }
         if (/\/video_insights$/.test(path)) {
-          const metric = /metric=([a-z_]+)/.exec(rel)[1];
-          const value = {
+          const metrics = /metric=([a-z_,]+)/.exec(rel)[1].split(",");
+          const valueOf = {
             fb_reels_total_plays: 300,
             blue_reels_play_count: 250,
             post_impressions_unique: 200,
-            post_video_social_actions: { SHARE: 4, COMMENT: 2, REACTION: 5 }
-          }[metric];
-          return graphOk({ data: [{ name: metric, period: "lifetime", values: [{ value }] }] });
+            post_video_social_actions: { SHARE: 4, COMMENT: 2, REACTION: 5 },
+            post_video_likes_by_reaction_type: { REACTION_LIKE: 4, REACTION_LOVE: 1 }
+          };
+          return graphOk({
+            data: metrics.map((m) => ({ name: m, period: "lifetime", values: [{ value: valueOf[m] }] }))
+          });
         }
         if (!path.includes("/")) {
           return graphOk({ id: path, name: `Live ${path}`, followers_count: 1000, fan_count: 900 });
@@ -1762,7 +1783,7 @@ async function runAll30Tests() {
     return fetchBeforeLive(input, init);
   };
   try {
-    const liveResp = await callWorker("/api/insights/live?days=30&refresh=1", {
+    const liveResp = await callWorker("/api/insights/live?days=28&refresh=1", {
       headers: { Cookie: `session_token=${tokenA}` }
     });
     assert.equal(liveResp.status, 200);
@@ -1773,24 +1794,30 @@ async function runAll30Tests() {
     for (const pg of readable) {
       assert.equal(pg.followers, 1000);
       assert.equal(pg.views, 30, "Lượt xem lấy từ page_media_view của Meta");
+      assert.equal(pg.views_metric, "page_media_view");
       assert.equal(pg.engagement, 30);
       assert.equal(pg.new_follows, null, "Thiếu quyền -> null, không tự bịa");
-      assert.equal(pg.reels_count, 1, "Reels quá khoảng thời gian bị loại");
-      assert.equal(pg.reel_plays, 300);
-      assert.equal(pg.reel_reach, 200);
-      assert.equal(pg.likes, 5);
-      assert.equal(pg.shares, 4);
+      assert.equal(pg.daily.length, 2, "Có số liệu từng ngày cho từng Page");
+      assert.equal(pg.reels_count, 2, "Đọc hết các trang Reels; Reels quá khoảng thời gian bị loại");
+      assert.deepEqual(pg.reels.map((r) => r.video_id), [`reel_${pg.page_id}`, `reel2_${pg.page_id}`]);
+      assert.equal(pg.reels[1].length_seconds, 42);
+      assert.equal(pg.reel_plays, 600);
+      assert.equal(pg.reel_reach, 400);
+      assert.equal(pg.reactions, 10);
+      assert.equal(pg.comments, 5);
+      assert.equal(pg.shares, 8);
     }
     assert.equal(live.total_followers, 1000 * readable.length);
     assert.equal(live.new_follows, null);
+    assert.equal(live.reels_count, 2 * readable.length);
     assert.equal(live.top_reels[0].plays, 300);
     assert.ok(live.top_reels[0].permalink_url.startsWith("https://www.facebook.com/reel/"));
     assert.ok(live.warnings.some((w) => /read_insights/.test(w)), "Phải cảnh báo thiếu quyền read_insights");
-    assert.ok(liveBatchCalls <= 4, `Gọi Meta theo batch, không gọi từng request (${liveBatchCalls})`);
+    assert.ok(liveBatchCalls <= 6, `Gọi Meta theo batch, không gọi từng request (${liveBatchCalls})`);
 
     const callsBefore = liveBatchCalls;
     const cachedResp = await (
-      await callWorker("/api/insights/live?days=30", { headers: { Cookie: `session_token=${tokenA}` } })
+      await callWorker("/api/insights/live?days=28", { headers: { Cookie: `session_token=${tokenA}` } })
     ).json();
     assert.equal(cachedResp.cached, true);
     assert.equal(liveBatchCalls, callsBefore, "Lần tải lại trong 10 phút dùng bộ nhớ đệm");
