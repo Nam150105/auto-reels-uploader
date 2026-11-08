@@ -75,6 +75,64 @@ export function usePages() {
     isConnectModalOpen.value = true;
   };
 
+  /**
+   * Facebook login: opens the Facebook dialog in a popup. The user approves, the server exchanges the code
+   * for a long-lived token, syncs the Pages, and the callback page reports back here (postMessage).
+   * If popups are blocked, the whole page goes to Facebook and comes back with ?oauth_status=...
+   */
+  const connectWithFacebook = (targetAccountId: string | null = null): Promise<boolean> => {
+    const url = `/api/meta/login${targetAccountId ? `?reconnect_account_id=${encodeURIComponent(targetAccountId)}` : ""}`;
+    const w = 600;
+    const h = 720;
+    const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - w) / 2));
+    const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - h) / 2));
+    const popup = window.open(url, "fb_oauth", `width=${w},height=${h},left=${left},top=${top}`);
+    if (!popup) {
+      window.location.href = url;
+      return Promise.resolve(false);
+    }
+    popup.focus();
+
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (ok: boolean) => {
+        if (done) return;
+        done = true;
+        window.removeEventListener("message", onMessage);
+        window.clearInterval(closedTimer);
+        resolve(ok);
+      };
+      const onMessage = async (e: MessageEvent) => {
+        if (e.origin !== window.location.origin) return;
+        const data = e.data as { type?: string; success?: boolean; status?: string; message?: string; synced_count?: number };
+        if (!data || data.type !== "META_OAUTH_RESULT") return;
+        await handleOAuthResult(data.status || (data.success ? "success" : "error"), data.message || "", data.synced_count);
+        finish(Boolean(data.success));
+      };
+      window.addEventListener("message", onMessage);
+      // The user closed the window without finishing
+      const closedTimer = window.setInterval(() => {
+        if (popup.closed) window.setTimeout(() => finish(false), 500);
+      }, 700);
+    });
+  };
+
+  /** Shows the result of a Facebook login and refreshes Pages (used by the popup and the full-page fallback) */
+  const handleOAuthResult = async (status: string, message: string, syncedCount?: number) => {
+    if (status === "success") {
+      await loadPages();
+      toast.success(syncedCount ? `Facebook connected. ${syncedCount} Page(s) synced.` : message || "Facebook connected.");
+      isConnectModalOpen.value = false;
+      connectTargetAccountId.value = null;
+    } else if (status === "denied") {
+      toast.warning("Facebook connection was cancelled.");
+    } else if (status === "no_pages") {
+      toast.warning("This Facebook account does not manage any Pages, or no Page was selected in the Facebook window.");
+    } else {
+      toast.error(message || "Could not connect Facebook. Please try again.");
+    }
+  };
+
   const connectWithToken = async (token: string, targetAccountId: string | null = null) => {
     isLoading.value = true;
     try {
@@ -132,6 +190,8 @@ export function usePages() {
     loadPages,
     syncPages,
     openConnectModal,
+    connectWithFacebook,
+    handleOAuthResult,
     connectWithToken,
     deleteAccount
   };

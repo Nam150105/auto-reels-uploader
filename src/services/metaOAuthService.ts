@@ -28,6 +28,12 @@ export const REQUIRED_SCOPES = [
   "read_insights"
 ];
 
+/**
+ * Extra scopes asked in the Facebook login dialog only (not required to connect):
+ * business_management lists Pages the user manages through a Business Portfolio.
+ */
+export const OAUTH_EXTRA_SCOPES = ["business_management"];
+
 export const ESSENTIAL_PAGE_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
@@ -207,7 +213,7 @@ export async function generateOAuthUrl(
     redirect_uri: effectiveRedirectUri,
     state,
     response_type: "code",
-    scope: REQUIRED_SCOPES.join(","),
+    scope: [...REQUIRED_SCOPES, ...OAUTH_EXTRA_SCOPES].join(","),
     auth_type: "rerequest"
   });
 
@@ -217,7 +223,7 @@ export async function generateOAuthUrl(
     state,
     redirect_uri: effectiveRedirectUri,
     app_id: cfg.appId,
-    scopes: REQUIRED_SCOPES
+    scopes: [...REQUIRED_SCOPES, ...OAUTH_EXTRA_SCOPES]
   };
 }
 

@@ -99,7 +99,8 @@ const {
   connectTargetAccountId,
   expiredAccounts,
   expiredAccountNames,
-  openConnectModal
+  openConnectModal,
+  handleOAuthResult
 } = usePages();
 
 const activeTab = ref<"compose" | "schedule" | "analytics">("compose");
@@ -108,6 +109,18 @@ const composeMode = ref<"single" | "bulk">("single");
 onMounted(async () => {
   await checkAuth();
   await loadPages();
+
+  // Back from a full-page Facebook login (used when the popup was blocked)
+  const params = new URLSearchParams(window.location.search);
+  const oauthStatus = params.get("oauth_status");
+  if (oauthStatus) {
+    const oauthMsg = params.get("oauth_msg") || "";
+    params.delete("oauth_status");
+    params.delete("oauth_msg");
+    const qs = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`);
+    await handleOAuthResult(oauthStatus, oauthMsg);
+  }
 });
 
 const switchTab = (tab: "compose" | "schedule" | "analytics") => {
