@@ -2,73 +2,8 @@
   <div class="h-full flex flex-col lg:flex-row gap-4 p-4 lg:p-6 overflow-y-auto">
     <!-- COLUMN 1: Select Pages -->
     <div class="w-full lg:w-72 bg-white rounded-2xl border border-slate-200 p-4 flex flex-col flex-shrink-0 shadow-xs max-h-[85vh]">
-      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
-        <h3 class="font-bold text-sm text-slate-800">
-          Pages
-          <span class="text-blue-600 font-normal">({{ selectedPageIds.length }}/{{ pages.length }})</span>
-        </h3>
-        <button
-          type="button"
-          @click="toggleSelectAll"
-          class="text-xs font-semibold text-blue-600 hover:text-blue-700 transition"
-        >
-          {{ isAllSelected ? 'Clear' : 'Select all' }}
-        </button>
-      </div>
-
-      <!-- Search Box -->
-      <div class="py-2.5">
-        <div class="relative">
-          <input
-            v-model="searchQuery"
-            type="text"
-            placeholder="Search Pages..."
-            class="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition"
-          />
-          <svg class="w-4 h-4 text-slate-400 absolute left-2.5 top-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-        </div>
-      </div>
-
-      <!-- Pages List -->
-      <div class="flex-1 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
-        <div
-          v-for="page in filteredPages"
-          :key="page.facebook_page_id"
-          @click="togglePage(page.facebook_page_id)"
-          class="flex items-center justify-between p-2 rounded-xl border cursor-pointer transition select-none"
-          :class="selectedPageIds.includes(page.facebook_page_id) ? 'border-blue-500 bg-blue-50/50' : 'border-slate-100 hover:bg-slate-50'"
-        >
-          <div class="flex items-center gap-2.5 min-w-0">
-            <div class="w-8 h-8 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border border-slate-200 relative">
-              <img
-                v-if="page.avatar_url"
-                :src="page.avatar_url"
-                :alt="page.page_name"
-                class="w-full h-full object-cover"
-              />
-              <span v-else class="w-full h-full flex items-center justify-center font-bold text-slate-500 text-[10px]">FB</span>
-              <span class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-blue-600 rounded-full flex items-center justify-center text-[8px] text-white">f</span>
-            </div>
-            <div class="min-w-0">
-              <p class="text-xs font-semibold text-slate-800 truncate">{{ page.page_name }}</p>
-              <p class="text-[10px] text-slate-400 truncate">{{ page.category || 'Facebook Page' }}</p>
-            </div>
-          </div>
-
-          <input
-            type="checkbox"
-            :checked="selectedPageIds.includes(page.facebook_page_id)"
-            @click.stop="togglePage(page.facebook_page_id)"
-            class="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 border-slate-300"
-          />
-        </div>
-
-        <div v-if="filteredPages.length === 0" class="text-center py-6 text-slate-400 text-xs">
-          No Pages found
-        </div>
-      </div>
+      <h3 class="font-bold text-sm text-slate-800 pb-3 mb-3 border-b border-slate-100">Pages</h3>
+      <PagePicker v-model="selectedPageIds" :pages="pages" class="flex-1 min-h-0" />
     </div>
 
     <!-- COLUMN 2: Caption & media -->
@@ -268,6 +203,7 @@ import { api } from "../../services/api";
 import { getDefaultScheduleTime, isScheduleSlotAllowed } from "../../utils/date";
 import FacebookPreview from "./FacebookPreview.vue";
 import CommentListEditor from "./CommentListEditor.vue";
+import PagePicker from "./PagePicker.vue";
 import { createEmptyComment, filledComments, toCommentPayload, validateComments } from "../../utils/comments";
 import type { ComposerComment } from "@shared/types";
 import CalendarPickerModal from "../dialogs/CalendarPickerModal.vue";
@@ -276,7 +212,7 @@ const emit = defineEmits<{
   (e: "task-created"): void;
 }>();
 
-const { pages, filteredPages, searchQuery } = usePages();
+const { pages } = usePages();
 const toast = useToast();
 
 const selectedPageIds = ref<string[]>([]);
@@ -312,25 +248,8 @@ const firstSelectedPage = computed(() => {
   return pages.value.find((p) => p.facebook_page_id === selectedPageIds.value[0]);
 });
 
-const isAllSelected = computed(
-  () => pages.value.length > 0 && selectedPageIds.value.length === pages.value.length
-);
 
-const togglePage = (id: string) => {
-  if (selectedPageIds.value.includes(id)) {
-    selectedPageIds.value = selectedPageIds.value.filter((i) => i !== id);
-  } else {
-    selectedPageIds.value.push(id);
-  }
-};
 
-const toggleSelectAll = () => {
-  if (isAllSelected.value) {
-    selectedPageIds.value = [];
-  } else {
-    selectedPageIds.value = pages.value.map((p) => p.facebook_page_id);
-  }
-};
 
 const triggerFileInput = () => {
   fileInputRef.value?.click();

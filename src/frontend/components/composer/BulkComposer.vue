@@ -43,7 +43,7 @@
               <td class="py-3 px-4">
                 <div class="relative">
                   <div
-                    @click="activeChannelPopoverRowId = activeChannelPopoverRowId === row.id ? null : row.id"
+                    @click="togglePagePicker(row, $event)"
                     class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:border-blue-400 text-xs cursor-pointer flex items-center justify-between transition"
                   >
                     <span v-if="row.selectedPageIds.length === 0" class="text-slate-400">Select Pages</span>
@@ -55,25 +55,6 @@
                     </svg>
                   </div>
 
-                  <div
-                    v-if="activeChannelPopoverRowId === row.id"
-                    class="absolute left-0 top-full mt-1 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-40 space-y-1 max-h-48 overflow-y-auto"
-                  >
-                    <div
-                      v-for="page in pages"
-                      :key="page.facebook_page_id"
-                      @click="toggleRowChannel(row, page.facebook_page_id)"
-                      class="flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs"
-                    >
-                      <input
-                        type="checkbox"
-                        :checked="row.selectedPageIds.includes(page.facebook_page_id)"
-                        class="rounded text-blue-600 border-slate-300 w-3.5 h-3.5"
-                      />
-                      <span class="truncate">{{ page.page_name }}</span>
-                    </div>
-                    <p v-if="pages.length === 0" class="p-2 text-slate-400">No Pages connected yet.</p>
-                  </div>
                 </div>
               </td>
 
@@ -189,6 +170,38 @@
       </div>
     </div>
 
+    <Teleport to="body">
+      <template v-if="pickerRow">
+        <!-- click outside closes the picker -->
+        <div class="fixed inset-0 z-[60]" @click="closePagePicker"></div>
+        <div
+          ref="pickerPanelRef"
+          class="fixed w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-3 z-[61]"
+          :style="{ top: `${pickerPos.top}px`, left: `${pickerPos.left}px` }"
+        >
+          <PagePicker v-model="pickerRow.selectedPageIds" :pages="pages" list-class="max-h-64" />
+          <div class="flex items-center justify-between gap-2 pt-2 mt-2 border-t border-slate-100">
+            <button
+              v-if="rows.length > 1"
+              type="button"
+              @click="applyPagesToAllRows(pickerRow)"
+              class="text-[11px] font-semibold text-blue-600 hover:text-blue-700"
+            >
+              Use these Pages for all posts
+            </button>
+            <span v-else></span>
+            <button
+              type="button"
+              @click="closePagePicker"
+              class="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </template>
+    </Teleport>
+
     <CalendarPickerModal
       :isOpen="isCalendarOpen"
       :initialDate="calendarInitialDate"
@@ -207,7 +220,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { usePages } from "../../composables/usePages";
 import { useToast } from "../../composables/useToast";
 import { api } from "../../services/api";
@@ -216,6 +229,7 @@ import { filledComments, toCommentPayload, validateComments, delayLabel } from "
 import type { BulkComposerRow, ComposerComment } from "@shared/types";
 import CalendarPickerModal from "../dialogs/CalendarPickerModal.vue";
 import BulkCommentModal from "../dialogs/BulkCommentModal.vue";
+import PagePicker from "./PagePicker.vue";
 
 const emit = defineEmits<{
   (e: "tasks-created"): void;
@@ -231,11 +245,11 @@ const formatSlot = (date: string, time: string) => {
   return y && m && d ? `${time} ${d}/${m}/${y}` : `${date} ${time}`;
 };
 
-const createEmptyRow = (): BulkComposerRow => {
+const createEmptyRow = (initialPages?: string[]): BulkComposerRow => {
   const slot = getDefaultScheduleTime();
   return {
     id: `row_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    selectedPageIds: pages.value.length > 0 ? [pages.value[0].facebook_page_id] : [],
+    selectedPageIds: initialPages && initialPages.length ? [...initialPages] : pages.value.length > 0 ? [pages.value[0].facebook_page_id] : [],
     caption: "",
     mediaFile: null,
     mediaFileName: "",
@@ -251,6 +265,42 @@ const createEmptyRow = (): BulkComposerRow => {
 
 const rows = ref<BulkComposerRow[]>([createEmptyRow()]);
 const activeChannelPopoverRowId = ref<string | null>(null);
+const pickerRow = computed(() => rows.value.find((r) => r.id === activeChannelPopoverRowId.value) || null);
+const pickerPos = ref({ top: 0, left: 0 });
+const pickerPanelRef = ref<HTMLElement | null>(null);
+const PICKER_WIDTH = 320;
+const PICKER_HEIGHT = 460;
+
+/** Close when the page scrolls or resizes (but not when scrolling inside the picker itself) */
+const onViewportChange = (e: Event) => {
+  const target = e.target as Node | null;
+  if (target && pickerPanelRef.value && pickerPanelRef.value.contains(target)) return;
+  closePagePicker();
+};
+
+const closePagePicker = () => {
+  activeChannelPopoverRowId.value = null;
+  window.removeEventListener("scroll", onViewportChange, true);
+  window.removeEventListener("resize", onViewportChange);
+};
+
+const togglePagePicker = (row: BulkComposerRow, e: MouseEvent) => {
+  if (activeChannelPopoverRowId.value === row.id) {
+    closePagePicker();
+    return;
+  }
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const fitsBelow = rect.bottom + 4 + PICKER_HEIGHT <= window.innerHeight;
+  pickerPos.value = {
+    top: fitsBelow ? rect.bottom + 4 : Math.max(8, rect.top - 4 - PICKER_HEIGHT),
+    left: Math.max(8, Math.min(rect.left, window.innerWidth - PICKER_WIDTH - 8))
+  };
+  activeChannelPopoverRowId.value = row.id;
+  window.addEventListener("scroll", onViewportChange, true);
+  window.addEventListener("resize", onViewportChange);
+};
+
+onBeforeUnmount(closePagePicker);
 
 const isCalendarOpen = ref(false);
 const calendarTargetRowId = ref<string | null>(null);
@@ -263,8 +313,10 @@ const commentModalInitial = ref<ComposerComment[]>([]);
 
 const isSubmitting = ref(false);
 
+/** A new post starts with the same Pages as the post above it */
 const addNewRow = () => {
-  rows.value.push(createEmptyRow());
+  const last = rows.value[rows.value.length - 1];
+  rows.value.push(createEmptyRow(last?.selectedPageIds));
 };
 
 const deleteRow = (idx: number) => {
@@ -284,12 +336,12 @@ const getSelectedPagesSummary = (ids: string[]) => {
   return `${ids.length} Pages selected`;
 };
 
-const toggleRowChannel = (row: BulkComposerRow, pageId: string) => {
-  if (row.selectedPageIds.includes(pageId)) {
-    row.selectedPageIds = row.selectedPageIds.filter((id) => id !== pageId);
-  } else {
-    row.selectedPageIds.push(pageId);
-  }
+const applyPagesToAllRows = (source: BulkComposerRow) => {
+  rows.value.forEach((r) => {
+    r.selectedPageIds = [...source.selectedPageIds];
+  });
+  toast.success(`Applied ${source.selectedPageIds.length} Page(s) to all ${rows.value.length} posts.`);
+  closePagePicker();
 };
 
 const commentSummary = (row: BulkComposerRow) => {

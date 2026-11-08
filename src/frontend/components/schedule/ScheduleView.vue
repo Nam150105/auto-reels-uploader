@@ -142,18 +142,23 @@
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr
-              v-for="task in filteredTasks"
+              v-for="(task, taskIdx) in filteredTasks"
               :key="task.id"
               class="hover:bg-slate-50/70 transition"
               :class="{ 'bg-blue-50/20': selectedTaskIds.includes(task.id) }"
             >
-              <!-- Checkbox -->
-              <td class="py-3 px-4 text-center">
+              <!-- Checkbox: the whole cell is clickable, Shift + click selects a range -->
+              <td
+                class="py-3 px-4 text-center cursor-pointer"
+                title="Shift + click to select a range"
+                @mousedown.shift.prevent
+                @click="onSelectCellClick(task.id, taskIdx, $event)"
+              >
                 <input
                   type="checkbox"
                   :checked="selectedTaskIds.includes(task.id)"
-                  @change="toggleSelectTask(task.id)"
-                  class="rounded text-blue-600 focus:ring-blue-500 border-slate-300 w-4 h-4"
+                  tabindex="-1"
+                  class="rounded text-blue-600 focus:ring-blue-500 border-slate-300 w-4 h-4 pointer-events-none"
                 />
               </td>
 
@@ -436,4 +441,23 @@ const commentsTooltip = (task: { comments?: Array<{ text: string; has_image: boo
       return `${i + 1}. ${body}${photo}${err}`;
     })
     .join("\n");
+
+let lastSelectIndex = -1;
+/** Click toggles one post; Shift + click gives every post between the last click and this one the same state */
+const onSelectCellClick = (taskId: number, idx: number, e: MouseEvent) => {
+  const list = filteredTasks.value;
+  if (e.shiftKey && lastSelectIndex >= 0 && lastSelectIndex < list.length) {
+    const makeSelected = !selectedTaskIds.value.includes(taskId);
+    const [a, b] = lastSelectIndex < idx ? [lastSelectIndex, idx] : [idx, lastSelectIndex];
+    const next = new Set(selectedTaskIds.value);
+    for (const t of list.slice(a, b + 1)) {
+      if (makeSelected) next.add(t.id);
+      else next.delete(t.id);
+    }
+    selectedTaskIds.value = Array.from(next);
+  } else {
+    toggleSelectTask(taskId);
+  }
+  lastSelectIndex = idx;
+};
 </script>
