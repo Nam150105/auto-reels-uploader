@@ -1,50 +1,52 @@
 <template>
-  <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" @click.self="$emit('close')">
+  <div
+    v-if="isOpen"
+    class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+    @click.self="$emit('close')"
+  >
     <div class="bg-white rounded-2xl shadow-2xl border border-slate-100 p-4 max-w-sm w-full animate-in fade-in zoom-in duration-150 select-none">
       <div class="flex gap-4">
         <!-- Left: Month / Date Picker -->
         <div class="flex-1">
-          <!-- Month / Year Navigator: << < Nov 2026 > >> -->
           <div class="flex items-center justify-between pb-3 border-b border-slate-100 text-xs font-semibold text-slate-700">
-            <div class="flex items-center gap-1 text-slate-400">
-              <button type="button" @click="changeYear(-1)" class="p-1 hover:text-slate-700 rounded transition" title="Năm trước">
-                &laquo;
-              </button>
-              <button type="button" @click="changeMonth(-1)" class="p-1 hover:text-slate-700 rounded transition" title="Tháng trước">
-                &lsaquo;
-              </button>
-            </div>
-
+            <button
+              type="button"
+              @click="changeMonth(-1)"
+              :disabled="!canGoPrevMonth"
+              class="p-1 rounded transition text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:pointer-events-none"
+              title="Tháng trước"
+            >
+              &lsaquo;
+            </button>
             <span class="text-sm font-bold text-slate-800">{{ monthYearDisplay }}</span>
-
-            <div class="flex items-center gap-1 text-slate-400">
-              <button type="button" @click="changeMonth(1)" class="p-1 hover:text-slate-700 rounded transition" title="Tháng sau">
-                &rsaquo;
-              </button>
-              <button type="button" @click="changeYear(1)" class="p-1 hover:text-slate-700 rounded transition" title="Năm sau">
-                &raquo;
-              </button>
-            </div>
+            <button
+              type="button"
+              @click="changeMonth(1)"
+              class="p-1 rounded transition text-slate-400 hover:text-slate-700"
+              title="Tháng sau"
+            >
+              &rsaquo;
+            </button>
           </div>
 
-          <!-- Weekday Headers -->
           <div class="grid grid-cols-7 gap-1 text-center py-2 text-[11px] font-semibold text-slate-400">
-            <span v-for="w in ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']" :key="w">{{ w }}</span>
+            <span v-for="w in weekdays" :key="w">{{ w }}</span>
           </div>
 
-          <!-- Calendar Days Grid -->
           <div class="grid grid-cols-7 gap-1 text-center text-xs">
             <button
               v-for="cell in calendarDays"
               :key="cell.dateStr"
               type="button"
+              :disabled="cell.isOtherMonth || cell.isDisabled"
               @click="selectDay(cell)"
               class="w-7 h-7 mx-auto rounded-lg flex items-center justify-center transition-all text-xs"
               :class="{
-                'text-slate-300 pointer-events-none': cell.isOtherMonth,
-                'border border-blue-600 text-blue-600 font-bold bg-blue-50/50': cell.isSelected,
-                'text-slate-700 hover:bg-slate-100': !cell.isSelected && !cell.isOtherMonth,
-                'font-bold text-blue-700': cell.isToday && !cell.isSelected
+                'invisible': cell.isOtherMonth,
+                'text-slate-300 line-through decoration-slate-200 cursor-not-allowed': !cell.isOtherMonth && cell.isDisabled,
+                'bg-blue-600 text-white font-bold': cell.isSelected,
+                'text-slate-700 hover:bg-slate-100': !cell.isSelected && !cell.isDisabled && !cell.isOtherMonth,
+                'ring-1 ring-blue-300 font-bold text-blue-700': cell.isToday && !cell.isSelected && !cell.isDisabled
               }"
             >
               {{ cell.day }}
@@ -52,35 +54,46 @@
           </div>
         </div>
 
-        <!-- Right: Time Columns (Hours & Minutes) -->
+        <!-- Right: Time Columns -->
         <div class="w-24 pl-3 border-l border-slate-100 flex flex-col">
-          <div class="text-[10px] font-bold text-slate-400 uppercase text-center pb-2">
-            Giờ : Phút
-          </div>
+          <div class="text-[10px] font-bold text-slate-400 uppercase text-center pb-2">Giờ : Phút</div>
           <div class="flex gap-1 h-52 overflow-hidden">
-            <!-- Hours Column -->
-            <div class="flex-1 overflow-y-auto pr-0.5 space-y-1 text-center scrollbar-thin">
+            <div ref="hourColRef" class="flex-1 overflow-y-auto pr-0.5 space-y-1 text-center scrollbar-thin">
               <button
                 v-for="h in hoursList"
                 :key="h"
                 type="button"
-                @click="selectedHour = h"
+                :data-value="h"
+                :disabled="isHourDisabled(h)"
+                @click="selectHour(h)"
                 class="w-full py-1 text-xs rounded transition text-center"
-                :class="selectedHour === h ? 'bg-blue-600 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'"
+                :class="
+                  selectedHour === h
+                    ? 'bg-blue-600 text-white font-bold'
+                    : isHourDisabled(h)
+                      ? 'text-slate-300 cursor-not-allowed'
+                      : 'text-slate-600 hover:bg-slate-100'
+                "
               >
                 {{ h }}
               </button>
             </div>
-
-            <!-- Minutes Column -->
-            <div class="flex-1 overflow-y-auto pr-0.5 space-y-1 text-center scrollbar-thin">
+            <div ref="minuteColRef" class="flex-1 overflow-y-auto pr-0.5 space-y-1 text-center scrollbar-thin">
               <button
                 v-for="m in minutesList"
                 :key="m"
                 type="button"
+                :data-value="m"
+                :disabled="isMinuteDisabled(m)"
                 @click="selectedMinute = m"
                 class="w-full py-1 text-xs rounded transition text-center"
-                :class="selectedMinute === m ? 'bg-blue-600 text-white font-bold' : 'text-slate-600 hover:bg-slate-100'"
+                :class="
+                  selectedMinute === m
+                    ? 'bg-blue-600 text-white font-bold'
+                    : isMinuteDisabled(m)
+                      ? 'text-slate-300 cursor-not-allowed'
+                      : 'text-slate-600 hover:bg-slate-100'
+                "
               >
                 {{ m }}
               </button>
@@ -89,18 +102,20 @@
         </div>
       </div>
 
-      <!-- Footer: Now & OK -->
+      <p class="mt-3 text-[11px] text-slate-500 bg-slate-50 rounded-lg px-2.5 py-1.5">
+        Chỉ hẹn được từ <strong class="text-slate-700">{{ earliestDisplay }}</strong> trở đi (sau hiện tại tối thiểu {{ leadMinutes }} phút).
+      </p>
+
       <div class="flex items-center justify-between pt-3 mt-2 border-t border-slate-100 text-xs">
         <button
           type="button"
-          @click="selectNow"
+          @click="selectEarliest"
           class="text-blue-600 hover:text-blue-800 font-semibold px-2 py-1 rounded hover:bg-blue-50 transition"
         >
-          Now
+          Sớm nhất
         </button>
-
         <div class="flex items-center gap-2">
-          <span class="text-slate-500 font-mono text-[11px]">{{ selectedDateStr }} {{ selectedHour }}:{{ selectedMinute }}</span>
+          <span class="text-slate-600 font-mono text-[11px]">{{ selectionDisplay }}</span>
           <button
             type="button"
             @click="confirmSelection"
@@ -115,55 +130,143 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
-import { formatVnDate, formatVnTime, padZero } from "../../utils/date";
+import { ref, computed, watch, nextTick, onBeforeUnmount } from "vue";
+import {
+  padZero,
+  getEarliestScheduleSlot,
+  isScheduleSlotAllowed,
+  MIN_SCHEDULE_LEAD_MINUTES
+} from "../../utils/date";
 
-const props = defineProps<{
-  isOpen: boolean;
-  initialDate?: string;
-  initialTime?: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    isOpen: boolean;
+    initialDate?: string;
+    initialTime?: string;
+    minLeadMinutes?: number;
+  }>(),
+  { minLeadMinutes: MIN_SCHEDULE_LEAD_MINUTES }
+);
 
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "confirm", val: { date: string; time: string }): void;
 }>();
 
-const viewYear = ref<number>(new Date().getFullYear());
-const viewMonth = ref<number>(new Date().getMonth()); // 0-11
-const selectedDateStr = ref<string>(props.initialDate || formatVnDate());
-const selectedHour = ref<string>(props.initialTime ? props.initialTime.split(":")[0] : "08");
-const selectedMinute = ref<string>(props.initialTime ? props.initialTime.split(":")[1] : "00");
+const leadMinutes = computed(() => props.minLeadMinutes);
+const weekdays = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+const hoursList = Array.from({ length: 24 }, (_, i) => padZero(i));
+const minutesList = Array.from({ length: 60 }, (_, i) => padZero(i));
+
+// Mốc sớm nhất được tính lại định kỳ khi đang mở để các ô quá khứ tự khóa theo thời gian thực
+const tick = ref(0);
+let timer: ReturnType<typeof setInterval> | null = null;
+const earliest = computed(() => {
+  void tick.value;
+  return getEarliestScheduleSlot(leadMinutes.value);
+});
+const earliestHour = computed(() => earliest.value.time.split(":")[0]);
+const earliestMinute = computed(() => earliest.value.time.split(":")[1]);
+
+const selectedDateStr = ref<string>(earliest.value.date);
+const selectedHour = ref<string>(earliestHour.value);
+const selectedMinute = ref<string>(earliestMinute.value);
+const viewYear = ref<number>(Number(earliest.value.date.slice(0, 4)));
+const viewMonth = ref<number>(Number(earliest.value.date.slice(5, 7)) - 1);
+
+const hourColRef = ref<HTMLElement | null>(null);
+const minuteColRef = ref<HTMLElement | null>(null);
+
+const formatDisplay = (date: string, time: string) => {
+  const [y, m, d] = date.split("-");
+  return `${time} ${d}/${m}/${y}`;
+};
+const earliestDisplay = computed(() => formatDisplay(earliest.value.date, earliest.value.time));
+const selectionDisplay = computed(() =>
+  formatDisplay(selectedDateStr.value, `${selectedHour.value}:${selectedMinute.value}`)
+);
+
+const isHourDisabled = (h: string) =>
+  selectedDateStr.value < earliest.value.date ||
+  (selectedDateStr.value === earliest.value.date && h < earliestHour.value);
+
+const isMinuteDisabled = (m: string) =>
+  isHourDisabled(selectedHour.value) ||
+  (selectedDateStr.value === earliest.value.date &&
+    selectedHour.value === earliestHour.value &&
+    m < earliestMinute.value);
+
+/** Đưa lựa chọn về mốc hợp lệ gần nhất nếu đang rơi vào quá khứ */
+const clampSelection = () => {
+  const e = earliest.value;
+  if (selectedDateStr.value < e.date) {
+    selectedDateStr.value = e.date;
+  }
+  if (selectedDateStr.value === e.date) {
+    if (selectedHour.value < earliestHour.value) {
+      selectedHour.value = earliestHour.value;
+      selectedMinute.value = earliestMinute.value;
+    } else if (selectedHour.value === earliestHour.value && selectedMinute.value < earliestMinute.value) {
+      selectedMinute.value = earliestMinute.value;
+    }
+  }
+};
+
+const scrollToSelected = () => {
+  nextTick(() => {
+    for (const [col, val] of [
+      [hourColRef.value, selectedHour.value],
+      [minuteColRef.value, selectedMinute.value]
+    ] as const) {
+      const el = col?.querySelector<HTMLElement>(`[data-value="${val}"]`);
+      if (col && el) col.scrollTop = el.offsetTop - col.clientHeight / 2 + el.clientHeight / 2;
+    }
+  });
+};
 
 watch(
   () => props.isOpen,
   (open) => {
-    if (open) {
-      if (props.initialDate) {
-        selectedDateStr.value = props.initialDate;
-        const [y, m] = props.initialDate.split("-").map(Number);
-        if (y && m) {
-          viewYear.value = y;
-          viewMonth.value = m - 1;
-        }
-      }
-      if (props.initialTime) {
-        const [h, min] = props.initialTime.split(":");
-        selectedHour.value = h || "08";
-        selectedMinute.value = min || "00";
-      }
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
     }
-  }
+    if (!open) return;
+    tick.value++;
+    timer = setInterval(() => tick.value++, 15000);
+
+    const initDate = props.initialDate || "";
+    const initTime = props.initialTime || "";
+    if (initDate && initTime && isScheduleSlotAllowed(initDate, initTime, leadMinutes.value)) {
+      selectedDateStr.value = initDate;
+      selectedHour.value = initTime.split(":")[0] || earliestHour.value;
+      selectedMinute.value = initTime.split(":")[1] || earliestMinute.value;
+    } else {
+      selectedDateStr.value = earliest.value.date;
+      selectedHour.value = earliestHour.value;
+      selectedMinute.value = earliestMinute.value;
+    }
+    viewYear.value = Number(selectedDateStr.value.slice(0, 4));
+    viewMonth.value = Number(selectedDateStr.value.slice(5, 7)) - 1;
+    scrollToSelected();
+  },
+  { immediate: true }
 );
 
-const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Thời gian trôi qua khi đang mở: tự động đẩy lựa chọn lên mốc hợp lệ
+watch(earliest, clampSelection);
 
-const monthYearDisplay = computed(() => {
-  return `${months[viewMonth.value]} ${viewYear.value}`;
+onBeforeUnmount(() => {
+  if (timer) clearInterval(timer);
 });
 
-const hoursList = Array.from({ length: 24 }, (_, i) => padZero(i));
-const minutesList = Array.from({ length: 60 }, (_, i) => padZero(i));
+const monthYearDisplay = computed(() => `Tháng ${viewMonth.value + 1}, ${viewYear.value}`);
+
+const canGoPrevMonth = computed(() => {
+  const ey = Number(earliest.value.date.slice(0, 4));
+  const em = Number(earliest.value.date.slice(5, 7)) - 1;
+  return viewYear.value > ey || (viewYear.value === ey && viewMonth.value > em);
+});
 
 interface DayCell {
   day: number;
@@ -171,35 +274,21 @@ interface DayCell {
   isOtherMonth: boolean;
   isSelected: boolean;
   isToday: boolean;
+  isDisabled: boolean;
 }
 
-const calendarDays = computed(() => {
+const calendarDays = computed<DayCell[]>(() => {
   const y = viewYear.value;
   const m = viewMonth.value;
-
-  const firstDayOfWeek = new Date(y, m, 1).getDay(); // 0 is Sunday
-  const daysInMonth = new Date(y, m + 1, 0).getDate();
-  const daysInPrevMonth = new Date(y, m, 0).getDate();
-
+  // Tính thứ trong tuần theo UTC để không phụ thuộc múi giờ trình duyệt
+  const firstDayOfWeek = new Date(Date.UTC(y, m, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const todayStr = getEarliestScheduleSlot(0).date;
   const cells: DayCell[] = [];
-  const todayStr = formatVnDate();
 
-  // Previous month trailing days
-  for (let i = firstDayOfWeek - 1; i >= 0; i--) {
-    const day = daysInPrevMonth - i;
-    const prevM = m === 0 ? 12 : m;
-    const prevY = m === 0 ? y - 1 : y;
-    const dStr = `${prevY}-${padZero(prevM)}-${padZero(day)}`;
-    cells.push({
-      day,
-      dateStr: dStr,
-      isOtherMonth: true,
-      isSelected: false,
-      isToday: false
-    });
+  for (let i = 0; i < firstDayOfWeek; i++) {
+    cells.push({ day: 0, dateStr: `prev-${i}`, isOtherMonth: true, isSelected: false, isToday: false, isDisabled: true });
   }
-
-  // Current month days
   for (let d = 1; d <= daysInMonth; d++) {
     const dStr = `${y}-${padZero(m + 1)}-${padZero(d)}`;
     cells.push({
@@ -207,30 +296,16 @@ const calendarDays = computed(() => {
       dateStr: dStr,
       isOtherMonth: false,
       isSelected: dStr === selectedDateStr.value,
-      isToday: dStr === todayStr
+      isToday: dStr === todayStr,
+      isDisabled: dStr < earliest.value.date
     });
   }
-
-  // Next month leading days to complete grid (42 cells: 6 rows of 7)
-  const remaining = 42 - cells.length;
-  for (let d = 1; d <= remaining; d++) {
-    const nextM = m === 11 ? 1 : m + 2;
-    const nextY = m === 11 ? y + 1 : y;
-    const dStr = `${nextY}-${padZero(nextM)}-${padZero(d)}`;
-    cells.push({
-      day: d,
-      dateStr: dStr,
-      isOtherMonth: true,
-      isSelected: false,
-      isToday: false
-    });
-  }
-
   return cells;
 });
 
 const changeMonth = (delta: number) => {
-  let nm = viewMonth.value + delta;
+  if (delta < 0 && !canGoPrevMonth.value) return;
+  const nm = viewMonth.value + delta;
   if (nm > 11) {
     viewMonth.value = 0;
     viewYear.value += 1;
@@ -242,25 +317,32 @@ const changeMonth = (delta: number) => {
   }
 };
 
-const changeYear = (delta: number) => {
-  viewYear.value += delta;
-};
-
 const selectDay = (cell: DayCell) => {
-  if (cell.isOtherMonth) return;
+  if (cell.isOtherMonth || cell.isDisabled) return;
   selectedDateStr.value = cell.dateStr;
+  clampSelection();
+  scrollToSelected();
 };
 
-const selectNow = () => {
-  const now = new Date();
-  selectedDateStr.value = formatVnDate(now);
-  selectedHour.value = formatVnTime(now).split(":")[0];
-  selectedMinute.value = formatVnTime(now).split(":")[1];
-  viewYear.value = now.getFullYear();
-  viewMonth.value = now.getMonth();
+const selectHour = (h: string) => {
+  if (isHourDisabled(h)) return;
+  selectedHour.value = h;
+  clampSelection();
+};
+
+const selectEarliest = () => {
+  tick.value++;
+  selectedDateStr.value = earliest.value.date;
+  selectedHour.value = earliestHour.value;
+  selectedMinute.value = earliestMinute.value;
+  viewYear.value = Number(earliest.value.date.slice(0, 4));
+  viewMonth.value = Number(earliest.value.date.slice(5, 7)) - 1;
+  scrollToSelected();
 };
 
 const confirmSelection = () => {
+  tick.value++;
+  clampSelection();
   emit("confirm", {
     date: selectedDateStr.value,
     time: `${selectedHour.value}:${selectedMinute.value}`

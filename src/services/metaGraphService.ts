@@ -14,6 +14,7 @@ import {
   saveFacebookAccount,
   updateFacebookAccountStatus,
   upsertFacebookPage,
+  updatePageFollowerCounts,
   removeStaleAccountPages,
   getFacebookPages,
   getFacebookPageByFbId,
@@ -520,7 +521,7 @@ export async function syncPagesForAccount(
 
   try {
     let nextUrl: string | null =
-      `${cfg.graphBase}/me/accounts?fields=id,name,global_brand_page_name,access_token,category,picture{url},tasks,is_published&limit=100&access_token=${encodeURIComponent(userToken)}`;
+      `${cfg.graphBase}/me/accounts?fields=id,name,global_brand_page_name,access_token,category,picture{url},tasks,is_published,followers_count,fan_count&limit=100&access_token=${encodeURIComponent(userToken)}`;
 
     let syncedCount = 0;
     const syncedPageIds: string[] = [];
@@ -638,6 +639,13 @@ export async function syncPagesForAccount(
           tokenStatus: "valid",
           ownerUserId
         });
+        await updatePageFollowerCounts(
+          db,
+          pageId,
+          ownerUserId,
+          readGraphCount(item.followers_count),
+          readGraphCount(item.fan_count)
+        );
 
         syncedPageIds.push(pageId);
         syncedCount++;
@@ -2552,4 +2560,67 @@ export async function syncRecentPageVideos(
   } catch (err: any) {
     return { success: false, synced_count: 0, total_remote: 0, error: err?.message || "Lỗi đồng bộ video." };
   }
+}
+
+function readGraphCount(v: unknown): number | null {
+  const n = Number(v);
+  return v !== undefined && v !== null && Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+}
+
+/**
+ * Làm mới số người theo dõi của các Fanpage (1 request /me/accounts cho mỗi tài khoản Facebook).
+ * Không ghi đè token hay quyền của Page; lỗi được bỏ qua để không ảnh hưởng luồng thống kê.
+ */
+export async function refreshPageFollowerCounts(
+  db: D1Database,
+  env: Env,
+  ownerUserId: string
+): Promise<{ updated_count: number }> {
+  const cfg = getMetaConfig(env);
+  let updated = 0;
+  let accounts: Array<{ access_token?: string | null; status?: string }> = [];
+  try {
+    accounts = (await getFacebookAccounts(db, cfg.encryptionKey, true, ownerUserId)) as Array<{
+      access_token?: string | null;
+      status?: string;
+    }>;
+  } catch {
+    return { updated_count: 0 };
+  }
+
+  for (const acc of accounts.slice(0, 10)) {
+    const token = (acc.access_token || "").trim();
+    if (!token) continue;
+    let nextUrl: string | null =
+      `${cfg.graphBase}/me/accounts?fields=id,followers_count,fan_count&limit=100&access_token=${encodeURIComponent(token)}`;
+    let guard = 0;
+    while (nextUrl && guard < 3) {
+      guard++;
+      try {
+        const resp = await fetch(nextUrl);
+        const data = (await resp.json()) as {
+          data?: Array<Record<string, unknown>>;
+          paging?: { next?: string };
+          error?: unknown;
+        };
+        if (!resp.ok || data.error) break;
+        for (const item of data.data || []) {
+          const pageId = String(item.id || "").trim();
+          if (!pageId) continue;
+          await updatePageFollowerCounts(
+            db,
+            pageId,
+            ownerUserId,
+            readGraphCount(item.followers_count),
+            readGraphCount(item.fan_count)
+          );
+          updated++;
+        }
+        nextUrl = data.paging?.next || null;
+      } catch {
+        break;
+      }
+    }
+  }
+  return { updated_count: updated };
 }

@@ -73,7 +73,8 @@ import {
   postReelCommentViaGraphApi,
   getMetaApiTelemetrySummary,
   deleteFacebookReelOrPost,
-  syncRecentPageVideos
+  syncRecentPageVideos,
+  refreshPageFollowerCounts
 } from "./services/metaGraphService.ts";
 import {
   syncFacebookPagePosts,
@@ -109,6 +110,12 @@ import {
 } from "./routes/responseHelpers.ts";
 import { handleComplianceRoutes } from "./routes/complianceRoutes.ts";
 import { handleMediaRoutes } from "./routes/mediaRoutes.ts";
+import {
+  isComposerTaskPayload,
+  isComposerBulkPayload,
+  handleComposerCreateTask,
+  handleComposerBulkCreate
+} from "./routes/composerRoutes.ts";
 import { getD1Database } from "./fallback_d1.ts";
 
 function sanitizeInternalRedirect(raw: string | null): string {
@@ -890,6 +897,17 @@ export async function handleWorkerRequest(
     }
 
     if (pathname === "/api/tasks" && method === "POST") {
+      const composerBody = await request.clone().json().catch(() => null);
+      if (isComposerTaskPayload(composerBody)) {
+        return handleComposerCreateTask(
+          composerBody as Record<string, unknown>,
+          db,
+          env,
+          ctx,
+          ownerUserId,
+          encryptionKey
+        );
+      }
       const body = (await request.json()) as {
         facebook_page_id?: string;
         profile_id?: string;
@@ -1045,6 +1063,16 @@ export async function handleWorkerRequest(
     }
 
     if (pathname === "/api/tasks/bulk" && method === "POST") {
+      const composerBulk = await request.clone().json().catch(() => null);
+      if (isComposerBulkPayload(composerBulk)) {
+        return handleComposerBulkCreate(
+          composerBulk as { tasks: Record<string, unknown>[] },
+          db,
+          env,
+          ownerUserId,
+          encryptionKey
+        );
+      }
       const body = (await request.json().catch(() => ({}))) as {
         tasks?: Array<{
           video_path: string;
@@ -1998,6 +2026,13 @@ export async function handleWorkerRequest(
         taskId: body.task_id ? Number(body.task_id) : null,
         limit: body.limit ? Number(body.limit) : 20
       });
+      if (!body.task_id) {
+        try {
+          await refreshPageFollowerCounts(db, env, ownerUserId);
+        } catch {
+          // Số người theo dõi là phụ, không chặn kết quả đồng bộ
+        }
+      }
       return jsonResponse(syncRes);
     }
 

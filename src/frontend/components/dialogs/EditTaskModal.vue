@@ -36,23 +36,22 @@
         </div>
 
         <!-- Schedule Date & Time -->
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block font-semibold text-slate-700 mb-1">Ngày đăng (YYYY-MM-DD):</label>
-            <input
-              v-model="scheduleDate"
-              type="date"
-              class="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label class="block font-semibold text-slate-700 mb-1">Giờ đăng (HH:mm):</label>
-            <input
-              v-model="scheduleTime"
-              type="time"
-              class="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">Thời gian đăng (giờ Việt Nam):</label>
+          <button
+            type="button"
+            @click="isCalendarOpen = true"
+            class="w-full px-3 py-2 text-xs rounded-xl border bg-white flex items-center justify-between transition hover:border-blue-400"
+            :class="isScheduleSlotAllowed(scheduleDate, scheduleTime) ? 'border-slate-200 text-slate-800' : 'border-rose-300 text-rose-600'"
+          >
+            <span>{{ scheduleDisplay }}</span>
+            <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </button>
+          <p v-if="!isScheduleSlotAllowed(scheduleDate, scheduleTime)" class="mt-1 text-[11px] text-rose-600">
+            Thời gian này đã qua. Vui lòng chọn thời điểm sau hiện tại ít nhất 5 phút.
+          </p>
         </div>
 
         <!-- First Comment -->
@@ -89,11 +88,21 @@
         </button>
       </div>
     </div>
+
+    <CalendarPickerModal
+      :isOpen="isCalendarOpen"
+      :initialDate="scheduleDate"
+      :initialTime="scheduleTime"
+      @close="isCalendarOpen = false"
+      @confirm="onCalendarConfirm"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, computed } from "vue";
+import CalendarPickerModal from "./CalendarPickerModal.vue";
+import { isScheduleSlotAllowed } from "../../utils/date";
 import type { TaskRecord } from "@shared/types";
 import { api } from "../../services/api";
 import { useToast } from "../../composables/useToast";
@@ -114,6 +123,17 @@ const scheduleDate = ref("");
 const scheduleTime = ref("");
 const commentText = ref("");
 const isSubmitting = ref(false);
+const isCalendarOpen = ref(false);
+
+const scheduleDisplay = computed(() => {
+  const [y, m, d] = (scheduleDate.value || "").split("-");
+  return y && m && d ? `${scheduleTime.value} ngày ${d}/${m}/${y}` : "Chọn thời gian đăng";
+});
+
+const onCalendarConfirm = (val: { date: string; time: string }) => {
+  scheduleDate.value = val.date;
+  scheduleTime.value = val.time;
+};
 
 watch(
   () => props.task,
@@ -130,6 +150,11 @@ watch(
 
 const submitUpdate = async () => {
   if (!props.task) return;
+  if (!isScheduleSlotAllowed(scheduleDate.value, scheduleTime.value)) {
+    toast.warning("Thời gian đăng phải sau thời điểm hiện tại ít nhất 5 phút. Vui lòng chọn lại.");
+    isCalendarOpen.value = true;
+    return;
+  }
   isSubmitting.value = true;
   try {
     await api.updateTask(props.task.id, {

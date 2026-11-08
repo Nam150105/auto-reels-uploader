@@ -7,7 +7,7 @@
           {{ t('analytics_overview') }}
         </h2>
         <p class="text-xs text-slate-500 mt-0.5">
-          Dữ liệu thống kê Reels & Fanpage được tổng hợp trực tiếp từ Meta Graph API chính thức.
+          Số liệu Reels và Fanpage lấy từ Facebook (30 ngày gần nhất).
           <span v-if="dashboard?.last_synced_at" class="text-slate-400 ml-1">
             (Đồng bộ lần cuối: {{ formatLastSync(dashboard.last_synced_at) }})
           </span>
@@ -29,6 +29,13 @@
       </div>
     </div>
 
+    <div
+      v-if="dashboard?.warnings?.length"
+      class="mb-4 p-3 rounded-2xl border border-amber-200 bg-amber-50 text-amber-800 text-xs space-y-1"
+    >
+      <p v-for="(w, i) in dashboard.warnings" :key="i">{{ w }}</p>
+    </div>
+
     <!-- 4 Overview Metric Cards -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <!-- 1. FOLLOWERS -->
@@ -42,10 +49,10 @@
           </div>
         </div>
         <p class="text-2xl font-black text-slate-900 tracking-tight">
-          {{ formatNumber(dashboard?.total_followers || 0) }}
+          {{ formatNumber(dashboard?.total_followers ?? null) }}
         </p>
         <span class="text-[10px] text-emerald-600 font-semibold mt-1 block">
-          Tổng lượt theo dõi thực tế trên các Fanpage
+          {{ dashboard?.total_followers == null ? 'Nhấn "Đồng bộ ngay" để cập nhật' : `Tổng của ${dashboard?.total_pages || 0} Fanpage` }}
         </span>
       </div>
 
@@ -64,7 +71,7 @@
           {{ formatNumber(dashboard?.views_7d || 0) }}
         </p>
         <span class="text-[10px] text-indigo-600 font-semibold mt-1 block">
-          Lượt xem Video Reels trong 7 ngày qua
+          Của các Reels đăng trong 7 ngày qua
         </span>
       </div>
 
@@ -82,7 +89,7 @@
           {{ formatNumber(dashboard?.views_30d || 0) }}
         </p>
         <span class="text-[10px] text-purple-600 font-semibold mt-1 block">
-          Tổng lượt xem Video Reels trong tháng
+          Của các Reels đăng trong 30 ngày qua
         </span>
       </div>
 
@@ -97,10 +104,10 @@
           </div>
         </div>
         <p class="text-2xl font-black text-slate-900 tracking-tight">
-          +{{ formatNumber(dashboard?.new_follows_30d || 0) }}
+          {{ formatNumber(dashboard?.posts_30d || 0) }}
         </p>
         <span class="text-[10px] text-emerald-600 font-semibold mt-1 block">
-          Lượt theo dõi mới tăng thêm 30 ngày
+          {{ dashboard?.posts_7d || 0 }} bài trong 7 ngày qua
         </span>
       </div>
     </div>
@@ -190,7 +197,7 @@
           {{ t('page_comparison_title') }}
         </h3>
         <span class="text-xs text-slate-500 font-medium">
-          {{ (dashboard?.pages || []).length }} Fanpage đã kết nối
+          {{ (dashboard?.pages || []).length }} Fanpage · "—" là chưa có dữ liệu
         </span>
       </div>
 
@@ -206,7 +213,7 @@
               <th class="py-3 px-4 text-right">{{ t('col_likes') }}</th>
               <th class="py-3 px-4 text-right">{{ t('col_comments') }}</th>
               <th class="py-3 px-4 text-right">{{ t('col_shares') }}</th>
-              <th class="py-3 px-4 text-center">Trạng thái Token</th>
+              <th class="py-3 px-4 text-center">Kết nối</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -231,37 +238,37 @@
 
               <!-- Followers -->
               <td class="py-3 px-4 text-right font-bold text-slate-900">
-                {{ formatNumber(page.followers_count || 0) }}
+                {{ formatNumber(page.followers_count) }}
               </td>
 
               <!-- Total Reels -->
               <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_reels || 0) }}
+                {{ formatNumber(page.posts_30d) }}
               </td>
 
               <!-- Total Views -->
               <td class="py-3 px-4 text-right font-bold text-blue-600">
-                {{ formatNumber(page.total_views || 0) }}
+                {{ formatNumber(page.total_views) }}
               </td>
 
               <!-- Total Reach -->
               <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_reach || 0) }}
+                {{ formatNumber(page.total_reach) }}
               </td>
 
               <!-- Likes -->
               <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_likes || 0) }}
+                {{ formatNumber(page.total_likes) }}
               </td>
 
               <!-- Comments -->
               <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_comments || 0) }}
+                {{ formatNumber(page.total_comments) }}
               </td>
 
               <!-- Shares -->
               <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_shares || 0) }}
+                {{ formatNumber(page.total_shares) }}
               </td>
 
               <!-- Token Status -->
@@ -270,14 +277,14 @@
                   class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
                   :class="page.token_status === 'valid' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'"
                 >
-                  <span>{{ page.token_status === 'valid' ? '✓ Hợp lệ' : '! Hết hạn' }}</span>
+                  <span>{{ page.token_status === 'valid' ? '✓ Hoạt động' : '! Cần kết nối lại' }}</span>
                 </span>
               </td>
             </tr>
 
             <tr v-if="!dashboard?.pages || dashboard.pages.length === 0">
               <td colspan="9" class="text-center py-10 text-slate-400 text-xs">
-                Chưa có dữ liệu thống kê từ Facebook. Hãy nhấn "Đồng bộ ngay" để cập nhật số liệu.
+                Chưa có Fanpage nào. Hãy kết nối Fanpage rồi nhấn "Đồng bộ ngay".
               </td>
             </tr>
           </tbody>
@@ -299,7 +306,8 @@ onMounted(() => {
   loadAnalytics();
 });
 
-const formatNumber = (num: number): string => {
+const formatNumber = (num: number | null | undefined): string => {
+  if (num === null || num === undefined || !Number.isFinite(num)) return "—";
   return new Intl.NumberFormat("vi-VN").format(num);
 };
 
@@ -342,7 +350,7 @@ const chartPoints = computed(() => {
   const stepX = 700 / Math.max(ts.length - 1, 1);
 
   return ts.map((pt, idx) => ({
-    date: pt.date.substring(5), // MM-DD
+    date: `${pt.date.substring(8, 10)}/${pt.date.substring(5, 7)}`, // DD/MM
     x: 50 + idx * stepX,
     yViews: 170 - (pt.views / maxVal) * 140,
     yReach: 170 - (pt.reach / maxVal) * 140

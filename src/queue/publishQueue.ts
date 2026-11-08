@@ -24,7 +24,9 @@ import {
   recordTaskAttemptStart,
   recordTaskAttemptFinish,
   prepareTasksForPublishNow,
-  recordTaskAuditLog
+  recordTaskAuditLog,
+  normalizeCommentDelayMinutes,
+  scheduleTaskComment
 } from "../db.ts";
 import {
   getMetaConfig,
@@ -223,6 +225,7 @@ export async function consumeSingleTaskMessage(
       cleanComment &&
       !existingTask.comment_id &&
       existingTask.comment_status !== "success" &&
+      existingTask.comment_status !== "scheduled" &&
       Boolean(existingTask.facebook_page_id);
 
     if (needsComment) {
@@ -466,8 +469,31 @@ export async function consumeSingleTaskMessage(
 
     // BƯỚC 5, 6, 7: XỬ LÝ ĐĂNG BÌNH LUẬN RIÊNG BIỆT (TÁCH BIỆT VỚI REELS)
     const cleanComment = (claimedTask.comment_text || "").trim();
+    const commentDelayMin = normalizeCommentDelayMinutes(
+      (claimedTask as { comment_delay_minutes?: number | null }).comment_delay_minutes
+    );
     if (!cleanComment) {
       await updateTaskCommentState(db, claimedTask.id, "none", "");
+    } else if (commentDelayMin > 0) {
+      // Bình luận hẹn giờ: Cron sẽ đăng khi đến hạn (comment_due_at)
+      const dueAt = nowUtcSeconds() + commentDelayMin * 60;
+      const delayText = formatCommentDelay(commentDelayMin);
+      await scheduleTaskComment(db, claimedTask.id, dueAt, `Bình luận sẽ được đăng sau ${delayText}.`);
+      await updateTaskExecutionState(
+        db,
+        claimedTask.id,
+        "success",
+        `Đã đăng Reels thành công! (Bình luận sẽ được đăng sau ${delayText})`,
+        { clearLease: true }
+      );
+      await appendTaskStageLog(
+        db,
+        claimedTask.id,
+        msg.owner_user_id,
+        "INFO",
+        "comment_scheduled",
+        `Bình luận tự động được hẹn đăng sau ${delayText}.`
+      );
     } else {
       await updateTaskCommentState(db, claimedTask.id, "processing", "Đang đăng bình luận tự động...");
       await appendTaskStageLog(
@@ -865,3 +891,67 @@ export async function handleNativeQueueBatch(
   }
 }
 
+export function formatCommentDelay(minutes: number): string {
+  if (minutes % 60 === 0) return `${minutes / 60} giờ`;
+  if (minutes > 60) return `${Math.floor(minutes / 60)} giờ ${minutes % 60} phút`;
+  return `${minutes} phút`;
+}
+
+/**
+ * Đăng bình luận hẹn giờ cho 1 task đã xuất bản (được Cron gọi khi comment_due_at đến hạn).
+ * Task phải đã được claim sang comment_status = 'processing' trước khi gọi.
+ */
+export async function postScheduledTaskComment(
+  db: D1Database,
+  env: Env,
+  taskId: number,
+  ownerUserId: string
+): Promise<{ success: boolean; message: string }> {
+  const cfg = getMetaConfig(env);
+  const task = await getTask(db, taskId, ownerUserId);
+  if (!task) return { success: false, message: "Không tìm thấy bài đăng." };
+
+  const cleanComment = (task.comment_text || "").trim();
+  if (!cleanComment || task.comment_id) {
+    await updateTaskCommentState(db, taskId, task.comment_id ? "success" : "none", "");
+    return { success: true, message: "Không có bình luận cần đăng." };
+  }
+  if (!task.facebook_page_id || !(task.post_id || task.video_id)) {
+    const msgText = "Bài đăng chưa có thông tin bài viết trên Facebook để bình luận.";
+    await updateTaskCommentState(db, taskId, "failed", msgText);
+    return { success: false, message: msgText };
+  }
+
+  const page = await getFacebookPageByFbId(db, cfg.encryptionKey, task.facebook_page_id, true, ownerUserId);
+  if (!page || !page.page_access_token) {
+    const msgText = "Fanpage chưa được kết nối hoặc đã hết quyền. Vui lòng kết nối lại rồi thử đăng lại bình luận.";
+    await updateTaskCommentState(db, taskId, "failed", msgText);
+    return { success: false, message: msgText };
+  }
+
+  const cmtRes = await postReelCommentViaGraphApi(db, env, {
+    facebookPageId: page.facebook_page_id || task.facebook_page_id,
+    pageAccessToken: page.page_access_token,
+    postId: task.post_id || task.video_id,
+    videoId: task.video_id,
+    commentText: cleanComment,
+    ownerUserId,
+    taskId
+  });
+
+  if (cmtRes.success) {
+    await updateTaskCommentState(db, taskId, "success", cmtRes.message, {
+      commentId: cmtRes.comment_id,
+      commentPostedAt: new Date().toISOString()
+    });
+    await updateTaskExecutionState(db, taskId, "success", "Đã đăng Reels thành công! (Đã đăng bình luận tự động)", {
+      clearLease: true
+    });
+    await appendTaskStageLog(db, taskId, ownerUserId, "INFO", "comment_success", cmtRes.message);
+    return { success: true, message: cmtRes.message };
+  }
+
+  await updateTaskCommentState(db, taskId, "failed", cmtRes.message);
+  await appendTaskStageLog(db, taskId, ownerUserId, "WARN", "comment_failed", cmtRes.message);
+  return { success: false, message: cmtRes.message };
+}

@@ -135,17 +135,18 @@ export interface SingleComposerState {
   isSubmitting: boolean;
 }
 
+/** null = chưa có dữ liệu từ Facebook (hiển thị "—"), không suy đoán */
 export interface PageAnalyticsComparison {
   page_id: string;
   page_name: string;
   avatar_url: string;
-  followers_count: number;
-  total_reels: number;
-  total_views: number;
-  total_reach: number;
-  total_likes: number;
-  total_comments: number;
-  total_shares: number;
+  followers_count: number | null;
+  posts_30d: number;
+  total_views: number | null;
+  total_reach: number | null;
+  total_likes: number | null;
+  total_comments: number | null;
+  total_shares: number | null;
   token_status: string;
   can_analyze: boolean;
 }
@@ -159,18 +160,13 @@ export interface AnalyticsTimeSeriesPoint {
 
 export interface AnalyticsDashboard {
   total_pages: number;
-  total_followers: number;
+  total_followers: number | null;
   views_7d: number;
   views_30d: number;
-  new_follows_30d: number;
-  total_reels_published: number;
-  total_views: number;
-  total_reach: number;
-  total_likes: number;
-  total_comments: number;
-  total_shares: number;
+  posts_7d: number;
+  posts_30d: number;
   pages: PageAnalyticsComparison[];
   time_series: AnalyticsTimeSeriesPoint[];
-  has_read_insights_permission: boolean;
+  warnings: string[];
   last_synced_at?: string | null;
 }

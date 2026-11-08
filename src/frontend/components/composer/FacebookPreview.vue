@@ -1,106 +1,163 @@
 <template>
   <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm select-none">
-    <div class="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 text-xs text-slate-500 font-semibold">
-      <span>Xem trước bài đăng Facebook</span>
-      <span class="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">Reels / Video</span>
+    <div class="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
+      <span class="text-xs font-semibold text-slate-500">Xem trước trên Facebook</span>
+      <span class="inline-flex items-center gap-1 text-[10px] font-bold bg-slate-900 text-white px-2 py-0.5 rounded-full">
+        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+        Reels
+      </span>
     </div>
 
-    <!-- Facebook Post Card Container -->
-    <div class="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs max-w-sm mx-auto">
-      <!-- Post Header: Avatar, Name, Timestamp, Public Icon -->
-      <div class="p-3 flex items-center gap-2.5">
-        <div class="w-10 h-10 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border border-slate-100">
-          <img
-            v-if="selectedPage?.avatar_url"
-            :src="selectedPage.avatar_url"
-            :alt="selectedPage.page_name"
-            class="w-full h-full object-cover"
-          />
-          <div v-else class="w-full h-full flex items-center justify-center font-bold text-slate-500 text-xs">
-            FB
-          </div>
-        </div>
+    <!-- Reel frame 9:16 -->
+    <div class="relative mx-auto w-full max-w-[270px] aspect-[9/16] rounded-[22px] overflow-hidden bg-black shadow-lg ring-1 ring-black/10">
+      <video
+        v-if="mediaPreviewUrl"
+        ref="videoRef"
+        :src="mediaPreviewUrl"
+        class="absolute inset-0 w-full h-full object-cover"
+        autoplay
+        loop
+        playsinline
+        :muted="isMuted"
+        @click="togglePlay"
+        @play="isPlaying = true"
+        @pause="isPlaying = false"
+        @timeupdate="onTimeUpdate"
+      ></video>
+      <div
+        v-else
+        class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gradient-to-b from-slate-800 to-slate-950 text-slate-400"
+      >
+        <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+        <span class="text-[11px]">Chọn video để xem trước</span>
+      </div>
 
-        <div class="flex-1 min-w-0">
-          <h4 class="font-bold text-xs text-slate-900 truncate">
-            {{ selectedPage?.page_name || 'Tên Fanpage của bạn' }}
-          </h4>
-          <div class="flex items-center gap-1 text-[11px] text-slate-500">
-            <span>Vừa xong</span>
-            <span>&bull;</span>
-            <svg class="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+      <!-- Top bar -->
+      <div class="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/60 to-transparent pointer-events-none"></div>
+      <div class="absolute top-2.5 inset-x-3 flex items-center justify-between text-white">
+        <span class="text-[15px] font-bold tracking-tight drop-shadow">Reels</span>
+        <div class="flex items-center gap-2.5">
+          <button
+            v-if="mediaPreviewUrl"
+            type="button"
+            @click.stop="isMuted = !isMuted"
+            class="w-6 h-6 rounded-full bg-black/30 flex items-center justify-center"
+            :title="isMuted ? 'Bật tiếng' : 'Tắt tiếng'"
+          >
+            <svg v-if="isMuted" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zM19 12c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
             </svg>
+            <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
+            </svg>
+          </button>
+          <svg class="w-5 h-5 drop-shadow" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+            <circle cx="12" cy="13" r="3" stroke-width="2" />
+          </svg>
+        </div>
+      </div>
+
+      <!-- Paused indicator -->
+      <div
+        v-if="mediaPreviewUrl && !isPlaying"
+        class="absolute inset-0 flex items-center justify-center pointer-events-none"
+      >
+        <div class="w-14 h-14 rounded-full bg-black/40 flex items-center justify-center">
+          <svg class="w-7 h-7 text-white ml-1" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+        </div>
+      </div>
+
+      <!-- Bottom gradient -->
+      <div class="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none"></div>
+
+      <!-- Right action rail -->
+      <div class="absolute right-2 bottom-14 flex flex-col items-center gap-3.5 text-white">
+        <div class="flex flex-col items-center gap-0.5">
+          <svg class="w-6 h-6 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z" />
+          </svg>
+          <span class="text-[10px] font-semibold drop-shadow">Thích</span>
+        </div>
+        <div class="flex flex-col items-center gap-0.5">
+          <svg class="w-6 h-6 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.03 2 11c0 2.62 1.25 4.97 3.24 6.6L4.5 22l4.3-2.33c1 .27 2.07.42 3.2.42 5.52 0 10-4.03 10-9S17.52 2 12 2z" />
+          </svg>
+          <span class="text-[10px] font-semibold drop-shadow">{{ hasComment ? 1 : 0 }}</span>
+        </div>
+        <div class="flex flex-col items-center gap-0.5">
+          <svg class="w-6 h-6 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11z" />
+          </svg>
+          <span class="text-[10px] font-semibold drop-shadow">Chia sẻ</span>
+        </div>
+        <svg class="w-5 h-5 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
+        </svg>
+        <div class="w-7 h-7 rounded-md overflow-hidden border-2 border-white/80 bg-slate-600">
+          <img v-if="pageAvatar" :src="pageAvatar" alt="" class="w-full h-full object-cover" />
+        </div>
+      </div>
+
+      <!-- Bottom-left: page, caption, audio -->
+      <div class="absolute left-3 right-12 bottom-4 text-white space-y-1.5">
+        <div class="flex items-center gap-2 min-w-0">
+          <div class="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 ring-1 ring-white/70 bg-slate-500">
+            <img v-if="pageAvatar" :src="pageAvatar" :alt="pageName" class="w-full h-full object-cover" />
+            <span v-else class="w-full h-full flex items-center justify-center text-[10px] font-bold">{{ pageInitial }}</span>
           </div>
+          <span class="text-[13px] font-semibold truncate drop-shadow">{{ pageName }}</span>
+          <span class="text-[11px] text-white/80">·</span>
+          <span class="text-[11px] font-semibold border border-white/80 rounded-md px-1.5 py-px flex-shrink-0">Theo dõi</span>
         </div>
 
-        <button type="button" class="text-slate-400 hover:text-slate-600 p-1">
-          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-            <circle cx="5" cy="12" r="2" />
-            <circle cx="12" cy="12" r="2" />
-            <circle cx="19" cy="12" r="2" />
-          </svg>
+        <p
+          v-if="caption && caption.trim()"
+          class="text-[12px] leading-snug drop-shadow whitespace-pre-line break-words"
+          :class="captionExpanded ? 'max-h-32 overflow-y-auto pr-1' : 'line-clamp-2'"
+        >
+          <template v-for="(part, i) in captionParts" :key="i">
+            <span :class="part.tag ? 'font-semibold' : ''">{{ part.text }}</span>
+          </template>
+        </p>
+        <button
+          v-if="caption && caption.length > 80"
+          type="button"
+          @click="captionExpanded = !captionExpanded"
+          class="text-[11px] font-semibold text-white/80"
+        >
+          {{ captionExpanded ? 'Ẩn bớt' : 'Xem thêm' }}
         </button>
-      </div>
 
-      <!-- Caption Text -->
-      <div class="px-3 pb-2 text-xs text-slate-800 whitespace-pre-line leading-relaxed">
-        <p v-if="caption && caption.trim()">{{ caption }}</p>
-        <p v-else class="text-slate-400 italic">Nội dung bài viết sẽ xuất hiện ở đây...</p>
-      </div>
-
-      <!-- Video / Media Container -->
-      <div class="bg-black aspect-[9/16] max-h-[360px] flex items-center justify-center relative overflow-hidden group">
-        <video
-          v-if="mediaPreviewUrl"
-          :src="mediaPreviewUrl"
-          controls
-          class="w-full h-full object-contain"
-        ></video>
-        <div v-else class="text-center p-6 text-slate-500 flex flex-col items-center gap-2">
-          <svg class="w-12 h-12 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        <div class="flex items-center gap-1.5 text-[11px] text-white/90 min-w-0">
+          <svg class="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 3v10.55A4 4 0 1014 17V7h4V3h-6z" />
           </svg>
-          <span class="text-xs">Chưa có video được chọn</span>
+          <span class="truncate">{{ pageName }} · Âm thanh gốc</span>
         </div>
       </div>
 
-      <!-- Social Interactions Bar -->
-      <div class="p-2 border-t border-slate-100 flex items-center justify-around text-slate-600 text-xs font-semibold">
-        <div class="flex items-center gap-1.5 hover:text-blue-600 transition cursor-pointer py-1">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5" />
-          </svg>
-          <span>Thích</span>
-        </div>
-        <div class="flex items-center gap-1.5 hover:text-blue-600 transition cursor-pointer py-1">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-          </svg>
-          <span>Bình luận</span>
-        </div>
-        <div class="flex items-center gap-1.5 hover:text-blue-600 transition cursor-pointer py-1">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-          </svg>
-          <span>Chia sẻ</span>
-        </div>
+      <!-- Progress -->
+      <div v-if="mediaPreviewUrl" class="absolute inset-x-0 bottom-0 h-[3px] bg-white/25">
+        <div class="h-full bg-white" :style="{ width: `${progress}%` }"></div>
       </div>
+    </div>
 
-      <!-- First Comment Preview (If enabled) -->
-      <div v-if="enableComment && commentText && commentText.trim()" class="p-3 bg-slate-50 border-t border-slate-100 flex items-start gap-2">
-        <div class="w-6 h-6 rounded-full bg-slate-200 overflow-hidden flex-shrink-0">
-          <img
-            v-if="selectedPage?.avatar_url"
-            :src="selectedPage.avatar_url"
-            :alt="selectedPage.page_name"
-            class="w-full h-full object-cover"
-          />
+    <!-- First comment -->
+    <div v-if="hasComment" class="mt-3 max-w-[270px] mx-auto">
+      <p class="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Bình luận đầu tiên</p>
+      <div class="flex items-start gap-2">
+        <div class="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 bg-slate-200">
+          <img v-if="pageAvatar" :src="pageAvatar" alt="" class="w-full h-full object-cover" />
         </div>
-        <div class="flex-1 bg-white p-2 rounded-xl border border-slate-200 text-[11px]">
-          <span class="font-bold text-slate-900 block">{{ selectedPage?.page_name || 'Fanpage' }}</span>
-          <p class="text-slate-700 whitespace-pre-line mt-0.5">{{ commentText }}</p>
+        <div class="bg-slate-100 rounded-2xl px-3 py-2 min-w-0">
+          <div class="flex items-center gap-1.5">
+            <span class="text-[12px] font-semibold text-slate-900 truncate">{{ pageName }}</span>
+            <span class="text-[9px] font-semibold text-blue-700 bg-blue-50 px-1.5 rounded">Tác giả</span>
+          </div>
+          <p class="text-[12px] text-slate-800 whitespace-pre-line break-words">{{ commentText }}</p>
         </div>
       </div>
     </div>
@@ -108,13 +165,54 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref, watch } from "vue";
 import type { FacebookPageRecord } from "@shared/types";
 
-defineProps<{
+const props = defineProps<{
   selectedPage?: FacebookPageRecord;
   caption: string;
   mediaPreviewUrl?: string;
   enableComment?: boolean;
   commentText?: string;
 }>();
+
+const videoRef = ref<HTMLVideoElement | null>(null);
+const isPlaying = ref(false);
+const isMuted = ref(true);
+const progress = ref(0);
+const captionExpanded = ref(false);
+
+const pageName = computed(() => props.selectedPage?.page_name || "Tên Fanpage");
+const pageAvatar = computed(() => props.selectedPage?.avatar_url || "");
+const pageInitial = computed(() => (pageName.value.trim()[0] || "F").toUpperCase());
+const hasComment = computed(() => Boolean(props.enableComment && props.commentText && props.commentText.trim()));
+
+// Tách hashtag để in đậm giống Facebook (không dùng v-html)
+const captionParts = computed(() =>
+  (props.caption || "")
+    .split(/(#[\p{L}\p{N}_]+)/u)
+    .filter((t) => t.length > 0)
+    .map((text) => ({ text, tag: text.startsWith("#") }))
+);
+
+watch(
+  () => props.mediaPreviewUrl,
+  () => {
+    progress.value = 0;
+    isPlaying.value = false;
+  }
+);
+
+const togglePlay = () => {
+  const v = videoRef.value;
+  if (!v) return;
+  if (v.paused) v.play().catch(() => {});
+  else v.pause();
+};
+
+const onTimeUpdate = () => {
+  const v = videoRef.value;
+  if (!v || !v.duration) return;
+  progress.value = (v.currentTime / v.duration) * 100;
+};
 </script>

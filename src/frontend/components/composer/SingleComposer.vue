@@ -91,19 +91,7 @@
           class="w-full resize-none text-xs sm:text-sm text-slate-800 focus:outline-none placeholder:text-slate-400"
         ></textarea>
 
-        <!-- Editor Toolbar -->
-        <div class="flex items-center justify-between pt-2 border-t border-slate-100 mt-2 text-xs text-slate-500">
-          <div class="flex items-center gap-3">
-            <button type="button" @click="insertAiSuggestion" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 font-semibold transition text-xs">
-              <span>✨ Viết với AI</span>
-            </button>
-            <button type="button" class="text-slate-400 hover:text-slate-600">
-              🏷️ Thẻ gắn
-            </button>
-            <button type="button" class="text-slate-400 hover:text-slate-600">
-              # Hashtag
-            </button>
-          </div>
+        <div class="flex items-center justify-end pt-2 border-t border-slate-100 mt-2">
           <span class="text-[11px] text-slate-400 font-mono">{{ caption.length }} ký tự</span>
         </div>
       </div>
@@ -121,9 +109,10 @@
           <input
             ref="fileInputRef"
             type="file"
-            accept="video/mp4,video/quicktime,video/x-msvideo"
+            accept="video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm"
             class="hidden"
             @change="handleFileChange"
+            @click.stop
           />
 
           <div v-if="!mediaFile && !mediaPreviewUrl" class="flex flex-col items-center gap-2">
@@ -135,20 +124,24 @@
             <p class="text-xs font-semibold text-slate-700">
               Dán, thả hoặc <span class="text-blue-600 underline">Tải từ máy của bạn</span>
             </p>
-            <p class="text-[11px] text-slate-400">Hỗ trợ MP4, MOV. Video Reels định dạng 9:16 tối ưu nhất.</p>
+            <p class="text-[11px] text-slate-400">Hỗ trợ MP4, MOV, WEBM. Video dọc 9:16 hiển thị đẹp nhất trên Reels.</p>
           </div>
 
           <!-- Video Selected & Upload Status -->
           <div v-else class="flex items-center justify-between p-2">
             <div class="flex items-center gap-3 text-left min-w-0">
-              <div class="w-10 h-10 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
-                MP4
+              <div
+                class="w-10 h-10 rounded-lg text-white flex items-center justify-center font-bold text-[10px] flex-shrink-0"
+                :class="uploadError ? 'bg-rose-500' : 'bg-blue-600'"
+              >
+                {{ fileExtLabel }}
               </div>
               <div class="min-w-0">
-                <p class="text-xs font-bold text-slate-800 truncate">{{ mediaFileName || 'video.mp4' }}</p>
+                <p class="text-xs font-bold text-slate-800 truncate">{{ mediaFileName || 'video' }}</p>
                 <p class="text-[11px] text-slate-500">
-                  <span v-if="isUploading">Đang tải lên R2... {{ uploadProgress }}%</span>
-                  <span v-else class="text-emerald-600 font-semibold">✓ Đã sẵn sàng trên Cloudflare R2</span>
+                  <span v-if="isUploading">Đang tải video... {{ uploadProgress }}%</span>
+                  <span v-else-if="uploadError" class="text-rose-600 font-semibold">{{ uploadError }} Nhấn để chọn lại.</span>
+                  <span v-else-if="mediaId" class="text-emerald-600 font-semibold">✓ Video đã sẵn sàng để đăng</span>
                 </p>
               </div>
             </div>
@@ -225,7 +218,7 @@
           </button>
           <button
             type="button"
-            @click="publishMode = 'schedule'"
+            @click="switchToSchedule"
             class="px-3 py-1.5 rounded-lg transition"
             :class="publishMode === 'schedule' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'"
           >
@@ -252,7 +245,7 @@
         <!-- Submit Button -->
         <button
           type="button"
-          :disabled="isSubmitting || selectedPageIds.length === 0 || (!caption && !mediaFile && !mediaId)"
+          :disabled="isSubmitting || isUploading || selectedPageIds.length === 0 || !mediaId"
           @click="handleSubmit"
           class="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-md shadow-blue-500/20 transition flex items-center justify-center gap-2"
         >
@@ -260,7 +253,7 @@
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
           </svg>
-          <span>{{ isSubmitting ? 'Đang tạo bài đăng...' : 'Lưu & Xuất bản' }}</span>
+          <span>{{ isSubmitting ? 'Đang xử lý...' : publishMode === 'now' ? 'Đăng ngay' : 'Hẹn lịch đăng' }}</span>
         </button>
       </div>
     </div>
@@ -293,7 +286,7 @@ import { useI18n } from "../../utils/i18n";
 import { usePages } from "../../composables/usePages";
 import { useToast } from "../../composables/useToast";
 import { api } from "../../services/api";
-import { getDefaultScheduleTime } from "../../utils/date";
+import { getDefaultScheduleTime, isScheduleSlotAllowed } from "../../utils/date";
 import FacebookPreview from "./FacebookPreview.vue";
 import CalendarPickerModal from "../dialogs/CalendarPickerModal.vue";
 
@@ -312,6 +305,8 @@ const mediaFileName = ref<string>("");
 const mediaPreviewUrl = ref<string>("");
 const mediaId = ref<string>("");
 const isUploading = ref<boolean>(false);
+const uploadError = ref<string>("");
+let uploadSeq = 0;
 const uploadProgress = ref<number>(0);
 const isDragging = ref<boolean>(false);
 const fileInputRef = ref<HTMLInputElement | null>(null);
@@ -326,6 +321,11 @@ const scheduleDate = ref<string>(defTime.date);
 const scheduleTime = ref<string>(defTime.time);
 const isCalendarOpen = ref<boolean>(false);
 const isSubmitting = ref<boolean>(false);
+
+const fileExtLabel = computed(() => {
+  const ext = (mediaFileName.value.split(".").pop() || "").toUpperCase();
+  return ext && ext.length <= 4 ? ext : "VIDEO";
+});
 
 const firstSelectedPage = computed(() => {
   if (selectedPageIds.value.length === 0) return pages.value[0];
@@ -361,6 +361,7 @@ const handleFileChange = (e: Event) => {
   if (target.files && target.files[0]) {
     processSelectedFile(target.files[0]);
   }
+  target.value = "";
 };
 
 const handleFileDrop = (e: DragEvent) => {
@@ -371,36 +372,52 @@ const handleFileDrop = (e: DragEvent) => {
 };
 
 const processSelectedFile = async (file: File) => {
+  if (!file.type.startsWith("video/") && !/\.(mp4|mov|m4v|webm)$/i.test(file.name)) {
+    toast.warning("Vui lòng chọn file video (MP4, MOV, WEBM).");
+    return;
+  }
+  clearMedia();
+  const seq = ++uploadSeq;
   mediaFile.value = file;
   mediaFileName.value = file.name;
   mediaPreviewUrl.value = URL.createObjectURL(file);
 
-  // Upload immediately to R2 via streaming chunks
   isUploading.value = true;
   uploadProgress.value = 0;
   try {
     const res = await api.uploadVideo(file, (pct) => {
-      uploadProgress.value = pct;
+      if (seq === uploadSeq) uploadProgress.value = pct;
     });
+    if (seq !== uploadSeq) return; // người dùng đã chọn video khác
     mediaId.value = res.media_id;
-    toast.success("Video đã được tải lên Cloudflare R2 an toàn!");
   } catch (err: any) {
-    toast.error(err?.message || "Tải video lên R2 thất bại.");
+    if (seq !== uploadSeq) return;
+    uploadError.value = err?.message || "Tải video thất bại.";
+    toast.error(uploadError.value);
   } finally {
-    isUploading.value = false;
+    if (seq === uploadSeq) isUploading.value = false;
   }
 };
 
 const clearMedia = () => {
+  uploadSeq++;
+  if (mediaPreviewUrl.value) URL.revokeObjectURL(mediaPreviewUrl.value);
   mediaFile.value = null;
   mediaFileName.value = "";
   mediaPreviewUrl.value = "";
   mediaId.value = "";
+  uploadError.value = "";
   uploadProgress.value = 0;
+  isUploading.value = false;
 };
 
-const insertAiSuggestion = () => {
-  caption.value = "🔥 Khám phá những khoảnh khắc tuyệt vời nhất hôm nay! Đừng quên theo dõi và chia sẻ nếu bạn thấy hữu ích nhé! #reels #trending #viral";
+const switchToSchedule = () => {
+  publishMode.value = "schedule";
+  if (!isScheduleSlotAllowed(scheduleDate.value, scheduleTime.value)) {
+    const def = getDefaultScheduleTime();
+    scheduleDate.value = def.date;
+    scheduleTime.value = def.time;
+  }
 };
 
 const onCalendarConfirm = (val: { date: string; time: string }) => {
@@ -413,12 +430,17 @@ const handleSubmit = async () => {
     toast.warning("Vui lòng chọn ít nhất một Fanpage để đăng bài.");
     return;
   }
-  if (!caption.value.trim() && !mediaId.value) {
-    toast.warning("Vui lòng nhập nội dung hoặc chọn video để đăng.");
-    return;
-  }
   if (isUploading.value) {
     toast.info("Vui lòng đợi video tải lên hoàn tất.");
+    return;
+  }
+  if (!mediaId.value) {
+    toast.warning("Vui lòng chọn video để đăng.");
+    return;
+  }
+  if (publishMode.value === "schedule" && !isScheduleSlotAllowed(scheduleDate.value, scheduleTime.value)) {
+    toast.warning("Thời gian hẹn đăng phải sau thời điểm hiện tại ít nhất 5 phút. Vui lòng chọn lại.");
+    isCalendarOpen.value = true;
     return;
   }
 
@@ -440,7 +462,7 @@ const handleSubmit = async () => {
       comment_delay_minutes: enableComment.value ? delayMinutes : undefined
     });
 
-    toast.success(res?.message || "Đã tạo bài đăng thành công!");
+    toast.success(res?.message || (publishMode.value === "now" ? "Đang đăng bài lên Facebook." : "Đã hẹn lịch đăng."));
     // Reset form
     caption.value = "";
     clearMedia();

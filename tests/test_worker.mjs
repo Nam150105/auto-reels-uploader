@@ -25,6 +25,7 @@ import {
 import { sanitizeSensitiveText } from "../src/utils/sanitize.ts";
 import { consumeSingleTaskMessage } from "../src/queue/publishQueue.ts";
 import { addTask } from "../src/db.ts";
+import { dispatchDueScheduledComments } from "../src/scheduler/cronDispatcher.ts";
 
 // ============================================================================
 // MOCK CLOUDFLARE D1 & R2 BUCKET CHO MÔI TRƯỜNG TEST
@@ -581,6 +582,16 @@ async function runAll30Tests() {
 
     // 2. /me Profile
     if (u.includes("/me?fields=id,name")) {
+      // Page Access Token của mock (EAAB_PAGE_TOKEN_101_FROM_A1 -> page_101): trả về chính Page đó,
+      // tránh rơi xuống mạng thật (graph.facebook.com) khiến kiểm tra token luôn thất bại.
+      const mockPageTok = /EAAB_PAGE_TOKEN_((?:EXP_)?\d+)(?:_|&|$)/.exec(u);
+      if (mockPageTok) {
+        const mockPageId = `page_${mockPageTok[1].toLowerCase()}`;
+        return new Response(
+          JSON.stringify({ id: mockPageId, name: `Mock Page ${mockPageTok[1]}` }),
+          { status: 200 }
+        );
+      }
       if (u.includes("EAAB_EXPLORER_TOKEN_VALID") || u.includes("EAAB_EXPLORER_TOKEN_WITH_INSIGHTS") || u.includes("EAAB_EXPLORER_TOKEN_PARTIAL_PAGES")) {
         return new Response(JSON.stringify({ id: "fb_uid_exp_1", name: "Nam Explorer Admin" }), { status: 200 });
       }
@@ -1387,6 +1398,194 @@ async function runAll30Tests() {
   });
   assert.equal(mpDeleteResp.status, 200);
   console.log("  ✓ [Test 15b] R2 Multipart Upload theo phân đoạn (upload-part) & kiểm tra quyền sở hữu");
+
+  // --------------------------------------------------------------------------
+  // [TEST 15c] Composer giao diện mới: 1 video -> nhiều Fanpage, chặn giờ < hiện tại + 5 phút,
+  //            đăng hàng loạt, đăng ngay, bình luận hẹn giờ, không lộ thông tin hệ thống
+  // --------------------------------------------------------------------------
+  const composerMediaId = initUploadData.media_id;
+  const nowSecC = Math.floor(Date.now() / 1000);
+  const slotTooSoon = formatUtcToVn(nowSecC + 2 * 60);
+  const slotOk = formatUtcToVn(nowSecC + 15 * 60);
+  const postJson = (urlPath, body) =>
+    callWorker(urlPath, {
+      method: "POST",
+      headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+  const leaksInternals = (text) => /R2|Cloudflare|bucket|object_key|D1/i.test(String(text || ""));
+  const composerTaskIds = [];
+
+  const tooSoonResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_101"],
+    media_id: composerMediaId,
+    publish_mode: "schedule",
+    schedule_date: slotTooSoon.schedule_date,
+    schedule_time: slotTooSoon.schedule_time
+  });
+  assert.equal(tooSoonResp.status, 400, "Hẹn giờ < hiện tại + 5 phút phải bị chặn");
+  assert.match((await tooSoonResp.json()).detail, /ít nhất 5 phút/);
+
+  const noVideoResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_101"],
+    publish_mode: "schedule",
+    schedule_date: slotOk.schedule_date,
+    schedule_time: slotOk.schedule_time
+  });
+  assert.equal(noVideoResp.status, 400);
+  const noVideoJson = await noVideoResp.json();
+  assert.match(noVideoJson.detail, /chọn video/);
+  assert.ok(!leaksInternals(noVideoJson.detail), "Thông báo lỗi không được lộ thông tin hệ thống");
+
+  const badMediaResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_101"],
+    media_id: "med_does_not_exist",
+    publish_mode: "schedule",
+    schedule_date: slotOk.schedule_date,
+    schedule_time: slotOk.schedule_time
+  });
+  assert.equal(badMediaResp.status, 400);
+  assert.ok(!leaksInternals((await badMediaResp.json()).detail));
+
+  const foreignPageResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_not_mine"],
+    media_id: composerMediaId,
+    publish_mode: "schedule",
+    schedule_date: slotOk.schedule_date,
+    schedule_time: slotOk.schedule_time
+  });
+  assert.equal(foreignPageResp.status, 400, "Không cho đăng lên Fanpage không thuộc quyền");
+
+  const schedResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_101", "page_102"],
+    media_id: composerMediaId,
+    publish_mode: "schedule",
+    schedule_date: slotOk.schedule_date,
+    schedule_time: slotOk.schedule_time,
+    caption: "Composer schedule test",
+    comment_text: "Link ở bình luận",
+    comment_delay_minutes: 30
+  });
+  assert.equal(schedResp.status, 200);
+  const schedJson = await schedResp.json();
+  assert.equal(schedJson.task_ids.length, 2, "1 video x 2 Fanpage = 2 bài đăng");
+  composerTaskIds.push(...schedJson.task_ids);
+  const schedRows = (
+    await d1
+      .prepare(`SELECT facebook_page_id, status, scheduled_at, comment_delay_minutes, comment_status, media_id
+               FROM tasks WHERE id IN (?, ?) ORDER BY facebook_page_id`)
+      .bind(schedJson.task_ids[0], schedJson.task_ids[1])
+      .all()
+  ).results;
+  assert.deepEqual(schedRows.map((r) => r.facebook_page_id), ["page_101", "page_102"]);
+  for (const r of schedRows) {
+    assert.equal(r.status, "pending");
+    assert.equal(r.media_id, composerMediaId);
+    assert.equal(Number(r.comment_delay_minutes), 30);
+    assert.equal(r.comment_status, "pending");
+    assert.ok(Number(r.scheduled_at) >= nowSecC + 14 * 60, "scheduled_at phải đúng giờ đã chọn (giờ VN -> UTC)");
+  }
+
+  // GET /api/tasks trả về mảng chứa các task vừa tạo
+  const listAfterCompose = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  assert.ok(Array.isArray(listAfterCompose));
+  assert.ok(schedJson.task_ids.every((id) => listAfterCompose.some((t) => t.id === id)));
+
+  // Đăng hàng loạt: 1 dòng sai giờ -> chặn toàn bộ, không tạo task nào
+  const countTasks = async () =>
+    Number((await d1.prepare("SELECT COUNT(*) AS c FROM tasks").first()).c);
+  const beforeBadBulk = await countTasks();
+  const badBulkResp = await postJson("/api/tasks/bulk", {
+    tasks: [
+      { facebook_page_ids: ["page_101"], media_id: composerMediaId, caption: "row 1", ...slotOk },
+      { facebook_page_ids: ["page_102"], media_id: composerMediaId, caption: "row 2", ...slotTooSoon }
+    ]
+  });
+  assert.equal(badBulkResp.status, 400);
+  assert.match((await badBulkResp.json()).detail, /Bài #2/);
+  assert.equal(await countTasks(), beforeBadBulk, "Không được tạo task dở dang khi 1 dòng không hợp lệ");
+
+  const okBulkResp = await postJson("/api/tasks/bulk", {
+    tasks: [
+      { facebook_page_ids: ["page_101", "page_102"], media_id: composerMediaId, caption: "row 1", ...slotOk },
+      {
+        facebook_page_ids: ["page_102"],
+        media_id: composerMediaId,
+        caption: "row 2",
+        comment_text: "cmt",
+        comment_delay_minutes: 60,
+        ...formatUtcToVn(nowSecC + 45 * 60)
+      }
+    ]
+  });
+  assert.equal(okBulkResp.status, 200);
+  const okBulkJson = await okBulkResp.json();
+  assert.equal(okBulkJson.created_count, 3, "Dòng 1 (2 Fanpage) + Dòng 2 (1 Fanpage) = 3 bài");
+  composerTaskIds.push(...okBulkJson.task_ids);
+
+  // Đăng ngay: tạo task và đưa vào hàng đợi ngay (giữ nguyên bộ đếm mock để không ảnh hưởng Test 20)
+  const savedReelsCounter = graphApiReelsCalled;
+  const nowResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_102"],
+    media_id: composerMediaId,
+    publish_mode: "now",
+    caption: "Composer publish now"
+  });
+  assert.equal(nowResp.status, 200);
+  const nowJson = await nowResp.json();
+  assert.equal(nowJson.task_ids.length, 1);
+  composerTaskIds.push(...nowJson.task_ids);
+  const nowTask = await d1.prepare("SELECT status FROM tasks WHERE id = ?").bind(nowJson.task_ids[0]).first();
+  assert.notEqual(nowTask.status, "pending", "Đăng ngay phải được đưa vào xử lý ngay, không nằm chờ lịch");
+  graphApiReelsCalled = savedReelsCounter;
+
+  // Bình luận hẹn giờ: Cron chỉ đăng bình luận đã đến hạn
+  const nowIsoC = new Date().toISOString();
+  const insertPublished = async (dueAt) =>
+    Number(
+      (
+        await d1
+          .prepare(
+            `INSERT INTO tasks (owner_user_id, profile_id, facebook_page_id, video_path, caption, comment_text,
+               schedule_date, schedule_time, scheduled_at, status, publish_status, video_id, post_id,
+               comment_status, comment_due_at, comment_delay_minutes, created_at, updated_at)
+             VALUES ((SELECT id FROM users WHERE username = 'alice_admin'), 'page_101', 'page_101', ?, 'x', 'Bình luận hẹn giờ',
+               '2026-01-01', '00:00', 1, 'success', 'success', 'vid_cmt_test', 'page_101_vid_cmt_test',
+               'scheduled', ?, 10, ?, ?)`
+          )
+          .bind(`r2://${composerMediaId}`, dueAt, nowIsoC, nowIsoC)
+          .run()
+      ).meta.last_row_id
+    );
+  const cmtDueTaskId = await insertPublished(nowSecC - 30);
+  const cmtFutureTaskId = await insertPublished(nowSecC + 3600);
+  composerTaskIds.push(cmtDueTaskId, cmtFutureTaskId);
+  const dispatched = await dispatchDueScheduledComments(d1, env, nowSecC, 5);
+  assert.equal(dispatched, 1, "Chỉ bình luận đã đến hạn mới được xử lý");
+  const cmtDueAfter = await d1.prepare("SELECT comment_status FROM tasks WHERE id = ?").bind(cmtDueTaskId).first();
+  const cmtFutureAfter = await d1.prepare("SELECT comment_status FROM tasks WHERE id = ?").bind(cmtFutureTaskId).first();
+  assert.ok(["success", "failed"].includes(cmtDueAfter.comment_status), `comment_status=${cmtDueAfter.comment_status}`);
+  assert.equal(cmtFutureAfter.comment_status, "scheduled");
+
+  // Thống kê: không được bịa số liệu khi Facebook chưa trả dữ liệu
+  const insightsC = await (
+    await callWorker("/api/insights/reels?range=30d", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  assert.equal(insightsC.overview.new_follows_30d, null, "Không suy đoán số người theo dõi mới");
+  assert.equal(insightsC.overview.total_followers, null, "Chưa có dữ liệu người theo dõi thì phải là null");
+  for (const pc of insightsC.charts.page_comparison) {
+    assert.equal(pc.followers, null);
+    assert.ok(!/Nguyễn Anh Đức/.test(pc.admin_name || ""), "Không dùng tên quản trị viên giả");
+  }
+  console.log("    · bình luận hẹn giờ sau khi Cron xử lý:", cmtDueAfter.comment_status);
+
+  // Dọn dẹp để không ảnh hưởng các bài kiểm thử sau
+  for (const id of composerTaskIds) {
+    await d1.prepare("DELETE FROM tasks WHERE id = ?").bind(id).run();
+  }
+  console.log("  ✓ [Test 15c] Composer: nhiều Fanpage, chặn giờ quá khứ (+5 phút), đăng hàng loạt, đăng ngay, bình luận hẹn giờ");
 
   // Bob thử truy cập, xóa hoặc gắn media_id của Alice vào Task của Bob -> Phải bị chặn!
   const bobDeleteAliceMedia = await callWorker(`/api/media/${initUploadData.media_id}`, {

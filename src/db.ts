@@ -7,6 +7,7 @@
 
 import type {
   D1Database,
+  D1PreparedStatement,
   UserRecord,
   SessionRecord,
   FacebookAccountRecord,
@@ -198,6 +199,12 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
     }
     if (!existing.has("trigger_source")) {
       try { await db.exec("ALTER TABLE tasks ADD COLUMN trigger_source TEXT DEFAULT 'scheduled'"); } catch {}
+    }
+    if (!existing.has("comment_delay_minutes")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_delay_minutes INTEGER DEFAULT 0"); } catch {}
+    }
+    if (!existing.has("comment_due_at")) {
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_due_at INTEGER"); } catch {}
     }
 
     const pageInfo = await db.prepare("PRAGMA table_info(facebook_pages)").all<{ name: string }>();
@@ -4523,4 +4530,204 @@ export async function getDataDeletionRequest(
     .prepare("SELECT * FROM data_deletion_requests WHERE confirmation_code = ?")
     .bind(confirmationCode)
     .first<Record<string, unknown>>();
+}
+
+/**
+ * Cập nhật số người theo dõi thật của Fanpage (lấy từ Meta Graph API: followers_count, fan_count)
+ */
+export async function updatePageFollowerCounts(
+  db: D1Database,
+  facebookPageId: string,
+  ownerUserId: string,
+  followersCount: number | null,
+  fanCount: number | null
+): Promise<void> {
+  if (followersCount === null && fanCount === null) return;
+  try {
+    await db
+      .prepare(
+        `UPDATE facebook_pages
+         SET followers_count = COALESCE(?, followers_count),
+             fan_count = COALESCE(?, fan_count)
+         WHERE facebook_page_id = ? AND owner_user_id = ?`
+      )
+      .bind(followersCount, fanCount, facebookPageId, ownerUserId)
+      .run();
+  } catch {
+    await ensureTaskCommentColumns(db);
+  }
+}
+
+/** Giới hạn độ trễ bình luận tự động: 0 phút (ngay) đến 72 giờ */
+export const MAX_COMMENT_DELAY_MINUTES = 72 * 60;
+
+export function normalizeCommentDelayMinutes(v: unknown): number {
+  const n = Math.round(Number(v) || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, MAX_COMMENT_DELAY_MINUTES);
+}
+
+/**
+ * Lưu độ trễ đăng bình luận (phút) cho task. Bình luận sẽ được đăng sau khi video xuất bản + độ trễ.
+ */
+export async function setTaskCommentDelay(
+  db: D1Database,
+  taskId: number,
+  ownerUserId: string,
+  delayMinutes: number
+): Promise<void> {
+  const minutes = normalizeCommentDelayMinutes(delayMinutes);
+  const sql = "UPDATE tasks SET comment_delay_minutes = ? WHERE id = ? AND owner_user_id = ?";
+  try {
+    await db.prepare(sql).bind(minutes, taskId, ownerUserId).run();
+  } catch {
+    await ensureTaskCommentColumns(db);
+    await db.prepare(sql).bind(minutes, taskId, ownerUserId).run();
+  }
+}
+
+/**
+ * Hẹn giờ đăng bình luận: comment_status = 'scheduled', comment_due_at = thời điểm UTC (giây)
+ */
+export async function scheduleTaskComment(
+  db: D1Database,
+  taskId: number,
+  dueAtUtc: number,
+  logMsg: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `UPDATE tasks
+       SET comment_status = 'scheduled', comment_due_at = ?, comment_log = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(dueAtUtc, sanitizeSensitiveText(logMsg), now, taskId)
+    .run();
+}
+
+/**
+ * Nhận (claim) nguyên tử các bình luận đã đến hạn đăng, chuyển sang 'processing' để cron sau không lấy trùng.
+ */
+export async function claimDueScheduledComments(
+  db: D1Database,
+  nowUtc: number,
+  limit = 3
+): Promise<Array<{ id: number; owner_user_id: string }>> {
+  let rows: Array<{ id: number; owner_user_id: string }> = [];
+  try {
+    const res = await db
+      .prepare(
+        `SELECT id, owner_user_id FROM tasks
+         WHERE comment_status = 'scheduled' AND comment_due_at IS NOT NULL AND comment_due_at <= ?
+         ORDER BY comment_due_at ASC
+         LIMIT ?`
+      )
+      .bind(nowUtc, limit)
+      .all<{ id: number; owner_user_id: string }>();
+    rows = res.results || [];
+  } catch {
+    return [];
+  }
+
+  const claimed: Array<{ id: number; owner_user_id: string }> = [];
+  const nowIso = new Date().toISOString();
+  for (const row of rows) {
+    const upd = await db
+      .prepare(
+        `UPDATE tasks SET comment_status = 'processing', comment_log = 'Đang đăng bình luận tự động...', updated_at = ?
+         WHERE id = ? AND comment_status = 'scheduled'`
+      )
+      .bind(nowIso, row.id)
+      .run();
+    if (Number(upd.meta?.changes || 0) > 0) claimed.push(row);
+  }
+  return claimed;
+}
+
+/**
+ * Tạo nhiều task trong 2 lệnh D1 batch (thay vì 4-5 truy vấn / task) để không vượt giới hạn
+ * số truy vấn mỗi request của Cloudflare Workers Free khi đăng 1 video lên nhiều Fanpage.
+ * Lịch đăng phải được kiểm tra hợp lệ TRƯỚC khi gọi hàm này (scheduledAt là UTC giây).
+ */
+export async function insertComposerTasksBatch(
+  db: D1Database,
+  ownerUserId: string,
+  rows: Array<{
+    facebookPageId: string;
+    mediaId: string;
+    objectKey: string;
+    caption: string;
+    commentText: string;
+    commentDelayMinutes: number;
+    scheduleDate: string;
+    scheduleTime: string;
+    scheduledAt: number;
+    triggerSource: string;
+    stageMessage: string;
+  }>
+): Promise<number[]> {
+  if (rows.length === 0) return [];
+  await ensureTaskCommentColumns(db);
+  const now = new Date().toISOString();
+
+  const insertSql = `INSERT INTO tasks (
+       owner_user_id, profile_id, facebook_page_id, media_id, object_key,
+       video_path, caption, comment_text, comment_delay_minutes, schedule_date, schedule_time,
+       scheduled_at, original_scheduled_at, original_schedule_date, original_schedule_time,
+       trigger_source, timezone, status, publish_status, is_locked, idempotency_key, attempt_count, max_attempts,
+       log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
+       created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', 'pending', 'pending', 0, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
+
+  const inserts = rows.map((r) => {
+    const cleanComment = r.commentText.trim();
+    return db
+      .prepare(insertSql)
+      .bind(
+        ownerUserId,
+        r.facebookPageId,
+        r.facebookPageId,
+        r.mediaId,
+        r.objectKey,
+        `r2://${r.mediaId}`,
+        r.caption,
+        cleanComment,
+        cleanComment ? normalizeCommentDelayMinutes(r.commentDelayMinutes) : 0,
+        r.scheduleDate,
+        r.scheduleTime,
+        r.scheduledAt,
+        r.scheduledAt,
+        r.scheduleDate,
+        r.scheduleTime,
+        r.triggerSource,
+        `task_${ownerUserId}_${r.facebookPageId}_${randomHex(8)}`,
+        cleanComment ? "pending" : "none",
+        now,
+        now
+      );
+  });
+  const results = await db.batch(inserts);
+  const taskIds = results.map((res) => Number(res.meta?.last_row_id || 0));
+
+  const logStatements = taskIds
+    .map((taskId, i) =>
+      taskId > 0
+        ? db
+            .prepare(
+              `INSERT INTO task_logs (task_id, owner_user_id, level, stage, message, created_at)
+               VALUES (?, ?, 'INFO', 'created', ?, ?)`
+            )
+            .bind(taskId, ownerUserId, sanitizeSensitiveText(rows[i].stageMessage), now)
+        : null
+    )
+    .filter((st): st is D1PreparedStatement => st !== null);
+  if (logStatements.length > 0) {
+    try {
+      await db.batch(logStatements);
+    } catch {
+      // Nhật ký tạo task không bắt buộc
+    }
+  }
+  return taskIds.filter((id) => id > 0);
 }

@@ -22,6 +22,19 @@ class ApiError extends Error {
   }
 }
 
+/** Từ khóa kỹ thuật nội bộ không được hiển thị cho người dùng */
+const INTERNAL_TERMS = /\b(R2|D1|Cloudflare|Worker|bucket|object[_ ]?key|upload_id|media_id|r2:\/\/|SQL|SQLITE|stack|TypeError|undefined)\b/i;
+
+export function toFriendlyError(message: unknown, status = 0): string {
+  const text = String(message || "").trim();
+  if (!text || INTERNAL_TERMS.test(text)) {
+    if (status === 413) return "Video quá lớn. Vui lòng chọn video nhỏ hơn.";
+    if (status >= 500) return "Hệ thống đang bận. Vui lòng thử lại sau ít phút.";
+    return "Không thể xử lý yêu cầu. Vui lòng thử lại.";
+  }
+  return text;
+}
+
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
@@ -50,8 +63,7 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   }
 
   if (!res.ok) {
-    const errorMsg =
-      data.detail || data.message || data.error || `Yêu cầu thất bại (${res.status})`;
+    const errorMsg = toFriendlyError(data.detail || data.message || data.error, res.status);
     throw new ApiError(errorMsg, res.status, data);
   }
 
@@ -118,7 +130,11 @@ export const api = {
     if (params?.search) q.set("search", params.search);
 
     const qs = q.toString();
-    return request<{ tasks: TaskRecord[]; total: number }>(`/api/tasks${qs ? `?${qs}` : ""}`);
+    const res = await request<TaskRecord[] | { tasks?: TaskRecord[]; total?: number }>(
+      `/api/tasks${qs ? `?${qs}` : ""}`
+    );
+    const list = Array.isArray(res) ? res : res?.tasks || [];
+    return { tasks: list, total: list.length };
   },
 
   async createTask(payload: {
@@ -131,7 +147,7 @@ export const api = {
     schedule_time?: string;
     comment_text?: string;
     comment_delay_minutes?: number;
-  }): Promise<{ success: boolean; created_tasks: TaskRecord[]; task_ids: number[]; message: string }> {
+  }): Promise<{ success: boolean; task_ids: number[]; created_count: number; message: string }> {
     return request("/api/tasks", {
       method: "POST",
       body: JSON.stringify(payload)
@@ -192,7 +208,7 @@ export const api = {
   },
 
   async publishBulkNow(taskIds: number[]): Promise<any> {
-    return request("/api/tasks/publish-now", {
+    return request("/api/tasks/bulk-publish-now", {
       method: "POST",
       body: JSON.stringify({ task_ids: taskIds })
     });
@@ -204,7 +220,7 @@ export const api = {
     schedule_time: string;
     interval_minutes?: number;
   }): Promise<any> {
-    return request("/api/tasks/reschedule-bulk", {
+    return request("/api/tasks/bulk-reschedule", {
       method: "POST",
       body: JSON.stringify(payload)
     });
@@ -216,7 +232,7 @@ export const api = {
     });
   },
 
-  // Media / R2 Streaming Upload
+  // Tải video (chia nhỏ theo phân đoạn)
   async uploadVideo(
     file: File,
     onProgress?: (percent: number) => void
@@ -240,7 +256,8 @@ export const api = {
 
     const readError = async (res: Response, fallback: string): Promise<string> => {
       const data = await res.json().catch(() => null);
-      return (data && (data.detail || data.message || data.error)) || fallback;
+      const raw = data && (data.detail || data.message || data.error);
+      return raw ? toFriendlyError(raw, res.status) : fallback;
     };
 
     // Không có phiên multipart (ví dụ môi trường local chưa gắn R2): tải toàn bộ file trong 1 request
@@ -252,7 +269,7 @@ export const api = {
         credentials: "same-origin"
       });
       if (!streamRes.ok) {
-        throw new Error(await readError(streamRes, "Tải video lên thất bại."));
+        throw new Error(await readError(streamRes, "Tải video thất bại. Vui lòng thử lại."));
       }
       if (onProgress) onProgress(99);
     } else {
@@ -278,8 +295,7 @@ export const api = {
         });
 
         if (!partRes.ok) {
-          const detail = await readError(partRes, `HTTP ${partRes.status}`);
-          throw new Error(`Tải lên phân đoạn ${i + 1}/${totalChunks} thất bại: ${detail}`);
+          throw new Error(await readError(partRes, "Tải video thất bại. Vui lòng kiểm tra mạng và thử lại."));
         }
 
         const partData = await partRes.json();
@@ -323,12 +339,63 @@ export const api = {
 
   // Analytics
   async getAnalytics(): Promise<AnalyticsDashboard> {
-    return request<AnalyticsDashboard>("/api/analytics/reels");
+    const raw = await request<any>("/api/insights/reels?range=30d");
+    return mapInsightsToDashboard(raw);
   },
 
-  async syncAnalytics(): Promise<any> {
-    return request("/api/analytics/reels/sync", {
-      method: "POST"
+  async syncAnalytics(): Promise<{ message: string }> {
+    const res = await request<any>("/api/insights/sync", {
+      method: "POST",
+      body: JSON.stringify({})
     });
+    const synced = Number(res?.synced_count || 0);
+    return {
+      message: synced > 0 ? `Đã cập nhật số liệu cho ${synced} Reels.` : "Đã cập nhật số liệu mới nhất từ Facebook."
+    };
   }
 };
+
+const numOrNull = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Chuyển dữ liệu thống kê từ máy chủ sang cấu trúc màn hình Thống kê (giữ null khi chưa có dữ liệu) */
+export function mapInsightsToDashboard(raw: any): AnalyticsDashboard {
+  const overview = raw?.overview || {};
+  const charts = raw?.charts || {};
+  const comparison: any[] = Array.isArray(charts.page_comparison) ? charts.page_comparison : [];
+  const series: any[] = Array.isArray(charts.views_over_time) ? charts.views_over_time : [];
+
+  return {
+    total_pages: Number(overview.total_pages_count || comparison.length || 0),
+    total_followers: numOrNull(overview.total_followers),
+    views_7d: Number(overview.views_7d || 0),
+    views_30d: Number(overview.views_30d || 0),
+    posts_7d: Number(overview.posts_7d || 0),
+    posts_30d: Number(overview.posts_30d || 0),
+    pages: comparison.map((p) => ({
+      page_id: String(p.facebook_page_id || p.page_id || ""),
+      page_name: String(p.page_name || ""),
+      avatar_url: String(p.avatar_url || ""),
+      followers_count: numOrNull(p.followers),
+      posts_30d: Number(p.posts_30d || 0),
+      total_views: numOrNull(p.views),
+      total_reach: numOrNull(p.reach),
+      total_likes: numOrNull(p.likes),
+      total_comments: numOrNull(p.comments),
+      total_shares: numOrNull(p.shares),
+      token_status: String(p.token_status || "unknown"),
+      can_analyze: Boolean(p.can_analyze)
+    })),
+    time_series: series.map((pt) => ({
+      date: String(pt.date || ""),
+      views: Number(pt.views || 0),
+      reach: Number(pt.reach || 0),
+      interactions: Number(pt.interactions || 0)
+    })),
+    warnings: Array.isArray(raw?.permission_warnings) ? raw.permission_warnings.map(String) : [],
+    last_synced_at: raw?.last_synced_at || null
+  };
+}

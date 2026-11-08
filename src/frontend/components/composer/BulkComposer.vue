@@ -19,7 +19,7 @@
           ref="bulkMediaInputRef"
           type="file"
           multiple
-          accept="video/mp4,video/quicktime"
+          accept="video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm"
           class="hidden"
           @change="handleBulkMediaSelected"
         />
@@ -171,6 +171,7 @@
                   placeholder="Nội dung mô tả..."
                   class="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-none transition"
                 ></textarea>
+                <p v-if="row.errorMessage" class="mt-1 text-[11px] text-rose-600 font-medium">{{ row.errorMessage }}</p>
               </td>
 
               <!-- Media Cell -->
@@ -179,21 +180,28 @@
                   <label class="cursor-pointer p-1.5 rounded-lg border border-dashed border-slate-300 hover:border-blue-500 hover:bg-blue-50 transition relative" :title="row.mediaFileName || 'Tải video'">
                     <input
                       type="file"
-                      accept="video/mp4,video/quicktime"
+                      accept="video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm"
                       class="hidden"
                       @change="(e) => handleRowFileChange(row, e)"
                     />
                     <svg v-if="!row.mediaFile && !row.mediaId" class="w-5 h-5 text-slate-400 hover:text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
+                    <div v-else-if="row.isUploading" class="text-[10px] font-bold text-blue-600">
+                      {{ row.uploadProgress || 0 }}%
+                    </div>
+                    <div v-else-if="!row.mediaId" class="text-[10px] font-bold text-rose-600 flex items-center gap-1">
+                      <span>✕</span>
+                      <span class="max-w-[60px] truncate">Chọn lại</span>
+                    </div>
                     <div v-else class="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
                       <span>✓</span>
                       <span class="max-w-[60px] truncate">{{ row.mediaFileName || 'Video' }}</span>
                     </div>
                   </label>
                 </div>
-                <div v-if="row.isUploading" class="text-[9px] text-blue-600 mt-1">
-                  {{ row.uploadProgress }}%
+                <div v-if="row.isUploading" class="w-16 mx-auto bg-slate-200 h-1 rounded-full overflow-hidden mt-1">
+                  <div class="bg-blue-600 h-full transition-all" :style="{ width: `${row.uploadProgress || 0}%` }"></div>
                 </div>
               </td>
 
@@ -202,13 +210,15 @@
                 <button
                   type="button"
                   @click="openRowCalendar(row)"
-                  class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:border-blue-400 text-xs flex items-center justify-between text-slate-700 transition"
+                  class="w-full px-2.5 py-1.5 rounded-lg border bg-white hover:border-blue-400 text-xs flex items-center justify-between transition"
+                  :class="isScheduleSlotAllowed(row.scheduleDate, row.scheduleTime) ? 'border-slate-200 text-slate-700' : 'border-rose-300 text-rose-600'"
+                  :title="isScheduleSlotAllowed(row.scheduleDate, row.scheduleTime) ? '' : 'Thời gian đã qua, vui lòng chọn lại'"
                 >
                   <span class="flex items-center gap-1.5 truncate">
                     <svg class="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
-                    <span>{{ row.scheduleDate }} {{ row.scheduleTime }}</span>
+                    <span>{{ formatSlot(row.scheduleDate, row.scheduleTime) }}</span>
                   </span>
                   <svg class="w-3.5 h-3.5 text-slate-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
@@ -287,7 +297,7 @@ import { ref, computed } from "vue";
 import { usePages } from "../../composables/usePages";
 import { useToast } from "../../composables/useToast";
 import { api } from "../../services/api";
-import { getDefaultScheduleTime, formatVnDate, formatVnTime } from "../../utils/date";
+import { getDefaultScheduleTime, isScheduleSlotAllowed, addMinutesToVnSlot } from "../../utils/date";
 import type { BulkComposerRow } from "@shared/types";
 import CalendarPickerModal from "../dialogs/CalendarPickerModal.vue";
 import BulkCommentModal from "../dialogs/BulkCommentModal.vue";
@@ -301,7 +311,14 @@ const toast = useToast();
 
 const def = getDefaultScheduleTime();
 
-const createEmptyRow = (): BulkComposerRow => ({
+const formatSlot = (date: string, time: string) => {
+  const [y, m, d] = (date || "").split("-");
+  return y && m && d ? `${time} ${d}/${m}/${y}` : `${date} ${time}`;
+};
+
+const createEmptyRow = (): BulkComposerRow => {
+  const slot = getDefaultScheduleTime();
+  return {
   id: `row_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
   selectedPageIds: pages.value.length > 0 ? [pages.value[0].facebook_page_id] : [],
   caption: "",
@@ -311,12 +328,13 @@ const createEmptyRow = (): BulkComposerRow => ({
   mediaId: "",
   uploadProgress: 0,
   isUploading: false,
-  scheduleDate: def.date,
-  scheduleTime: def.time,
+  scheduleDate: slot.date,
+  scheduleTime: slot.time,
   commentText: "",
   commentDelayMinutes: 0,
   commentDelayOption: "now"
-});
+  };
+};
 
 const rows = ref<BulkComposerRow[]>([createEmptyRow()]);
 const selectedRowIds = ref<string[]>([]);
@@ -399,7 +417,10 @@ const handleBulkMediaSelected = async (e: Event) => {
   if (!target.files || target.files.length === 0) return;
 
   const files = Array.from(target.files);
-  toast.info(`Bắt đầu tải lên ${files.length} video lên Cloudflare R2...`);
+  target.value = "";
+  toast.info(`Đang tải ${files.length} video...`);
+  const base = getDefaultScheduleTime();
+  let okCount = 0;
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
@@ -413,35 +434,45 @@ const handleBulkMediaSelected = async (e: Event) => {
 
     row.mediaFile = file;
     row.mediaFileName = file.name;
+    row.mediaId = "";
+    row.errorMessage = "";
+    row.uploadProgress = 0;
     row.isUploading = true;
 
-    // Stagger schedule time by 30 mins each
-    const scheduleTimeObj = new Date();
-    scheduleTimeObj.setMinutes(scheduleTimeObj.getMinutes() + 15 + i * 30);
-    row.scheduleDate = formatVnDate(scheduleTimeObj);
-    row.scheduleTime = formatVnTime(scheduleTimeObj);
+    // Mỗi video cách nhau 30 phút, tính theo giờ Việt Nam
+    const slot = addMinutesToVnSlot(base.date, base.time, i * 30);
+    row.scheduleDate = slot.date;
+    row.scheduleTime = slot.time;
 
     try {
       const res = await api.uploadVideo(file, (pct) => {
         row.uploadProgress = pct;
       });
       row.mediaId = res.media_id;
+      okCount++;
     } catch (err: any) {
-      row.errorMessage = err?.message || "Tải video lỗi";
+      row.errorMessage = err?.message || "Tải video thất bại. Vui lòng chọn lại.";
     } finally {
       row.isUploading = false;
     }
   }
 
-  toast.success(`Đã chuẩn bị xong ${files.length} bài đăng từ các video tải lên!`);
+  if (okCount === files.length) {
+    toast.success(`Đã chuẩn bị xong ${files.length} bài đăng!`);
+  } else {
+    toast.warning(`Tải xong ${okCount}/${files.length} video. Vui lòng chọn lại các video bị lỗi.`);
+  }
 };
 
 const handleRowFileChange = async (row: BulkComposerRow, e: Event) => {
   const target = e.target as HTMLInputElement;
   if (!target.files || !target.files[0]) return;
   const file = target.files[0];
+  target.value = "";
   row.mediaFile = file;
   row.mediaFileName = file.name;
+  row.mediaId = "";
+  row.errorMessage = "";
   row.isUploading = true;
   row.uploadProgress = 0;
   try {
@@ -449,9 +480,10 @@ const handleRowFileChange = async (row: BulkComposerRow, e: Event) => {
       row.uploadProgress = pct;
     });
     row.mediaId = res.media_id;
-    toast.success(`Đã tải lên '${file.name}'`);
   } catch (err: any) {
-    toast.error(err?.message || "Tải video lỗi");
+    const msg: string = err?.message || "Tải video thất bại. Vui lòng chọn lại.";
+    row.errorMessage = msg;
+    toast.error(msg);
   } finally {
     row.isUploading = false;
   }
@@ -466,21 +498,20 @@ const openRowCalendar = (row: BulkComposerRow) => {
 };
 
 const openGlobalCalendar = () => {
+  const slot = getDefaultScheduleTime();
   calendarTargetRowId.value = "GLOBAL";
-  calendarInitialDate.value = def.date;
-  calendarInitialTime.value = def.time;
+  calendarInitialDate.value = slot.date;
+  calendarInitialTime.value = slot.time;
   isCalendarOpen.value = true;
 };
 
 const onCalendarConfirm = (val: { date: string; time: string }) => {
   if (calendarTargetRowId.value === "GLOBAL") {
     rows.value.forEach((r, idx) => {
-      // Stagger by 30 minutes
-      const [y, m, d] = val.date.split("-").map(Number);
-      const [hr, min] = val.time.split(":").map(Number);
-      const dt = new Date(y, m - 1, d, hr, min + idx * 30);
-      r.scheduleDate = formatVnDate(dt);
-      r.scheduleTime = formatVnTime(dt);
+      // Mỗi bài cách nhau 30 phút, tính theo giờ Việt Nam (không phụ thuộc múi giờ máy)
+      const slot = addMinutesToVnSlot(val.date, val.time, idx * 30);
+      r.scheduleDate = slot.date;
+      r.scheduleTime = slot.time;
     });
     toast.success(`Đã cài đặt lịch cách nhau 30 phút cho ${rows.value.length} bài đăng!`);
   } else if (calendarTargetRowId.value) {
@@ -529,14 +560,38 @@ const onCommentSave = (val: { text: string; delayOption: string; delayMinutes: n
 
 // Submit All
 const handleSubmitAll = async () => {
-  const validRows = rows.value.filter(
-    (r) => r.selectedPageIds.length > 0 && (r.caption.trim() || r.mediaId)
-  );
-
-  if (validRows.length === 0) {
-    toast.warning("Vui lòng chọn Fanpage và nhập nội dung/video cho ít nhất một bài đăng.");
+  if (rows.value.some((r) => r.isUploading)) {
+    toast.info("Vui lòng đợi các video tải lên hoàn tất.");
     return;
   }
+
+  // Bỏ qua các dòng trống hoàn toàn; các dòng còn lại phải đủ thông tin
+  const candidateRows = rows.value.filter((r) => r.mediaFile || r.mediaId || r.caption.trim());
+  rows.value.forEach((r) => (r.errorMessage = r.mediaFile && !r.mediaId ? r.errorMessage : ""));
+  let firstError = "";
+  candidateRows.forEach((r) => {
+    const idx = rows.value.indexOf(r) + 1;
+    let err = "";
+    if (r.selectedPageIds.length === 0) err = "Chưa chọn Fanpage.";
+    else if (!r.mediaId) err = r.errorMessage || "Chưa có video.";
+    else if (!isScheduleSlotAllowed(r.scheduleDate, r.scheduleTime)) {
+      err = "Thời gian đăng phải sau hiện tại ít nhất 5 phút.";
+    }
+    if (err) {
+      r.errorMessage = err;
+      if (!firstError) firstError = `Bài #${idx}: ${err}`;
+    }
+  });
+
+  if (candidateRows.length === 0) {
+    toast.warning("Vui lòng chọn video và Fanpage cho ít nhất một bài đăng.");
+    return;
+  }
+  if (firstError) {
+    toast.warning(firstError);
+    return;
+  }
+  const validRows = candidateRows;
 
   isSubmitting.value = true;
   try {
@@ -553,7 +608,7 @@ const handleSubmitAll = async () => {
     };
 
     const res = await api.createBulkTasks(payload);
-    toast.success(res?.message || `Đã tạo ${res?.created_count || validRows.length} bài đăng thành công!`);
+    toast.success(res?.message || `Đã hẹn lịch ${res?.created_count || validRows.length} bài đăng.`);
     rows.value = [createEmptyRow()];
     emit("tasks-created");
   } catch (err: any) {

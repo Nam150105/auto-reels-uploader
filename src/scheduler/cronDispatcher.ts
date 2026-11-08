@@ -9,8 +9,8 @@
 import type { D1Database, Env, ExecutionContext, QueueTaskMessage } from "../types.ts";
 import { nowUtcSeconds } from "../utils/timezone.ts";
 import { randomHex } from "../utils/crypto.ts";
-import { appendTaskStageLog, recordTaskAuditLog } from "../db.ts";
-import { processTaskQueueMessages } from "../queue/publishQueue.ts";
+import { appendTaskStageLog, recordTaskAuditLog, claimDueScheduledComments } from "../db.ts";
+import { processTaskQueueMessages, postScheduledTaskComment } from "../queue/publishQueue.ts";
 import { cleanupExpiredR2Media } from "../services/r2MediaService.ts";
 import { syncDueReelsInsightsBatch } from "../services/reelsInsightsService.ts";
 
@@ -26,6 +26,14 @@ export async function dispatchDueScheduledTasks(
 }> {
   const now = nowUtcSeconds();
   const isoNow = new Date().toISOString();
+
+  // 0. Đăng các bình luận hẹn giờ đã đến hạn (tối đa 3 mỗi phút)
+  const commentWork = dispatchDueScheduledComments(db, env, now, 3).catch(() => {});
+  if (ctx && typeof ctx.waitUntil === "function") {
+    ctx.waitUntil(commentWork);
+  } else {
+    await commentWork;
+  }
 
   // 1. Tìm các task đến hạn lịch đăng (status = 'pending' AND scheduled_at IS NOT NULL AND scheduled_at <= now)
   //    HOẶC các task đang chờ retry đến hạn (status = 'queued' AND next_retry_at IS NOT NULL AND next_retry_at <= now)
@@ -142,3 +150,24 @@ export async function dispatchDueScheduledTasks(
   };
 }
 
+export async function dispatchDueScheduledComments(
+  db: D1Database,
+  env: Env,
+  nowUtc: number,
+  limit = 3
+): Promise<number> {
+  const due = await claimDueScheduledComments(db, nowUtc, limit);
+  for (const row of due) {
+    try {
+      await postScheduledTaskComment(db, env, row.id, row.owner_user_id);
+    } catch {
+      try {
+        await db
+          .prepare("UPDATE tasks SET comment_status = 'failed', comment_log = ? WHERE id = ?")
+          .bind("Đăng bình luận tự động thất bại. Vui lòng thử lại.", row.id)
+          .run();
+      } catch {}
+    }
+  }
+  return due.length;
+}

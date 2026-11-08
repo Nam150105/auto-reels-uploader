@@ -1300,150 +1300,132 @@ export async function getReelsAnalyticsDashboard(
     video_length_sec: r.video_length_sec
   }));
 
-  // 5. So sánh hiệu suất giữa các Fanpage (Chuẩn hóa chính xác theo cấu trúc ảnh mẫu Thống Kê)
-  const cutoff7dSec = Math.floor(Date.now() / 1000) - 7 * 86400;
-  const cutoff7dVn = formatUtcToVn(cutoff7dSec).schedule_date;
-  const cutoff30dSec = Math.floor(Date.now() / 1000) - 30 * 86400;
-  const cutoff30dVn = formatUtcToVn(cutoff30dSec).schedule_date;
+  // 5. So sánh hiệu suất giữa các Fanpage — CHỈ dùng số liệu thật từ Facebook, không suy đoán/giả lập.
+  //    Giá trị chưa có dữ liệu sẽ là null để giao diện hiển thị "—".
+  const cutoff7dVn = formatUtcToVn(Math.floor(Date.now() / 1000) - 7 * 86400).schedule_date;
+  const cutoff30dVn = formatUtcToVn(Math.floor(Date.now() / 1000) - 30 * 86400).schedule_date;
 
-  const pageCompMap = new Map<
-    string,
-    {
-      page_id: string;
-      facebook_page_id: string;
-      page_name: string;
-      avatar_url: string;
-      admin_name: string;
-      followers: number;
-      views_7d: number;
-      views_30d: number;
-      new_follows_30d: number;
-      posts_30d: number;
-      reels_count: number;
-      views: number | null;
-      reach: number | null;
-      total_interactions: number | null;
-      total_watch_time_ms: number | null;
-    }
-  >();
+  type PageComparisonRow = {
+    page_id: string;
+    facebook_page_id: string;
+    page_name: string;
+    avatar_url: string;
+    admin_name: string;
+    followers: number | null;
+    token_status: string;
+    can_analyze: boolean;
+    views_7d: number;
+    views_30d: number;
+    posts_7d: number;
+    posts_30d: number;
+    reels_count: number;
+    views: number | null;
+    reach: number | null;
+    likes: number | null;
+    comments: number | null;
+    shares: number | null;
+    total_interactions: number | null;
+    total_watch_time_ms: number | null;
+  };
 
-  // Khởi tạo các Fanpage liên quan
+  const readFollowers = (p: Record<string, unknown>): number | null => {
+    const followers = Number(p.followers_count || 0);
+    const fans = Number(p.fan_count || 0);
+    const best = Math.max(Number.isFinite(followers) ? followers : 0, Number.isFinite(fans) ? fans : 0);
+    return best > 0 ? best : null;
+  };
+
+  const emptyRow = (pid: string, init: Partial<PageComparisonRow>): PageComparisonRow => ({
+    page_id: pid,
+    facebook_page_id: pid,
+    page_name: pid,
+    avatar_url: "",
+    admin_name: "",
+    followers: null,
+    token_status: "unknown",
+    can_analyze: false,
+    views_7d: 0,
+    views_30d: 0,
+    posts_7d: 0,
+    posts_30d: 0,
+    reels_count: 0,
+    views: null,
+    reach: null,
+    likes: null,
+    comments: null,
+    shares: null,
+    total_interactions: null,
+    total_watch_time_ms: null,
+    ...init
+  });
+
+  const pageCompMap = new Map<string, PageComparisonRow>();
   for (const p of relevantPages) {
     const pid = p.facebook_page_id || p.id;
-    let seed = 0;
-    for (let c = 0; c < pid.length; c++) seed = (seed * 31 + pid.charCodeAt(c)) & 0xffffffff;
-    const absSeed = Math.abs(seed);
     const adminName =
       p.admin_names?.[0] ||
       accounts.find((a) => a.id === p.connected_account_id)?.facebook_user_name ||
-      "Nguyễn Anh Đức";
-    const baseFollowers = 5 + (absSeed % 25);
-
-    pageCompMap.set(pid, {
-      page_id: p.id,
-      facebook_page_id: pid,
-      page_name: p.page_name || pid,
-      avatar_url: p.avatar_url || "",
-      admin_name: adminName,
-      followers: baseFollowers,
-      views_7d: 0,
-      views_30d: 0,
-      new_follows_30d: Math.max(1, Math.round(baseFollowers * 0.9)),
-      posts_30d: 0,
-      reels_count: 0,
-      views: null,
-      reach: null,
-      total_interactions: null,
-      total_watch_time_ms: null
-    });
+      "";
+    pageCompMap.set(
+      pid,
+      emptyRow(pid, {
+        page_id: p.id,
+        page_name: p.page_name || pid,
+        avatar_url: p.avatar_url || "",
+        admin_name: adminName,
+        followers: readFollowers(p as unknown as Record<string, unknown>),
+        token_status: p.token_status || "unknown",
+        can_analyze: Boolean(p.can_analyze)
+      })
+    );
   }
+
+  const addNullable = (cur: number | null, v: number | null): number | null =>
+    v === null ? cur : (cur ?? 0) + v;
 
   for (const r of reelsItems) {
     const pid = r.facebook_page_id || "unassigned";
     let cur = pageCompMap.get(pid);
     if (!cur) {
-      cur = {
-        page_id: pid,
-        facebook_page_id: pid,
-        page_name: r.page_name || pid,
-        avatar_url: r.page_avatar || "",
-        admin_name: "Nguyễn Anh Đức",
-        followers: 20,
-        views_7d: 0,
-        views_30d: 0,
-        new_follows_30d: 5,
-        posts_30d: 0,
-        reels_count: 0,
-        views: null,
-        reach: null,
-        total_interactions: null,
-        total_watch_time_ms: null
-      };
+      cur = emptyRow(pid, { page_name: r.page_name || pid, avatar_url: r.page_avatar || "" });
       pageCompMap.set(pid, cur);
     }
     cur.reels_count++;
-    const v = r.views ?? 0;
-    if (r.views !== null) {
-      cur.views = (cur.views ?? 0) + r.views;
-    }
-    if (r.reach !== null) {
-      cur.reach = (cur.reach ?? 0) + r.reach;
-    }
-    if (r.total_interactions !== null) {
-      cur.total_interactions = (cur.total_interactions ?? 0) + r.total_interactions;
-    }
-    if (r.total_watch_time_ms !== null) {
-      cur.total_watch_time_ms = (cur.total_watch_time_ms ?? 0) + r.total_watch_time_ms;
-    }
+    cur.views = addNullable(cur.views, r.views);
+    cur.reach = addNullable(cur.reach, r.reach);
+    cur.likes = addNullable(cur.likes, r.likes);
+    cur.comments = addNullable(cur.comments, r.comments);
+    cur.shares = addNullable(cur.shares, r.shares);
+    cur.total_interactions = addNullable(cur.total_interactions, r.total_interactions);
+    cur.total_watch_time_ms = addNullable(cur.total_watch_time_ms, r.total_watch_time_ms);
 
     const itemDate = r.published_date_vn || todayVn;
     if (itemDate >= cutoff7dVn) {
-      cur.views_7d += v;
+      cur.views_7d += r.views ?? 0;
+      cur.posts_7d += 1;
     }
     if (itemDate >= cutoff30dVn) {
-      cur.views_30d += v;
+      cur.views_30d += r.views ?? 0;
       cur.posts_30d += 1;
-      cur.new_follows_30d += (r.total_interactions ?? 0);
     }
   }
 
   const pageComparison = Array.from(pageCompMap.values())
-    .map((p) => {
-      // Đảm bảo các con số hiển thị đầy đủ, không để trống
-      const finalViews30d = p.views_30d || (p.views ?? 0);
-      const finalViews7d = p.views_7d || Math.round(finalViews30d * 0.7);
-      return {
-        ...p,
-        views_7d: finalViews7d,
-        views_30d: finalViews30d,
-        interactions: p.total_interactions
-      };
-    })
-    .sort((a, b) => (b.views_7d || b.views_30d || 0) - (a.views_7d || a.views_30d || 0));
+    .map((p) => ({ ...p, interactions: p.total_interactions }))
+    .sort((a, b) => (b.views_30d || 0) - (a.views_30d || 0) || (b.views ?? 0) - (a.views ?? 0));
 
-  // Tính tổng 4 thẻ tổng quan (Matching ảnh mẫu)
-  let totalFollowers = 0;
+  let totalFollowers: number | null = null;
   let totalViews7d = 0;
   let totalViews30d = 0;
-  let totalNewFollows30d = 0;
+  let totalPosts7d = 0;
   let totalPosts30d = 0;
-
   for (const p of pageComparison) {
-    totalFollowers += p.followers || 0;
-    totalViews7d += p.views_7d || 0;
-    totalViews30d += p.views_30d || 0;
-    totalNewFollows30d += p.new_follows_30d || 0;
-    totalPosts30d += p.posts_30d || 0;
+    if (p.followers !== null) totalFollowers = (totalFollowers ?? 0) + p.followers;
+    totalViews7d += p.views_7d;
+    totalViews30d += p.views_30d;
+    totalPosts7d += p.posts_7d;
+    totalPosts30d += p.posts_30d;
   }
-
-  // Fallback số tổng quan nếu viewsAgg có giá trị từ test hoặc thực tế
-  if (viewsAgg.total !== null && viewsAgg.total > 0) {
-    totalViews30d = viewsAgg.total;
-    totalViews7d = Math.round(viewsAgg.total * 0.7);
-  }
-  if (totalFollowers === 0) totalFollowers = relevantPages.length * 20;
-  if (totalNewFollows30d === 0) totalNewFollows30d = Math.round(totalFollowers * 0.95);
-  if (totalPosts30d === 0) totalPosts30d = reelsItems.length;
 
   const lastSyncedAt =
     reelsItems
@@ -1488,7 +1470,9 @@ export async function getReelsAnalyticsDashboard(
       total_pages_count: relevantPages.length,
       views_7d: totalViews7d,
       views_30d: totalViews30d,
-      new_follows_30d: totalNewFollows30d,
+      // Meta không cung cấp số người theo dõi mới qua quyền hiện tại -> không suy đoán
+      new_follows_30d: null,
+      posts_7d: totalPosts7d,
       posts_30d: totalPosts30d
     },
     charts: {
