@@ -166,7 +166,7 @@ export async function generateOAuthUrl(
     return {
       success: false,
       error_code: "facebook_error",
-      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+      message: "Could not connect to Facebook right now. Please try again."
     };
   }
 
@@ -243,7 +243,7 @@ export async function exchangeCodeForToken(
     return {
       success: false,
       error_code: "invalid_state",
-      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+      message: "Could not connect to Facebook right now. Please try again."
     };
   }
 
@@ -252,7 +252,7 @@ export async function exchangeCodeForToken(
     return {
       success: false,
       error_code: "invalid_state",
-      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+      message: "Could not connect to Facebook right now. Please try again."
     };
   }
 
@@ -265,7 +265,7 @@ export async function exchangeCodeForToken(
     return {
       success: false,
       error_code: "user_mismatch",
-      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+      message: "Could not connect to Facebook right now. Please try again."
     };
   }
 
@@ -274,7 +274,7 @@ export async function exchangeCodeForToken(
     return {
       success: false,
       error_code: "unauthenticated",
-      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+      message: "Could not connect to Facebook right now. Please try again."
     };
   }
 
@@ -283,7 +283,7 @@ export async function exchangeCodeForToken(
     return {
       success: false,
       error_code: "facebook_error",
-      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+      message: "Could not connect to Facebook right now. Please try again."
     };
   }
 
@@ -310,7 +310,7 @@ export async function exchangeCodeForToken(
       return {
         success: false,
         error_code: "facebook_error",
-        message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+        message: "Could not connect to Facebook right now. Please try again."
       };
     }
 
@@ -319,7 +319,7 @@ export async function exchangeCodeForToken(
       return {
         success: false,
         error_code: "invalid_token",
-        message: "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại"
+        message: "Your Facebook connection has expired. Please reconnect."
       };
     }
 
@@ -360,8 +360,8 @@ export async function exchangeCodeForToken(
         error_code: codeNum === 190 ? "invalid_token" : "facebook_error",
         message:
           codeNum === 190
-            ? "Kết nối Facebook đã hết hiệu lực, vui lòng kết nối lại"
-            : "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+            ? "Your Facebook connection has expired. Please reconnect."
+            : "Could not connect to Facebook right now. Please try again."
       };
     }
 
@@ -399,7 +399,7 @@ export async function exchangeCodeForToken(
         error_code: "missing_permissions",
         scopes: grantedScopes,
         missing_scopes: missingEssential,
-        message: "Facebook chưa cấp đủ quyền cần thiết"
+        message: "Facebook did not grant all required permissions"
       };
     }
 
@@ -431,7 +431,7 @@ export async function exchangeCodeForToken(
       return {
         success: false,
         error_code: "db_error",
-        message: "Không thể lưu tài khoản, vui lòng thử lại"
+        message: "Could not save the account. Please try again."
       };
     }
 
@@ -444,13 +444,13 @@ export async function exchangeCodeForToken(
       token_expires_at: expiresAtIso,
       scopes: grantedScopes,
       missing_scopes: missingScopes,
-      message: "Đã kết nối tài khoản Facebook thành công"
+      message: "Facebook account connected"
     };
   } catch {
     return {
       success: false,
       error_code: "facebook_error",
-      message: "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+      message: "Could not connect to Facebook right now. Please try again."
     };
   }
 }

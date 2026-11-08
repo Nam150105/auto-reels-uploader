@@ -40,7 +40,7 @@ export async function handleComplianceRoutes(
     const staticResp = await serveStaticHtmlAsset(request, env, "/privacy.html");
     if (staticResp) return staticResp;
     return htmlResponse(
-      `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Chính Sách Quyền Riêng Tư - Quản lý fanpage</title></head><body><h1>Chính Sách Quyền Riêng Tư - Quản lý fanpage (App ID: 1469615908436980)</h1><p>Ứng dụng tại ${PRODUCTION_DOMAIN} sử dụng Meta Graph API chính thức để quản lý Fanpage và đăng Reels theo lịch hẹn.</p></body></html>`
+      `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Privacy Policy - FB Reels Auto Scheduler</title></head><body><h1>Privacy Policy - FB Reels Auto Scheduler (App ID: 1469615908436980)</h1><p>The app at ${PRODUCTION_DOMAIN} uses the official Meta Graph API to manage Pages and publish scheduled Reels.</p></body></html>`
     );
   }
 
@@ -48,7 +48,7 @@ export async function handleComplianceRoutes(
     const staticResp = await serveStaticHtmlAsset(request, env, "/terms.html");
     if (staticResp) return staticResp;
     return htmlResponse(
-      `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Điều Khoản Dịch Vụ - Quản lý fanpage</title></head><body><h1>Điều Khoản Dịch Vụ - Quản lý fanpage (App ID: 1469615908436980)</h1><p>Bằng việc sử dụng ${PRODUCTION_DOMAIN}, bạn đồng ý tuân thủ Tiêu chuẩn Cộng đồng của Meta.</p></body></html>`
+      `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Terms of Service - FB Reels Auto Scheduler</title></head><body><h1>Terms of Service - FB Reels Auto Scheduler (App ID: 1469615908436980)</h1><p>By using ${PRODUCTION_DOMAIN}, you agree to follow Meta's Community Standards.</p></body></html>`
     );
   }
 
@@ -56,7 +56,7 @@ export async function handleComplianceRoutes(
     const staticResp = await serveStaticHtmlAsset(request, env, "/data-deletion.html");
     if (staticResp) return staticResp;
     return htmlResponse(
-      `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Hướng Dẫn Xóa Dữ Liệu Người Dùng - Quản lý fanpage</title></head><body><h1>Hướng Dẫn Xóa Dữ Liệu Người Dùng (App ID: 1469615908436980)</h1><p>Bạn có thể ngắt kết nối và xóa toàn bộ dữ liệu Token, Fanpage, Video R2 tại ${PRODUCTION_DOMAIN}/pages hoặc gỡ ứng dụng trong Cài đặt Facebook.</p></body></html>`
+      `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>User Data Deletion - FB Reels Auto Scheduler</title></head><body><h1>User Data Deletion (App ID: 1469615908436980)</h1><p>You can disconnect and delete all your tokens, Pages, and videos at ${PRODUCTION_DOMAIN}/pages, or remove the app in your Facebook settings.</p></body></html>`
     );
   }
 
@@ -118,26 +118,26 @@ export async function handleComplianceRoutes(
 
     return htmlResponse(
       `<!DOCTYPE html>
-<html lang="vi" class="bg-slate-950 text-slate-100">
+<html lang="en" class="bg-slate-950 text-slate-100">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Trạng Thái Xóa Dữ Liệu - Quản lý fanpage</title>
+  <title>Data Deletion Status - FB Reels Auto Scheduler</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="min-h-screen flex items-center justify-center p-6">
   <div class="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center shadow-2xl">
     <div class="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-4 text-2xl font-bold">✓</div>
-    <h1 class="text-xl font-bold text-white mb-2">Yêu Cầu Xóa Dữ Liệu Đã Hoàn Tất</h1>
+    <h1 class="text-xl font-bold text-white mb-2">Data Deletion Request Completed</h1>
     <p class="text-sm text-slate-400 mb-6">
-      Toàn bộ Access Token, liên kết Fanpage và dữ liệu liên quan đến tài khoản Facebook của bạn trên ứng dụng <b>Quản lý fanpage (App ID: 1469615908436980)</b> đã được xóa khỏi cơ sở dữ liệu Cloudflare D1 & R2.
+      All access tokens, Page connections, and data linked to your Facebook account in <b>FB Reels Auto Scheduler (App ID: 1469615908436980)</b> have been deleted.
     </p>
     <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs font-mono text-slate-300 mb-6 space-y-1">
-      <div>Mã xác nhận (Confirmation Code): <b class="text-emerald-400">${escapeHtml(code || "N/A")}</b></div>
-      <div>Trạng thái thực thi: <b class="text-emerald-400">${escapeHtml(statusLabel)}</b></div>
-      <div>Thời điểm hoàn tất: <span class="text-slate-400">${escapeHtml(completedAt)}</span></div>
+      <div>Confirmation code: <b class="text-emerald-400">${escapeHtml(code || "N/A")}</b></div>
+      <div>Status: <b class="text-emerald-400">${escapeHtml(statusLabel)}</b></div>
+      <div>Completed at: <span class="text-slate-400">${escapeHtml(completedAt)}</span></div>
     </div>
-    <a href="/" class="inline-block px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition">Về Trang Chủ</a>
+    <a href="/" class="inline-block px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition">Back to Home</a>
   </div>
 </body>
 </html>`

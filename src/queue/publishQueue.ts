@@ -26,8 +26,14 @@ import {
   prepareTasksForPublishNow,
   recordTaskAuditLog,
   normalizeCommentDelayMinutes,
-  scheduleTaskComment
+  scheduleTaskComment,
+  scheduleTaskCommentsAfterPublish,
+  claimDueTaskCommentRows,
+  finishTaskCommentRow,
+  refreshTaskCommentSummary
 } from "../db.ts";
+import type { TaskCommentRow } from "../db.ts";
+import { loadCommentImage } from "../services/r2MediaService.ts";
 import {
   getMetaConfig,
   validateVideoSource,
@@ -69,7 +75,7 @@ export async function enqueueUserPendingTasks(
       enqueued_count: 0,
       skipped_future_count: 0,
       messages: [],
-      message: "Không có tác vụ nào ở trạng thái Chờ xử lý (pending) thuộc các Fanpage đang chọn."
+      message: "No pending posts for the selected Pages."
     };
   }
 
@@ -96,7 +102,7 @@ export async function enqueueUserPendingTasks(
         db,
         task.id,
         "failed",
-        "Tác vụ chưa được gán vào Fanpage nào.",
+        "This post is not assigned to a Page.",
         { retryable: false, clearLease: true }
       );
       continue;
@@ -114,7 +120,7 @@ export async function enqueueUserPendingTasks(
         db,
         task.id,
         "failed",
-        `Fanpage ${task.facebook_page_id} không thuộc quyền sở hữu hoặc thiếu Page Access Token.`,
+        `Page ${task.facebook_page_id} is not yours or is missing a Page access token.`,
         { retryable: false, clearLease: true }
       );
       continue;
@@ -137,7 +143,7 @@ export async function enqueueUserPendingTasks(
       db,
       task.id,
       "queued",
-      "Đang trong hàng đợi đăng...",
+      "Queued for publishing...",
       { clearLease: true }
     );
     await appendTaskStageLog(
@@ -146,7 +152,7 @@ export async function enqueueUserPendingTasks(
       ownerUserId,
       "INFO",
       "queued",
-      "Đã đưa vào hàng đợi đăng Reels."
+      "Added to the Reels publishing queue."
     );
 
     messagesToEnqueue.push({
@@ -166,8 +172,8 @@ export async function enqueueUserPendingTasks(
       messages: [],
       message:
         skippedFutureCount > 0
-          ? `Có ${skippedFutureCount} tác vụ đang chờ đến giờ hẹn lịch (hệ thống sẽ tự động đăng khi đến hạn).`
-          : "Không có tác vụ hợp lệ nào để đưa vào hàng đợi."
+          ? `${skippedFutureCount} post(s) are waiting for their scheduled time and will publish automatically.`
+          : "No eligible posts to queue."
     };
   }
 
@@ -188,8 +194,8 @@ export async function enqueueUserPendingTasks(
     messages: messagesToEnqueue,
     message:
       skippedFutureCount > 0
-        ? `Đã đưa ${messagesToEnqueue.length} tác vụ vào hàng đợi xuất bản! (Giữ lại ${skippedFutureCount} tác vụ đang chờ đến giờ hẹn lịch).`
-        : `Đã đưa ${messagesToEnqueue.length} tác vụ vào hàng đợi xử lý nền (Queue)!`
+        ? `Queued ${messagesToEnqueue.length} post(s) for publishing. ${skippedFutureCount} post(s) are waiting for their scheduled time.`
+        : `Queued ${messagesToEnqueue.length} post(s) for publishing.`
   };
 }
 
@@ -205,12 +211,12 @@ export async function consumeSingleTaskMessage(
   const existingTask = await getTask(db, msg.task_id, msg.owner_user_id);
 
   if (!existingTask) {
-    return { status: "ack", reason: "Task không tồn tại." };
+    return { status: "ack", reason: "Post not found." };
   }
 
   // 1. Kiểm tra Idempotency & Trạng thái hoàn thành từng phần
   if (existingTask.raw_status === "cancelled") {
-    return { status: "ack", reason: "Task đã hủy trước đó." };
+    return { status: "ack", reason: "This post was already cancelled." };
   }
 
   const isReelPublished =
@@ -238,7 +244,7 @@ export async function consumeSingleTaskMessage(
         msg.owner_user_id
       );
       if (page && page.page_access_token) {
-        await updateTaskCommentState(db, existingTask.id, "processing", "Đang xử lý đăng bình luận...");
+        await updateTaskCommentState(db, existingTask.id, "processing", "Posting comment...");
         const cmtRes = await postReelCommentViaGraphApi(db, env, {
           facebookPageId: page.facebook_page_id || existingTask.facebook_page_id!,
           pageAccessToken: page.page_access_token,
@@ -269,7 +275,7 @@ export async function consumeSingleTaskMessage(
             db,
             existingTask.id,
             "success",
-            "Đã đăng Reels thành công! (Đã đăng bình luận tự động)",
+            "Reel published! (Auto comment posted)",
             { clearLease: true }
           );
         } else {
@@ -281,11 +287,14 @@ export async function consumeSingleTaskMessage(
         db,
         existingTask.id,
         "success",
-        existingTask.log || "Đã đăng Reels thành công!",
+        existingTask.log || "Reel published!",
         { clearLease: true }
       );
     }
-    return { status: "ack", reason: "Idempotency guard: Video đã đăng thành công." };
+    try {
+      await processTaskComments(db, env, existingTask.id, { publishedAtUtc: nowUtcSeconds() });
+    } catch {}
+    return { status: "ack", reason: "Already published. Skipped to avoid a duplicate post." };
   }
 
   // 2. Atomic Lease Claim: Tránh 2 consumer xử lý cùng 1 task
@@ -294,7 +303,7 @@ export async function consumeSingleTaskMessage(
   if (!claimedTask) {
     return {
       status: "ack",
-      reason: "Task đang được xử lý bởi một consumer khác (Lease locked)."
+      reason: "This post is already being processed."
     };
   }
 
@@ -312,8 +321,8 @@ export async function consumeSingleTaskMessage(
   // Kiểm tra lại xem task có bị người dùng bấm "Dừng" trong lúc chờ không
   const refreshed = await getTask(db, claimedTask.id, msg.owner_user_id);
   if (!refreshed || refreshed.raw_status === "pending" || refreshed.raw_status === "cancelled") {
-    await recordTaskAttemptFinish(db, attemptId, "failed", "cancelled", null, null, "Người dùng đã dừng tác vụ.");
-    return { status: "ack", reason: "Task đã được dừng bởi người dùng." };
+    await recordTaskAttemptFinish(db, attemptId, "failed", "cancelled", null, null, "Stopped by user.");
+    return { status: "ack", reason: "This post was stopped by the user." };
   }
 
   // 3. KIỂM TRA LẠI THỜI GIAN THỰC TẾ TRƯỚC KHI ĐĂNG
@@ -322,7 +331,7 @@ export async function consumeSingleTaskMessage(
   if (claimedTask.scheduled_at && claimedTask.scheduled_at > currentNowUtc) {
     const diffSec = claimedTask.scheduled_at - currentNowUtc;
     const diffMin = Math.ceil(diffSec / 60);
-    const holdMsg = `Đang chờ đến giờ hẹn: ${claimedTask.schedule_date || ''} ${claimedTask.schedule_time || ''} (còn ${diffMin} phút)`;
+    const holdMsg = `Waiting for scheduled time: ${claimedTask.schedule_date || ''} ${claimedTask.schedule_time || ''} (${diffMin} min left)`;
     await updateTaskExecutionState(
       db,
       claimedTask.id,
@@ -343,7 +352,7 @@ export async function consumeSingleTaskMessage(
   }
 
   if (!claimedTask.facebook_page_id) {
-    const errMsg = "Tác vụ chưa được gán Fanpage.";
+    const errMsg = "No Page is assigned to this post.";
     await updateTaskExecutionState(db, claimedTask.id, "failed", errMsg, {
       retryable: false,
       clearLease: true
@@ -361,7 +370,7 @@ export async function consumeSingleTaskMessage(
   );
 
   if (!page || !page.page_access_token) {
-    const errMsg = `Không tìm thấy Page Access Token hợp lệ cho Fanpage ${claimedTask.facebook_page_id}.`;
+    const errMsg = `No valid Page access token for Page ${claimedTask.facebook_page_id}. Please reconnect the Page.`;
     await updateTaskExecutionState(db, claimedTask.id, "failed", errMsg, {
       retryable: false,
       clearLease: true
@@ -371,7 +380,7 @@ export async function consumeSingleTaskMessage(
   }
 
   if (!page.can_post) {
-    const errMsg = `Fanpage '${page.page_name}' không có quyền CREATE_CONTENT.`;
+    const errMsg = `Page '${page.page_name}' does not have the CREATE_CONTENT permission.`;
     await updateTaskExecutionState(db, claimedTask.id, "failed", errMsg, {
       retryable: false,
       clearLease: true
@@ -478,12 +487,12 @@ export async function consumeSingleTaskMessage(
       // Bình luận hẹn giờ: Cron sẽ đăng khi đến hạn (comment_due_at)
       const dueAt = nowUtcSeconds() + commentDelayMin * 60;
       const delayText = formatCommentDelay(commentDelayMin);
-      await scheduleTaskComment(db, claimedTask.id, dueAt, `Bình luận sẽ được đăng sau ${delayText}.`);
+      await scheduleTaskComment(db, claimedTask.id, dueAt, `Comment will be posted in ${delayText}.`);
       await updateTaskExecutionState(
         db,
         claimedTask.id,
         "success",
-        `Đã đăng Reels thành công! (Bình luận sẽ được đăng sau ${delayText})`,
+        `Reel published! (Comment will be posted in ${delayText})`,
         { clearLease: true }
       );
       await appendTaskStageLog(
@@ -492,17 +501,17 @@ export async function consumeSingleTaskMessage(
         msg.owner_user_id,
         "INFO",
         "comment_scheduled",
-        `Bình luận tự động được hẹn đăng sau ${delayText}.`
+        `Auto comment scheduled in ${delayText}.`
       );
     } else {
-      await updateTaskCommentState(db, claimedTask.id, "processing", "Đang đăng bình luận tự động...");
+      await updateTaskCommentState(db, claimedTask.id, "processing", "Posting auto comment...");
       await appendTaskStageLog(
         db,
         claimedTask.id,
         msg.owner_user_id,
         "INFO",
         "commenting",
-        "Đang đăng bình luận lên bài viết Reels..."
+        "Posting comment on the Reel..."
       );
 
       const cmtRes = await postReelCommentViaGraphApi(db, env, {
@@ -537,7 +546,7 @@ export async function consumeSingleTaskMessage(
           db,
           claimedTask.id,
           "success",
-          "Đã đăng Reels thành công! (Đã đăng bình luận tự động)",
+          "Reel published! (Auto comment posted)",
           { clearLease: true }
         );
         await appendTaskStageLog(
@@ -554,7 +563,7 @@ export async function consumeSingleTaskMessage(
           db,
           claimedTask.id,
           "success",
-          `Đã đăng Reels thành công! (Lỗi bình luận: ${cmtRes.message})`,
+          `Reel published! (Comment failed: ${cmtRes.message})`,
           { clearLease: true }
         );
         await appendTaskStageLog(
@@ -566,6 +575,13 @@ export async function consumeSingleTaskMessage(
           cmtRes.message
         );
       }
+    }
+
+    // Multi-comment pipeline: each comment is due at publish time + its own delay
+    try {
+      await processTaskComments(db, env, claimedTask.id, { publishedAtUtc: nowUtcSeconds() });
+    } catch {
+      // The cron retries due comments every minute
     }
 
     return { status: "ack" };
@@ -580,7 +596,7 @@ export async function consumeSingleTaskMessage(
   if (canRetry) {
     const backoffSec = calculateBackoffSeconds(attemptNum);
     const nextRetryAt = nowUtcSeconds() + backoffSec;
-    const retryLog = `[Thử lại ${attemptNum}/${maxAttempts} sau ${backoffSec}s] ${pubRes.message}`;
+    const retryLog = `[Retry ${attemptNum}/${maxAttempts} in ${backoffSec}s] ${pubRes.message}`;
 
     await updateTaskExecutionState(db, claimedTask.id, "queued", retryLog, {
       videoId: pubRes.video_id,
@@ -612,9 +628,9 @@ export async function consumeSingleTaskMessage(
 
   // Dead-letter hoặc Ambiguous Publish (không tự động retry để tránh đăng trùng)
   const finalFailMsg = pubRes.ambiguous_publish
-    ? `[DỪNG AUTO-RETRY CHỐNG ĐĂNG TRÙNG] ${pubRes.message}`
+    ? `[AUTO-RETRY STOPPED TO AVOID A DUPLICATE POST] ${pubRes.message}`
     : attemptNum >= maxAttempts
-    ? `[DEAD-LETTER: Quá số lần thử ${attemptNum}/${maxAttempts}] ${pubRes.message}`
+    ? `[Failed after ${attemptNum}/${maxAttempts} attempts] ${pubRes.message}`
     : pubRes.message;
 
   await updateTaskExecutionState(db, claimedTask.id, "failed", finalFailMsg, {
@@ -717,7 +733,7 @@ export async function publishSelectedTasksNow(
     }
 
     if (!task.facebook_page_id) {
-      const msg = "Task chưa được gán vào Fanpage đích.";
+      const msg = "No target Page is assigned to this post.";
       await updateTaskExecutionState(db, task.id, "failed", msg, {
         retryable: false,
         clearLease: true
@@ -734,7 +750,7 @@ export async function publishSelectedTasksNow(
       params.ownerUserId
     );
     if (!page || !page.page_access_token) {
-      const msg = `Fanpage ${task.facebook_page_id} chưa có Page Access Token hợp lệ.`;
+      const msg = `Page ${task.facebook_page_id} has no valid Page access token.`;
       await updateTaskExecutionState(db, task.id, "failed", msg, {
         retryable: false,
         clearLease: true
@@ -748,7 +764,7 @@ export async function publishSelectedTasksNow(
       page.token_status === "revoked" ||
       page.token_status === "invalid"
     ) {
-      const msg = `Access Token của Fanpage '${page.page_name || task.facebook_page_id}' đã hết hạn hoặc bị thu hồi. Vui lòng cập nhật lại Token.`;
+      const msg = `The access token for Page '${page.page_name || task.facebook_page_id}' has expired or was revoked. Please update the token.`;
       await updateTaskExecutionState(db, task.id, "failed", msg, {
         retryable: false,
         clearLease: true
@@ -758,7 +774,7 @@ export async function publishSelectedTasksNow(
     }
 
     if (!page.can_post) {
-      const msg = `Fanpage '${page.page_name || task.facebook_page_id}' thiếu quyền CREATE_CONTENT.`;
+      const msg = `Page '${page.page_name || task.facebook_page_id}' is missing the CREATE_CONTENT permission.`;
       await updateTaskExecutionState(db, task.id, "failed", msg, {
         retryable: false,
         clearLease: true
@@ -785,7 +801,7 @@ export async function publishSelectedTasksNow(
       db,
       task.id,
       "queued",
-      "Đã nhận lệnh Đăng ngay -> Đang trong hàng đợi xuất bản...",
+      "Publish now requested - queued for publishing...",
       { clearLease: true }
     );
     await appendTaskStageLog(
@@ -794,7 +810,7 @@ export async function publishSelectedTasksNow(
       params.ownerUserId,
       "INFO",
       "queued_publish_now",
-      `Đã cập nhật lịch đăng về hiện tại (${task.schedule_date} ${task.schedule_time}) và đưa vào hàng đợi Đăng ngay.`
+      `Schedule moved to now (${task.schedule_date} ${task.schedule_time}) and queued to publish.`
     );
 
     enqueuedIds.push(task.id);
@@ -818,11 +834,11 @@ export async function publishSelectedTasksNow(
   const msgText =
     messagesToEnqueue.length > 0
       ? skippedList.length > 0
-        ? `Đã đưa ${messagesToEnqueue.length} task vào hàng đợi Đăng ngay (Bỏ qua ${skippedList.length} task không đủ điều kiện).`
-        : `Đã cập nhật lịch đăng về hiện tại và đưa ${messagesToEnqueue.length} task vào hàng đợi Đăng ngay!`
+        ? `Queued ${messagesToEnqueue.length} post(s) to publish now (${skippedList.length} skipped as not eligible).`
+        : `Queued ${messagesToEnqueue.length} post(s) to publish now.`
       : skippedList.length > 0
-        ? `Không thể đăng ngay: ${skippedList[0].reason}`
-        : "Không có task hợp lệ nào để đăng ngay.";
+        ? `Cannot publish now: ${skippedList[0].reason}`
+        : "No eligible posts to publish now.";
 
   return {
     success: messagesToEnqueue.length > 0,
@@ -892,9 +908,9 @@ export async function handleNativeQueueBatch(
 }
 
 export function formatCommentDelay(minutes: number): string {
-  if (minutes % 60 === 0) return `${minutes / 60} giờ`;
-  if (minutes > 60) return `${Math.floor(minutes / 60)} giờ ${minutes % 60} phút`;
-  return `${minutes} phút`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  if (minutes > 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}min`;
+  return `${minutes} min`;
 }
 
 /**
@@ -909,22 +925,22 @@ export async function postScheduledTaskComment(
 ): Promise<{ success: boolean; message: string }> {
   const cfg = getMetaConfig(env);
   const task = await getTask(db, taskId, ownerUserId);
-  if (!task) return { success: false, message: "Không tìm thấy bài đăng." };
+  if (!task) return { success: false, message: "Post not found." };
 
   const cleanComment = (task.comment_text || "").trim();
   if (!cleanComment || task.comment_id) {
     await updateTaskCommentState(db, taskId, task.comment_id ? "success" : "none", "");
-    return { success: true, message: "Không có bình luận cần đăng." };
+    return { success: true, message: "No comments to post." };
   }
   if (!task.facebook_page_id || !(task.post_id || task.video_id)) {
-    const msgText = "Bài đăng chưa có thông tin bài viết trên Facebook để bình luận.";
+    const msgText = "This post has no Facebook post ID to comment on.";
     await updateTaskCommentState(db, taskId, "failed", msgText);
     return { success: false, message: msgText };
   }
 
   const page = await getFacebookPageByFbId(db, cfg.encryptionKey, task.facebook_page_id, true, ownerUserId);
   if (!page || !page.page_access_token) {
-    const msgText = "Fanpage chưa được kết nối hoặc đã hết quyền. Vui lòng kết nối lại rồi thử đăng lại bình luận.";
+    const msgText = "The Page is not connected or has lost permissions. Reconnect it, then retry the comment.";
     await updateTaskCommentState(db, taskId, "failed", msgText);
     return { success: false, message: msgText };
   }
@@ -944,7 +960,7 @@ export async function postScheduledTaskComment(
       commentId: cmtRes.comment_id,
       commentPostedAt: new Date().toISOString()
     });
-    await updateTaskExecutionState(db, taskId, "success", "Đã đăng Reels thành công! (Đã đăng bình luận tự động)", {
+    await updateTaskExecutionState(db, taskId, "success", "Reel published! (Auto comment posted)", {
       clearLease: true
     });
     await appendTaskStageLog(db, taskId, ownerUserId, "INFO", "comment_success", cmtRes.message);
@@ -954,4 +970,148 @@ export async function postScheduledTaskComment(
   await updateTaskCommentState(db, taskId, "failed", cmtRes.message);
   await appendTaskStageLog(db, taskId, ownerUserId, "WARN", "comment_failed", cmtRes.message);
   return { success: false, message: cmtRes.message };
+}
+
+// ============================================================================
+// MULTI-COMMENT PIPELINE (task_comments)
+// ============================================================================
+
+/** Comments posted inline right after publishing; the rest are picked up by the cron within a minute. */
+const INLINE_COMMENT_LIMIT = 3;
+
+/**
+ * Posts already-claimed comment rows (status = 'processing'), grouped by post and in their set order.
+ * Each comment is independent: one failure does not stop the others.
+ */
+export async function postClaimedTaskComments(
+  db: D1Database,
+  env: Env,
+  rows: TaskCommentRow[]
+): Promise<{ posted: number; failed: number; taskIds: number[] }> {
+  const cfg = getMetaConfig(env);
+  const byTask = new Map<number, TaskCommentRow[]>();
+  for (const row of rows) {
+    const list = byTask.get(Number(row.task_id)) || [];
+    list.push(row);
+    byTask.set(Number(row.task_id), list);
+  }
+
+  let posted = 0;
+  let failed = 0;
+  for (const [taskId, list] of byTask) {
+    list.sort((a, b) => Number(a.due_at || 0) - Number(b.due_at || 0) || a.position - b.position);
+    const owner = list[0].owner_user_id;
+    const task = await getTask(db, taskId, owner);
+
+    let failReason = "";
+    let page: Awaited<ReturnType<typeof getFacebookPageByFbId>> = null;
+    if (!task) {
+      failReason = "The post no longer exists.";
+    } else if (!task.facebook_page_id || !(task.post_id || task.video_id)) {
+      failReason = "The post is not on Facebook yet, so it cannot be commented on.";
+    } else {
+      page = await getFacebookPageByFbId(db, cfg.encryptionKey, task.facebook_page_id, true, owner);
+      if (!page || !page.page_access_token) {
+        failReason = "The Page is disconnected. Reconnect it, then retry the comments.";
+      }
+    }
+
+    for (const row of list) {
+      const label = `Comment #${row.position + 1}`;
+      if (failReason || !task || !page) {
+        await finishTaskCommentRow(db, row.id, { success: false, error: failReason });
+        failed++;
+        continue;
+      }
+
+      let image: Awaited<ReturnType<typeof loadCommentImage>> = null;
+      if (row.image_media_id) {
+        image = await loadCommentImage(db, env, row.image_media_id, owner).catch(() => null);
+        if (!image) {
+          const msgText = "The attached image is no longer available.";
+          await finishTaskCommentRow(db, row.id, { success: false, error: msgText });
+          await appendTaskStageLog(db, taskId, owner, "WARN", "comment_failed", `${label}: ${msgText}`);
+          failed++;
+          continue;
+        }
+      }
+
+      let ok = false;
+      let resultMsg = "";
+      let commentId: string | null = null;
+      try {
+        const cmtRes = await postReelCommentViaGraphApi(db, env, {
+          facebookPageId: page.facebook_page_id || task.facebook_page_id!,
+          pageAccessToken: page.page_access_token!,
+          postId: task.post_id || task.video_id,
+          videoId: task.video_id,
+          commentText: row.message || "",
+          ownerUserId: owner,
+          taskId,
+          skipInitialDuplicateCheck: Number(row.attempts || 0) === 0,
+          image
+        });
+        ok = cmtRes.success;
+        resultMsg = cmtRes.message;
+        commentId = cmtRes.comment_id || null;
+      } catch (err) {
+        ok = false;
+        resultMsg = "Could not reach Facebook. The comment will need a retry.";
+      }
+
+      await finishTaskCommentRow(db, row.id, { success: ok, commentId, error: resultMsg });
+      await appendTaskStageLog(
+        db,
+        taskId,
+        owner,
+        ok ? "INFO" : "WARN",
+        ok ? "comment_success" : "comment_failed",
+        ok ? `${label} posted.` : `${label}: ${resultMsg}`
+      );
+      if (ok) posted++;
+      else failed++;
+    }
+  }
+  return { posted, failed, taskIds: Array.from(byTask.keys()) };
+}
+
+/**
+ * For one post: make pending comments due (publish time + each delay) and post the ones due now.
+ */
+export async function processTaskComments(
+  db: D1Database,
+  env: Env,
+  taskId: number,
+  options: { publishedAtUtc?: number; maxToPost?: number } = {}
+): Promise<{ posted: number; failed: number }> {
+  if (options.publishedAtUtc) {
+    await scheduleTaskCommentsAfterPublish(db, taskId, options.publishedAtUtc);
+  }
+  const due = await claimDueTaskCommentRows(
+    db,
+    nowUtcSeconds(),
+    options.maxToPost ?? INLINE_COMMENT_LIMIT,
+    taskId
+  );
+  const res = due.length > 0 ? await postClaimedTaskComments(db, env, due) : { posted: 0, failed: 0 };
+  await refreshTaskCommentSummary(db, taskId);
+  return { posted: res.posted, failed: res.failed };
+}
+
+/** Cron: post comments from any post that are due now. */
+export async function dispatchDueTaskComments(
+  db: D1Database,
+  env: Env,
+  nowUtc: number,
+  limit = 5
+): Promise<number> {
+  const due = await claimDueTaskCommentRows(db, nowUtc, limit);
+  if (due.length === 0) return 0;
+  const res = await postClaimedTaskComments(db, env, due);
+  for (const taskId of res.taskIds) {
+    try {
+      await refreshTaskCommentSummary(db, taskId);
+    } catch {}
+  }
+  return due.length;
 }

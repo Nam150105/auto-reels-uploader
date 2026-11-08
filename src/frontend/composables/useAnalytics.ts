@@ -6,27 +6,28 @@ import { useToast } from "./useToast";
 const dashboard = ref<AnalyticsDashboard | null>(null);
 const isLoading = ref<boolean>(false);
 const isSyncing = ref<boolean>(false);
+const rangeDays = ref<number>(30);
 let lastFetchedTime = 0;
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes cache
+const CACHE_TTL_MS = 5 * 60 * 1000; // the server also caches Facebook data for 10 minutes
 
 export function useAnalytics() {
   const toast = useToast();
 
   const loadAnalytics = async (force = false) => {
     const now = Date.now();
-    if (!force && dashboard.value && now - lastFetchedTime < CACHE_TTL_MS) {
+    if (!force && dashboard.value && dashboard.value.range_days === rangeDays.value && now - lastFetchedTime < CACHE_TTL_MS) {
       // Use cached dashboard
       return dashboard.value;
     }
 
     isLoading.value = true;
     try {
-      const data = await api.getAnalytics();
+      const data = await api.getAnalytics(rangeDays.value);
       dashboard.value = data;
       lastFetchedTime = Date.now();
       return data;
     } catch (err: any) {
-      toast.error(err?.message || "Không thể tải dữ liệu thống kê.");
+      toast.error(err?.message || "Couldn't load analytics.");
       return null;
     } finally {
       isLoading.value = false;
@@ -36,11 +37,12 @@ export function useAnalytics() {
   const syncInsights = async () => {
     isSyncing.value = true;
     try {
-      const res = await api.syncAnalytics();
-      toast.success(res?.message || "Đã đồng bộ dữ liệu mới nhất từ Facebook Insights!");
-      await loadAnalytics(true);
+      const data = await api.syncAnalytics(rangeDays.value);
+      dashboard.value = data;
+      lastFetchedTime = Date.now();
+      toast.success(data?.cached ? "Data is already up to date." : "Loaded the latest numbers from Facebook.");
     } catch (err: any) {
-      toast.error(err?.message || "Đồng bộ thống kê Facebook thất bại.");
+      toast.error(err?.message || "Failed to sync Facebook analytics.");
     } finally {
       isSyncing.value = false;
     }
@@ -50,6 +52,7 @@ export function useAnalytics() {
     dashboard,
     isLoading,
     isSyncing,
+    rangeDays,
     loadAnalytics,
     syncInsights
   };

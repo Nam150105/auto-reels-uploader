@@ -14,7 +14,8 @@ import type {
   QueueTaskMessage
 } from "./types.ts";
 import { getEncryptionKeyMaterial } from "./utils/crypto.ts";
-import { parseVnScheduleToUtc, formatUtcToVn } from "./utils/timezone.ts";
+import { getLiveAnalyticsDashboard } from "./services/liveInsightsService.ts";
+import { parseVnScheduleToUtc, formatUtcToVn, nowUtcSeconds } from "./utils/timezone.ts";
 import {
   ensureDatabaseInitialized,
   verifyUserCredentials,
@@ -48,7 +49,11 @@ import {
   ScheduleValidationError,
   rescheduleTasksBulk,
   cancelTasksBulk,
-  getTaskAuditLogs
+  getTaskAuditLogs,
+  getTaskCommentsForTasks,
+  countTaskComments,
+  requeueFailedTaskComments,
+  refreshTaskCommentSummary
 } from "./db.ts";
 import {
   getReelsAnalyticsDashboard,
@@ -99,7 +104,8 @@ import {
 import {
   enqueueUserPendingTasks,
   publishSelectedTasksNow,
-  handleNativeQueueBatch
+  handleNativeQueueBatch,
+  processTaskComments
 } from "./queue/publishQueue.ts";
 import { dispatchDueScheduledTasks } from "./scheduler/cronDispatcher.ts";
 import {
@@ -303,7 +309,7 @@ export async function handleWorkerRequest(
     if (!rl.allowed) {
       return jsonResponse(
         {
-          detail: `Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau ${rl.retryAfterSeconds} giây.`
+          detail: `Too many login attempts. Please try again in ${rl.retryAfterSeconds} seconds.`
         },
         429,
         { "Retry-After": String(rl.retryAfterSeconds) }
@@ -319,7 +325,7 @@ export async function handleWorkerRequest(
       );
       if (!user) {
         return jsonResponse(
-          { detail: "Tên đăng nhập hoặc mật khẩu không chính xác." },
+          { detail: "Incorrect username or password." },
           401
         );
       }
@@ -330,13 +336,13 @@ export async function handleWorkerRequest(
           success: true,
           user,
           csrf_token: issued.csrfToken,
-          message: `Chào mừng ${user.full_name || user.username}!`
+          message: `Welcome, ${user.full_name || user.username}!`
         },
         200,
         { "Set-Cookie": makeSessionCookie(issued.token, isHttps) }
       );
     } catch {
-      return jsonResponse({ detail: "Dữ liệu đăng nhập không hợp lệ." }, 400);
+      return jsonResponse({ detail: "Invalid login details." }, 400);
     }
   }
 
@@ -345,7 +351,7 @@ export async function handleWorkerRequest(
     if (!rl.allowed) {
       return jsonResponse(
         {
-          detail: `Quá nhiều yêu cầu đăng ký. Vui lòng thử lại sau ${rl.retryAfterSeconds} giây.`
+          detail: `Too many sign-up attempts. Please try again in ${rl.retryAfterSeconds} seconds.`
         },
         429,
         { "Retry-After": String(rl.retryAfterSeconds) }
@@ -368,7 +374,7 @@ export async function handleWorkerRequest(
         "member"
       );
       if (!res.success || !res.user) {
-        return jsonResponse({ detail: res.message || "Đăng ký thất bại." }, 400);
+        return jsonResponse({ detail: res.message || "Sign-up failed." }, 400);
       }
 
       const issued = await issueUserSession(request, db, env, res.user.id);
@@ -377,20 +383,20 @@ export async function handleWorkerRequest(
           success: true,
           user: res.user,
           csrf_token: issued.csrfToken,
-          message: "Đăng ký tài khoản thành công!"
+          message: "Account created successfully!"
         },
         200,
         { "Set-Cookie": makeSessionCookie(issued.token, isHttps) }
       );
     } catch {
-      return jsonResponse({ detail: "Dữ liệu đăng ký không hợp lệ." }, 400);
+      return jsonResponse({ detail: "Invalid sign-up details." }, 400);
     }
   }
 
   if (pathname === "/api/auth/logout" && method === "POST") {
     await revokeRequestSession(request, db);
     return jsonResponse(
-      { success: true, message: "Đã đăng xuất và thu hồi phiên làm việc thành công." },
+      { success: true, message: "You have been logged out." },
       200,
       { "Set-Cookie": clearSessionCookie(isHttps) }
     );
@@ -399,7 +405,7 @@ export async function handleWorkerRequest(
   if (pathname === "/api/auth/me" && method === "GET") {
     if (!currentUser) {
       return jsonResponse(
-        { authenticated: false, detail: "Chưa đăng nhập." },
+        { authenticated: false, detail: "Not logged in." },
         401
       );
     }
@@ -424,8 +430,8 @@ export async function handleWorkerRequest(
         success: false,
         statusCode: 200,
         oauthStatus: "denied",
-        title: "Chưa Cấp Quyền Kết Nối",
-        message: "Bạn chưa cấp quyền kết nối Facebook"
+        title: "Permission Not Granted",
+        message: "You did not grant permission to connect Facebook"
       });
     }
 
@@ -435,9 +441,9 @@ export async function handleWorkerRequest(
         statusCode: 200,
         oauthStatus: "ready",
         isEndpointReadyProbe: true,
-        title: "Cổng Kết Nối Facebook Sẵn Sàng",
+        title: "Facebook Connection Ready",
         message:
-          "Điểm cuối xác thực đang hoạt động. Vui lòng quay về trang Quản lý để kết nối tài khoản Facebook."
+          "The sign-in endpoint is working. Go back to the app to connect your Facebook account."
       });
     }
 
@@ -459,8 +465,8 @@ export async function handleWorkerRequest(
         success: false,
         statusCode: 400,
         oauthStatus,
-        title: "Không Thể Kết Nối Facebook",
-        message: res.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại"
+        title: "Could Not Connect Facebook",
+        message: res.message || "Could not connect to Facebook right now. Please try again."
       });
     }
 
@@ -480,8 +486,8 @@ export async function handleWorkerRequest(
         success: false,
         statusCode: 400,
         oauthStatus: syncStatus,
-        title: "Không Thể Đồng Bộ Fanpage",
-        message: syncRes.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại",
+        title: "Could Not Sync Pages",
+        message: syncRes.message || "Could not connect to Facebook right now. Please try again.",
         accountId: res.account_id
       });
     }
@@ -492,9 +498,9 @@ export async function handleWorkerRequest(
         success: false,
         statusCode: 200,
         oauthStatus: "no_pages",
-        title: "Chưa Có Fanpage",
+        title: "No Pages Found",
         subtitle: res.user_name || "",
-        message: "Tài khoản này chưa quản lý Fanpage nào",
+        message: "This account does not manage any Pages",
         syncedCount: 0,
         accountId: res.account_id
       });
@@ -504,9 +510,9 @@ export async function handleWorkerRequest(
       success: true,
       statusCode: 200,
       oauthStatus: "success",
-      title: "Đã kết nối tài khoản Facebook thành công",
-      subtitle: `${res.user_name || ""} (${syncedCount} Fanpage)`,
-      message: "Đã kết nối tài khoản Facebook thành công",
+      title: "Facebook account connected",
+      subtitle: `${res.user_name || ""} (${syncedCount} Page(s))`,
+      message: "Facebook account connected",
       syncedCount,
       accountId: res.account_id
     });
@@ -519,7 +525,7 @@ export async function handleWorkerRequest(
     if (!currentUser) {
       return jsonResponse(
         {
-          detail: "Phiên đăng nhập hết hạn hoặc chưa xác thực. Vui lòng đăng nhập lại."
+          detail: "Your session has expired. Please log in again."
         },
         401
       );
@@ -567,7 +573,7 @@ export async function handleWorkerRequest(
       );
       if (!res.success) {
         return jsonResponse(
-          { detail: res.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại" },
+          { detail: res.message || "Could not connect to Facebook right now. Please try again." },
           400
         );
       }
@@ -587,7 +593,7 @@ export async function handleWorkerRequest(
       );
       if (!res.success || !res.oauth_url) {
         return jsonResponse(
-          { detail: res.message || "Không thể kết nối Facebook lúc này, vui lòng thử lại" },
+          { detail: res.message || "Could not connect to Facebook right now. Please try again." },
           400
         );
       }
@@ -606,7 +612,7 @@ export async function handleWorkerRequest(
       const rawToken = (body.access_token || body.token || "").trim();
       if (!rawToken) {
         return jsonResponse(
-          { detail: "Vui lòng nhập Access Token từ Graph API Explorer." },
+          { detail: "Please enter an access token from Graph API Explorer." },
           400
         );
       }
@@ -647,7 +653,7 @@ export async function handleWorkerRequest(
       const rawToken = (body.access_token || body.token || "").trim();
       if (!rawToken) {
         return jsonResponse(
-          { detail: "Vui lòng nhập Access Token mới từ Graph API Explorer." },
+          { detail: "Please enter a new access token from Graph API Explorer." },
           400
         );
       }
@@ -690,7 +696,7 @@ export async function handleWorkerRequest(
       await disconnectAllUserAccounts(db, ownerUserId);
       return jsonResponse({
         success: true,
-        message: "Đã xóa kết nối toàn bộ tài khoản Facebook và Fanpage của bạn."
+        message: "All your Facebook accounts and Pages have been disconnected."
       });
     }
 
@@ -721,7 +727,7 @@ export async function handleWorkerRequest(
       );
       if (!acc) {
         return jsonResponse(
-          { detail: "Không tìm thấy tài khoản Facebook thuộc quyền sở hữu của bạn." },
+          { detail: "Facebook account not found." },
           404
         );
       }
@@ -738,13 +744,13 @@ export async function handleWorkerRequest(
       const ok = await disconnectFacebookAccount(db, accountId, ownerUserId);
       if (!ok) {
         return jsonResponse(
-          { detail: "Không tìm thấy tài khoản hoặc không có quyền ngắt kết nối." },
+          { detail: "Account not found, or you can't disconnect it." },
           404
         );
       }
       return jsonResponse({
         success: true,
-        message: "Đã ngắt kết nối tài khoản Facebook."
+        message: "Facebook account disconnected."
       });
     }
 
@@ -754,7 +760,7 @@ export async function handleWorkerRequest(
       const delRes = await deleteFacebookAccountWithPages(db, accountId, ownerUserId);
       if (!delRes.deleted) {
         return jsonResponse(
-          { detail: "Không tìm thấy tài khoản hoặc không có quyền xóa." },
+          { detail: "Account not found, or you can't remove it." },
           404
         );
       }
@@ -773,8 +779,8 @@ export async function handleWorkerRequest(
         pages,
         message:
           delRes.deleted_pages_count > 0
-            ? `Đã xóa tài khoản Facebook và ${delRes.deleted_pages_count} Fanpage liên quan khỏi danh sách quản lý.`
-            : "Đã xóa tài khoản Facebook và cập nhật danh sách Fanpage."
+            ? `Removed the Facebook account and ${delRes.deleted_pages_count} related Page(s).`
+            : "Removed the Facebook account and updated your Pages."
       });
     }
 
@@ -822,7 +828,7 @@ export async function handleWorkerRequest(
         ownerUserId
       );
       if (!ok) {
-        return jsonResponse({ detail: "Không tìm thấy Fanpage thuộc quyền sở hữu của bạn." }, 404);
+        return jsonResponse({ detail: "Page not found." }, 404);
       }
       return jsonResponse({
         success: true,
@@ -846,7 +852,7 @@ export async function handleWorkerRequest(
       const pageId = decodeURIComponent(pageDeleteMatch[1]);
       const ok = await deleteFacebookPageLocal(db, pageId, ownerUserId);
       if (!ok) {
-        return jsonResponse({ detail: "Không tìm thấy Fanpage thuộc quyền sở hữu của bạn." }, 404);
+        return jsonResponse({ detail: "Page not found." }, 404);
       }
       return jsonResponse({ success: true, deleted_id: pageId });
     }
@@ -893,7 +899,26 @@ export async function handleWorkerRequest(
         ownerUserId,
         excludePublished
       });
-      return jsonResponse(tasks);
+      const commentMap = await getTaskCommentsForTasks(
+        db,
+        ownerUserId,
+        (tasks as Array<{ id: number }>).map((t) => Number(t.id))
+      );
+      const withComments = (tasks as unknown as Array<Record<string, unknown>>).map((t) => {
+        const list = commentMap.get(Number(t.id)) || [];
+        return {
+          ...t,
+          comments: list.map((c) => ({
+            position: c.position,
+            text: c.message,
+            has_image: Boolean(c.image_media_id),
+            delay_minutes: c.delay_minutes,
+            status: c.status,
+            error: c.error_message || ""
+          }))
+        };
+      });
+      return jsonResponse(withComments);
     }
 
     if (pathname === "/api/tasks" && method === "POST") {
@@ -922,7 +947,7 @@ export async function handleWorkerRequest(
       };
       const vPath = (body.video_path || "").trim();
       if (!vPath) {
-        return jsonResponse({ detail: "Vui lòng tải lên hoặc chọn video trên R2." }, 400);
+        return jsonResponse({ detail: "Please upload or choose a video." }, 400);
       }
 
       const targetPageId = body.facebook_page_id || body.profile_id || null;
@@ -936,7 +961,7 @@ export async function handleWorkerRequest(
         );
         if (!owns) {
           return jsonResponse(
-            { detail: "Bạn không có quyền gán tác vụ cho Fanpage này." },
+            { detail: "You don't have access to this Page." },
             403
           );
         }
@@ -980,7 +1005,7 @@ export async function handleWorkerRequest(
         const mediaRecord = await getMediaFileById(db, lookupKey, ownerUserId);
         if (!mediaRecord) {
           return jsonResponse(
-            { detail: "Video R2 không tồn tại hoặc không thuộc quyền sở hữu của bạn." },
+            { detail: "Video not found." },
             403
           );
         }
@@ -989,7 +1014,7 @@ export async function handleWorkerRequest(
             {
               detail:
                 mediaRecord.storage_error ||
-                `Video '${mediaRecord.original_filename}' tải lên R2 bị lỗi. Vui lòng tải lại video.`
+                `The upload of '${mediaRecord.original_filename}' failed. Please upload the video again.`
             },
             400
           );
@@ -1010,7 +1035,7 @@ export async function handleWorkerRequest(
           return jsonResponse(
             {
               detail:
-                "Video chưa được tải lên Cloudflare R2 thành công. Vui lòng chọn file video và chờ tải lên R2 hoàn tất trước khi tạo Task."
+                "The video has not been uploaded yet. Please choose a video and wait for the upload to finish before creating the post."
             },
             400
           );
@@ -1053,7 +1078,7 @@ export async function handleWorkerRequest(
           );
         }
         return jsonResponse(
-          { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
+          { detail: err?.message || "The scheduled time is invalid or in the past." },
           400
         );
       }
@@ -1095,7 +1120,7 @@ export async function handleWorkerRequest(
 
       const tasksList = body.tasks || [];
       if (tasksList.length === 0) {
-        return jsonResponse({ detail: "Danh sách tác vụ trống." }, 400);
+        return jsonResponse({ detail: "The post list is empty." }, 400);
       }
 
       // 1. Phân bổ lịch hẹn tự động nếu có ngày giờ bắt đầu và khoảng cách
@@ -1112,8 +1137,8 @@ export async function handleWorkerRequest(
           return jsonResponse(
             {
               error_code: parsedBase.isPast ? "SCHEDULE_IN_PAST" : "SCHEDULE_INVALID",
-              detail: parsedBase.error || "Thời gian bắt đầu đặt lịch không hợp lệ hoặc đã qua.",
-              message: parsedBase.error || "Thời gian bắt đầu đặt lịch không hợp lệ hoặc đã qua.",
+              detail: parsedBase.error || "The start time is invalid or in the past.",
+              message: parsedBase.error || "The start time is invalid or in the past.",
               field_errors: parsedBase.fieldErrors,
               is_past: parsedBase.isPast,
               missing_date: parsedBase.missingDate,
@@ -1141,7 +1166,7 @@ export async function handleWorkerRequest(
         const vPath = (item.video_path || "").trim();
 
         if (!vPath) {
-          return jsonResponse({ detail: `Dòng ${i + 1}: Đường dẫn video không được để trống.` }, 400);
+          return jsonResponse({ detail: `Row ${i + 1}: The video path is empty.` }, 400);
         }
 
         // Tự động giải quyết media R2
@@ -1172,7 +1197,7 @@ export async function handleWorkerRequest(
             } else {
               return jsonResponse(
                 {
-                  detail: `Dòng ${i + 1}: Video '${baseName}' chưa được tải lên Cloudflare R2 hoặc upload chưa hoàn tất. Vui lòng chọn file và tải lên R2 trước khi tạo task.`
+                  detail: `Row ${i + 1}: Video '${baseName}' has not been uploaded yet. Please upload it before creating the post.`
                 },
                 400
               );
@@ -1217,7 +1242,7 @@ export async function handleWorkerRequest(
           );
         }
         return jsonResponse(
-          { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
+          { detail: err?.message || "The scheduled time is invalid or in the past." },
           400
         );
       }
@@ -1288,7 +1313,7 @@ export async function handleWorkerRequest(
       const body = (await request.json().catch(() => ({}))) as { task_ids?: number[] };
       const taskIds = Array.isArray(body.task_ids) ? body.task_ids : [];
       if (taskIds.length === 0) {
-        return jsonResponse({ detail: "Vui lòng chọn ít nhất một task để đăng ngay." }, 400);
+        return jsonResponse({ detail: "Select at least one post to publish now." }, 400);
       }
       const res = await publishSelectedTasksNow(db, env, ctx, {
         taskIds,
@@ -1311,7 +1336,7 @@ export async function handleWorkerRequest(
       };
       const taskIds = Array.isArray(body.task_ids) ? body.task_ids : [];
       if (taskIds.length === 0) {
-        return jsonResponse({ detail: "Vui lòng chọn ít nhất một task để đổi lịch đăng." }, 400);
+        return jsonResponse({ detail: "Select at least one post to reschedule." }, 400);
       }
       try {
         const res = await rescheduleTasksBulk(db, {
@@ -1333,8 +1358,8 @@ export async function handleWorkerRequest(
             skipped: res.skippedTasks,
             message:
               res.updatedCount > 0
-                ? `Đã cập nhật lịch đăng cho ${res.updatedCount} task${res.skippedTasks.length > 0 ? ` (Bỏ qua ${res.skippedTasks.length} task không hợp lệ)` : ""}.`
-                : res.skippedTasks[0]?.reason || "Không có task nào đủ điều kiện đổi lịch."
+                ? `Rescheduled ${res.updatedCount} post(s)${res.skippedTasks.length > 0 ? ` (${res.skippedTasks.length} skipped as not eligible)` : ""}.`
+                : res.skippedTasks[0]?.reason || "No posts can be rescheduled."
           },
           res.updatedCount > 0 ? 200 : 400
         );
@@ -1353,7 +1378,7 @@ export async function handleWorkerRequest(
             err.httpStatus
           );
         }
-        return jsonResponse({ detail: err?.message || "Không thể đổi lịch đăng." }, 400);
+        return jsonResponse({ detail: err?.message || "Could not reschedule." }, 400);
       }
     }
 
@@ -1361,7 +1386,7 @@ export async function handleWorkerRequest(
       const body = (await request.json().catch(() => ({}))) as { task_ids?: number[] };
       const taskIds = Array.isArray(body.task_ids) ? body.task_ids : [];
       if (taskIds.length === 0) {
-        return jsonResponse({ detail: "Vui lòng chọn ít nhất một task để hủy lịch." }, 400);
+        return jsonResponse({ detail: "Select at least one post to cancel." }, 400);
       }
       const res = await cancelTasksBulk(db, {
         taskIds,
@@ -1377,8 +1402,8 @@ export async function handleWorkerRequest(
           skipped: res.skippedTasks,
           message:
             res.cancelledCount > 0
-              ? `Đã hủy lịch ${res.cancelledCount} task${res.skippedTasks.length > 0 ? ` (Bỏ qua ${res.skippedTasks.length} task)` : ""}.`
-              : res.skippedTasks[0]?.reason || "Không có task nào có thể hủy lịch."
+              ? `Cancelled ${res.cancelledCount} post(s)${res.skippedTasks.length > 0 ? ` (${res.skippedTasks.length} skipped)` : ""}.`
+              : res.skippedTasks[0]?.reason || "No posts can be cancelled."
         },
         res.cancelledCount > 0 ? 200 : 400
       );
@@ -1404,7 +1429,7 @@ export async function handleWorkerRequest(
       try {
         const ok = await resetTask(db, taskId, ownerUserId);
         if (!ok) {
-          return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+          return jsonResponse({ detail: "Post not found." }, 404);
         }
         return jsonResponse({ success: true, id: taskId });
       } catch (err: any) {
@@ -1419,7 +1444,7 @@ export async function handleWorkerRequest(
             err.httpStatus
           );
         }
-        return jsonResponse({ detail: err?.message || "Không thể đặt lại tác vụ." }, 400);
+        return jsonResponse({ detail: err?.message || "Could not reset the post." }, 400);
       }
     }
 
@@ -1428,19 +1453,41 @@ export async function handleWorkerRequest(
       const taskId = parseInt(taskRetryCommentMatch[1], 10);
       const task = await getTask(db, taskId, ownerUserId);
       if (!task) {
-        return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+        return jsonResponse({ detail: "Post not found." }, 404);
       }
 
       if (task.status !== "success" || !task.post_id) {
         return jsonResponse(
-          { detail: "Chỉ có thể đăng lại bình luận cho bài Reels đã xuất bản thành công." },
+          { detail: "Comments can only be retried on a published Reel." },
           400
+        );
+      }
+
+      // Posts created with the multi-comment composer: retry every failed comment
+      if ((await countTaskComments(db, task.id)) > 0) {
+        const requeued = await requeueFailedTaskComments(db, task.id, ownerUserId, nowUtcSeconds());
+        if (requeued === 0) {
+          await refreshTaskCommentSummary(db, task.id);
+          return jsonResponse({ success: true, message: "There are no failed comments to retry." });
+        }
+        const out = await processTaskComments(db, env, task.id, { maxToPost: 10 });
+        const failedNow = out.failed > 0;
+        return jsonResponse(
+          {
+            success: !failedNow,
+            comment_status: failedNow ? "failed" : "success",
+            detail: failedNow ? `${out.failed} comment(s) failed again. Check the Page connection and try later.` : undefined,
+            message: failedNow
+              ? `${out.posted} posted, ${out.failed} failed.`
+              : `Posted ${out.posted} comment(s).`
+          },
+          failedNow ? 400 : 200
         );
       }
 
       const cleanComment = (task.comment_text || "").trim();
       if (!cleanComment) {
-        return jsonResponse({ detail: "Tác vụ này không có nội dung bình luận." }, 400);
+        return jsonResponse({ detail: "This post has no comment to publish." }, 400);
       }
 
       if (task.comment_status === "success") {
@@ -1448,13 +1495,13 @@ export async function handleWorkerRequest(
           success: true,
           locked: true,
           already_commented: true,
-          message: "Bình luận này đã được đăng thành công trên Facebook.",
+          message: "This comment has already been posted on Facebook.",
           comment_id: task.comment_id || ""
         });
       }
 
       if (!task.facebook_page_id) {
-        return jsonResponse({ detail: "Tác vụ chưa được gán Fanpage." }, 400);
+        return jsonResponse({ detail: "No Page is assigned to this post." }, 400);
       }
 
       const page = await getFacebookPageByFbId(
@@ -1468,21 +1515,21 @@ export async function handleWorkerRequest(
       if (!page) {
         return jsonResponse(
           {
-            detail: `Không tìm thấy Fanpage ${task.facebook_page_id} trong danh sách quản lý của bạn.`,
+            detail: `Page ${task.facebook_page_id} was not found in your Pages.`,
             error_type: "INVALID_PAGE_TOKEN"
           },
           400
         );
       }
 
-      await updateTaskCommentState(db, task.id, "processing", "Đang thử đăng lại bình luận...");
+      await updateTaskCommentState(db, task.id, "processing", "Retrying comment...");
       await appendTaskStageLog(
         db,
         task.id,
         ownerUserId,
         "INFO",
         "retry_comment",
-        "Người dùng yêu cầu thử đăng lại bình luận."
+        "User requested a comment retry."
       );
 
       const cmtRes = await postReelCommentViaGraphApi(db, env, {
@@ -1582,7 +1629,7 @@ export async function handleWorkerRequest(
           }
         );
         if (!ok) {
-          return jsonResponse({ detail: "Không tìm thấy tác vụ thuộc quyền sở hữu của bạn." }, 404);
+          return jsonResponse({ detail: "Post not found." }, 404);
         }
         const updated = await getTask(db, taskId, ownerUserId);
         return jsonResponse({ success: true, task: updated });
@@ -1613,7 +1660,7 @@ export async function handleWorkerRequest(
           );
         }
         return jsonResponse(
-          { detail: err?.message || "Thời gian đặt lịch không hợp lệ hoặc đã qua." },
+          { detail: err?.message || "The scheduled time is invalid or in the past." },
           400
         );
       }
@@ -1626,7 +1673,7 @@ export async function handleWorkerRequest(
       try {
         const existing = await getTask(db, taskId, ownerUserId);
         if (!existing) {
-          return jsonResponse({ detail: "Không tìm thấy bài viết thuộc quyền sở hữu của bạn." }, 404);
+          return jsonResponse({ detail: "Post not found." }, 404);
         }
 
         // Nếu người dùng chọn xóa cả bài viết trên Facebook
@@ -1643,7 +1690,7 @@ export async function handleWorkerRequest(
 
         const delRes = await deleteTask(db, taskId, ownerUserId, { allowPublished: forceDelete });
         if (!delRes.deleted) {
-          return jsonResponse({ detail: "Không tìm thấy bài viết thuộc quyền sở hữu của bạn." }, 404);
+          return jsonResponse({ detail: "Post not found." }, 404);
         }
 
         // Tự động xóa video trên R2 nếu không còn bài viết nào khác tham chiếu
@@ -1669,7 +1716,7 @@ export async function handleWorkerRequest(
             err.httpStatus
           );
         }
-        return jsonResponse({ detail: err?.message || "Không thể xóa bài viết." }, 400);
+        return jsonResponse({ detail: err?.message || "Could not delete the post." }, 400);
       }
     }
 
@@ -1683,7 +1730,7 @@ export async function handleWorkerRequest(
       const body = (await request.json().catch(() => ({}))) as { task_ids?: number[] };
       const taskIds = Array.isArray(body.task_ids) ? body.task_ids : [];
       if (taskIds.length === 0) {
-        return jsonResponse({ detail: "Vui lòng chọn ít nhất một tác vụ để xóa." }, 400);
+        return jsonResponse({ detail: "Select at least one post to delete." }, 400);
       }
       try {
         const forceBulk = url.searchParams.get("force") === "true";
@@ -1710,7 +1757,7 @@ export async function handleWorkerRequest(
             err.httpStatus
           );
         }
-        return jsonResponse({ detail: err?.message || "Không thể xóa tác vụ." }, 400);
+        return jsonResponse({ detail: err?.message || "Could not delete the posts." }, 400);
       }
     }
 
@@ -1721,10 +1768,10 @@ export async function handleWorkerRequest(
         return jsonResponse({
           success: true,
           deleted_count: cleanupRes.deletedCount,
-          message: `Đã dọn dẹp ${cleanupRes.deletedCount} tác vụ đã hoàn thành khỏi hệ thống.`
+          message: `Cleared ${cleanupRes.deletedCount} completed post(s).`
         });
       } catch (err: any) {
-        return jsonResponse({ detail: err?.message || "Không thể dọn dẹp tác vụ hoàn thành." }, 400);
+        return jsonResponse({ detail: err?.message || "Could not clear completed posts." }, 400);
       }
     }
 
@@ -1737,20 +1784,20 @@ export async function handleWorkerRequest(
       const body = (await request.json().catch(() => ({}))) as { message?: string };
       const msg = (body.message || "").trim();
       if (!msg) {
-        return jsonResponse({ detail: "Nội dung bình luận không được để trống." }, 400);
+        return jsonResponse({ detail: "Comment cannot be empty." }, 400);
       }
 
       const task = await getTask(db, taskId, ownerUserId);
       if (!task) {
-        return jsonResponse({ detail: "Không tìm thấy bài viết." }, 404);
+        return jsonResponse({ detail: "Post not found." }, 404);
       }
       if (task.status !== "success" || (!task.post_id && !task.video_id)) {
-        return jsonResponse({ detail: "Bài viết này chưa được xuất bản lên Facebook nên chưa thể thêm bình luận." }, 400);
+        return jsonResponse({ detail: "This post is not published on Facebook yet, so you can't comment on it." }, 400);
       }
 
       const page = await getFacebookPageByFbId(db, encryptionKey, task.facebook_page_id || "", true, ownerUserId);
       if (!page || !page.page_access_token) {
-        return jsonResponse({ detail: "Không tìm thấy quyền truy cập Fanpage tương ứng." }, 400);
+        return jsonResponse({ detail: "No access to this Page was found." }, 400);
       }
 
       const cmtRes = await postReelCommentViaGraphApi(db, env, {
@@ -1772,13 +1819,13 @@ export async function handleWorkerRequest(
         return jsonResponse({
           success: true,
           comment_id: cmtRes.comment_id,
-          message: "Đã đăng bình luận thành công lên bài viết Facebook."
+          message: "Comment posted."
         });
       } else {
         await updateTaskCommentState(db, taskId, "failed", cmtRes.message);
         return jsonResponse({
           success: false,
-          detail: cmtRes.message || "Không thể đăng bình luận lên Facebook."
+          detail: cmtRes.message || "Could not post the comment to Facebook."
         }, 400);
       }
     }
@@ -1816,7 +1863,7 @@ export async function handleWorkerRequest(
       if (res.success) {
         return jsonResponse({ success: true, comments: res.comments, count: res.count });
       }
-      return jsonResponse({ success: false, detail: res.error || "Lỗi tải bình luận" }, 400);
+      return jsonResponse({ success: false, detail: res.error || "Could not load comments" }, 400);
     }
 
     if (postCommentsMatch && method === "POST") {
@@ -1834,7 +1881,7 @@ export async function handleWorkerRequest(
       if (res.success) {
         return jsonResponse({ success: true, comment_id: res.comment_id });
       }
-      return jsonResponse({ success: false, detail: res.error || "Lỗi đăng bình luận" }, 400);
+      return jsonResponse({ success: false, detail: res.error || "Could not post the comment" }, 400);
     }
 
     const postDetailMatch = /^\/api\/posts\/([^\/]+)$/.exec(pathname);
@@ -1842,7 +1889,7 @@ export async function handleWorkerRequest(
       const pId = decodeURIComponent(postDetailMatch[1]);
       const detail = await getFacebookPostDetail(db, ownerUserId, pId);
       if (!detail.post) {
-        return jsonResponse({ detail: "Không tìm thấy bài viết." }, 404);
+        return jsonResponse({ detail: "Post not found." }, 404);
       }
       return jsonResponse({ success: true, ...detail });
     }
@@ -1860,12 +1907,12 @@ export async function handleWorkerRequest(
         return jsonResponse({
           success: true,
           updated_post: editRes.updated_post,
-          message: "Đã cập nhật nội dung bài viết thành công trên Facebook."
+          message: "Post updated on Facebook."
         });
       } else {
         return jsonResponse({
           success: false,
-          detail: editRes.error || "Không thể cập nhật bài viết."
+          detail: editRes.error || "Could not update the post."
         }, 400);
       }
     }
@@ -1883,12 +1930,12 @@ export async function handleWorkerRequest(
           success: true,
           deleted_id: pId,
           deleted_facebook: delFb,
-          message: delFb ? "Đã xóa bài viết trên Facebook và hệ thống thành công." : "Đã xóa bài viết khỏi hệ thống."
+          message: delFb ? "Post deleted from Facebook and the app." : "Post removed from the app."
         });
       } else {
         return jsonResponse({
           success: false,
-          detail: delRes.error || "Không thể xóa bài viết."
+          detail: delRes.error || "Could not delete the post."
         }, 400);
       }
     }
@@ -1909,7 +1956,7 @@ export async function handleWorkerRequest(
       if (res.success) {
         return jsonResponse({ success: true, comment_id: res.comment_id });
       }
-      return jsonResponse({ success: false, detail: res.error || "Lỗi trả lời bình luận" }, 400);
+      return jsonResponse({ success: false, detail: res.error || "Could not reply to the comment" }, 400);
     }
 
     const commentHideMatch = /^\/api\/comments\/([^\/]+)\/hide$/.exec(pathname);
@@ -1924,7 +1971,7 @@ export async function handleWorkerRequest(
       if (res.success) {
         return jsonResponse({ success: true });
       }
-      return jsonResponse({ success: false, detail: res.error || "Lỗi thao tác bình luận" }, 400);
+      return jsonResponse({ success: false, detail: res.error || "Could not update the comment" }, 400);
     }
 
     const commentItemMatch = /^\/api\/comments\/([^\/]+)$/.exec(pathname);
@@ -1938,7 +1985,7 @@ export async function handleWorkerRequest(
       if (res.success) {
         return jsonResponse({ success: true });
       }
-      return jsonResponse({ success: false, detail: res.error || "Lỗi xóa bình luận" }, 400);
+      return jsonResponse({ success: false, detail: res.error || "Could not delete the comment" }, 400);
     }
 
     // ------------------------------------------
@@ -1968,12 +2015,12 @@ export async function handleWorkerRequest(
           next_cursor: syncRes.next_cursor,
           has_more: syncRes.has_more,
           total_synced: syncRes.total_synced,
-          message: syncRes.message || `Đã đồng bộ thành công ${syncRes.count} bài viết từ Fanpage.`
+          message: syncRes.message || `Synced ${syncRes.count} posts from the Page.`
         });
       } else {
         return jsonResponse({
           success: false,
-          detail: syncRes.error || "Không thể đồng bộ bài viết từ Fanpage."
+          detail: syncRes.error || "Could not sync posts from the Page."
         }, 400);
       }
     }
@@ -1981,6 +2028,14 @@ export async function handleWorkerRequest(
     // ------------------------------------------
     // 6.4D. THỐNG KÊ REELS INSIGHTS (/api/insights*)
     // ------------------------------------------
+    // Live analytics straight from the Meta Graph API (Pages, Page insights, Reels and Reel insights)
+    if (pathname === "/api/insights/live" && method === "GET") {
+      const days = parseInt(url.searchParams.get("days") || "30", 10) || 30;
+      const refresh = url.searchParams.get("refresh") === "1";
+      const data = await getLiveAnalyticsDashboard(db, env, ownerUserId, { days, refresh, encryptionKey });
+      return jsonResponse(data);
+    }
+
     if (pathname === "/api/insights/reels" && method === "GET") {
       const facebookPageId = url.searchParams.get("facebook_page_id") || url.searchParams.get("page_id") || null;
       const range = url.searchParams.get("range") || "30d";
@@ -2008,7 +2063,7 @@ export async function handleWorkerRequest(
       const detail = await getSingleReelInsightDetail(db, env, taskId, ownerUserId);
       if (!detail) {
         return jsonResponse(
-          { detail: "Không tìm thấy bài đăng Reels thuộc quyền sở hữu của bạn." },
+          { detail: "Reel not found." },
           404
         );
       }
@@ -2068,7 +2123,7 @@ export async function handleWorkerRequest(
         path: "",
         cloud_mode: true,
         message:
-          "Vui lòng nhấn nút 'Tải Video Lên R2' để chọn video trực tiếp từ trình duyệt của bạn."
+          "Please upload the video from your browser."
       });
     }
 
@@ -2110,7 +2165,7 @@ export async function handleWorkerRequest(
       return jsonResponse({
         success: true,
         reset_tasks: resetCount,
-        message: `Đã dừng các tác vụ đang chờ/xử lý và đặt lại ${resetCount} tác vụ về trạng thái chờ.`
+        message: `Stopped queued and running posts. ${resetCount} post(s) reset to pending.`
       });
     }
 
@@ -2159,7 +2214,7 @@ export async function handleWorkerRequest(
         },
         warning:
           r2Percent >= 80
-            ? "Cảnh báo: Dung lượng video trên R2 đã vượt 80% hạn mức Free (10 GB). Hãy xóa các video cũ đã đăng."
+            ? "Warning: Video storage is over 80% of the free 10 GB limit. Please delete old published videos."
             : null
       });
     }

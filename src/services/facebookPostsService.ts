@@ -256,8 +256,8 @@ async function fetchMetaPostsPage(
   }
 
   return {
-    res: lastRes || new Response(JSON.stringify({ error: { message: "Không thể kết nối Meta Graph API" } }), { status: 500 }),
-    rawJson: lastJson || { error: { message: "Lỗi phản hồi từ Meta" } },
+    res: lastRes || new Response(JSON.stringify({ error: { message: "Could not reach Facebook" } }), { status: 500 }),
+    rawJson: lastJson || { error: { message: "Unexpected response from Facebook" } },
     usedEndpoint: lastEndpoint,
     usedFields: lastFields
   };
@@ -303,7 +303,7 @@ export async function syncFacebookPagePosts(
       next_cursor: null,
       has_more: false,
       total_synced: 0,
-      error: "Không tìm thấy Fanpage hoặc Access Token của Fanpage chưa được lưu. Vui lòng kết nối lại tài khoản Facebook."
+      error: "Page not found or its access token is missing. Please reconnect your Facebook account."
     };
   }
 
@@ -365,7 +365,7 @@ export async function syncFacebookPagePosts(
         .prepare(
           `UPDATE facebook_page_sync_states SET sync_status = 'failed', last_error = ?, updated_at = ? WHERE page_id = ? AND owner_user_id = ?`
         )
-        .bind(netErr?.message || "Lỗi mạng khi kết nối Meta Graph API", nowIso, pageId, ownerUserId)
+        .bind(netErr?.message || "Network error while contacting Facebook", nowIso, pageId, ownerUserId)
         .run();
 
       return {
@@ -376,7 +376,7 @@ export async function syncFacebookPagePosts(
         next_cursor: activeCursor || null,
         has_more: false,
         total_synced: (existingSync?.total_synced || 0) + totalBatchSaved,
-        error: `Lỗi kết nối tới Meta Graph API: ${netErr?.message}`
+        error: `Could not reach Facebook: ${netErr?.message}`
       };
     }
 
@@ -417,11 +417,11 @@ export async function syncFacebookPagePosts(
 
       let friendlyError = errMsg;
       if (errCode === 190) {
-        friendlyError = "Access Token của Fanpage đã hết hạn hoặc bị thu hồi (Code 190). Vui lòng cập nhật lại Access Token trong Quản lý Tài khoản.";
+        friendlyError = "The Page access token has expired or was revoked (Code 190). Please update the access token.";
       } else if (errCode === 200 || errCode === 10) {
-        friendlyError = "Tài khoản không đủ quyền đọc bài viết của Fanpage này (Yêu cầu quyền pages_read_user_content hoặc pages_read_engagement).";
+        friendlyError = "This account cannot read this Page's posts (requires pages_read_user_content or pages_read_engagement).";
       } else if (errCode === 4 || errCode === 17 || errCode === 32) {
-        friendlyError = "Đã chạm giới hạn tần suất truy vấn Meta Graph API (Rate limit). Vui lòng thử lại sau vài phút.";
+        friendlyError = "Facebook rate limit reached. Please try again in a few minutes.";
       }
 
       return {
@@ -596,14 +596,14 @@ export async function syncFacebookPagePosts(
   let message = "";
   if (totalBatchSaved === 0) {
     if (newTotalSynced === 0) {
-      message = "Fanpage hiện tại chưa có bài viết nào được xuất bản trên Facebook.";
+      message = "This Page has no published posts on Facebook yet.";
     } else {
-      message = "Đã đồng bộ toàn bộ bài viết trên Facebook của Fanpage này.";
+      message = "All posts from this Page are synced.";
     }
   } else {
-    message = `Đã đồng bộ thành công ${totalBatchSaved} bài viết (${totalNewSaved} bài mới, ${totalUpdatedSaved} bài cập nhật).`;
+    message = `Synced ${totalBatchSaved} posts (${totalNewSaved} new, ${totalUpdatedSaved} updated).`;
     if (hasMoreOut) {
-      message += " Vẫn còn bài viết cũ, bạn có thể nhấn 'Tải thêm bài cũ'.";
+      message += " Older posts are still available.";
     }
   }
 
@@ -833,12 +833,12 @@ export async function editFacebookPostMessage(
     .first<FacebookPostRecord>();
 
   if (!post) {
-    return { success: false, error: "Không tìm thấy bài viết hoặc bạn không có quyền sở hữu." };
+    return { success: false, error: "Post not found." };
   }
 
   const pageInfo = await getDecryptedPageToken(db, env, post.page_id, ownerUserId);
   if (!pageInfo) {
-    return { success: false, error: "Access Token của Fanpage không hợp lệ hoặc đã hết hạn." };
+    return { success: false, error: "The Page access token is invalid or expired." };
   }
 
   const nowIso = new Date().toISOString();
@@ -858,12 +858,12 @@ export async function editFacebookPostMessage(
       body: formData.toString()
     });
   } catch (netErr: any) {
-    return { success: false, error: `Lỗi kết nối tới Meta Graph API: ${netErr?.message}` };
+    return { success: false, error: `Could not reach Facebook: ${netErr?.message}` };
   }
 
   const resJson = (await res.json()) as any;
   if (!res.ok || resJson.error || resJson.success === false) {
-    const errMsg = resJson.error?.message || "Meta API từ chối cập nhật bài viết.";
+    const errMsg = resJson.error?.message || "Facebook rejected the post update.";
     const errCode = resJson.error?.code;
 
     // Ghi audit log thất bại
@@ -877,7 +877,7 @@ export async function editFacebookPostMessage(
 
     let friendly = errMsg;
     if (errCode === 100 || errCode === 200) {
-      friendly = "Meta không cho phép chỉnh sửa nội dung bài viết này (Ví dụ: Reels hoặc một số loại media đặc biệt không hỗ trợ sửa sau khi xuất bản).";
+      friendly = "Facebook does not allow editing this post (for example, Reels and some media types can't be edited after publishing).";
     }
     return { success: false, error: friendly };
   }
@@ -929,7 +929,7 @@ export async function deleteFacebookPostComplete(
     .first<FacebookPostRecord>();
 
   if (!post) {
-    return { success: false, error: "Không tìm thấy bài viết hoặc bạn không có quyền thao tác." };
+    return { success: false, error: "Post not found." };
   }
 
   const nowIso = new Date().toISOString();
@@ -937,7 +937,7 @@ export async function deleteFacebookPostComplete(
   if (deleteFacebook) {
     const pageInfo = await getDecryptedPageToken(db, env, post.page_id, ownerUserId);
     if (!pageInfo) {
-      return { success: false, error: "Access Token của Fanpage không hợp lệ hoặc đã hết hạn." };
+      return { success: false, error: "The Page access token is invalid or expired." };
     }
 
     const delResult = await deleteFacebookReelOrPost(db, env, {
@@ -953,12 +953,12 @@ export async function deleteFacebookPostComplete(
           `INSERT INTO facebook_post_audit_logs (post_id, page_id, owner_user_id, action, result_status, error_message, created_at)
            VALUES (?, ?, ?, 'delete_post_facebook', 'failed', ?, ?)`
         )
-        .bind(post.post_id, post.page_id, ownerUserId, delResult.error || "Lỗi xóa bài", nowIso)
+        .bind(post.post_id, post.page_id, ownerUserId, delResult.error || "Delete failed", nowIso)
         .run();
 
       return {
         success: false,
-        error: `Không thể xóa bài viết trên Facebook: ${delResult.error}. Bạn có thể mở bài viết trên Facebook để xóa thủ công.`
+        error: `Could not delete the post on Facebook: ${delResult.error}. You can delete it manually on Facebook.`
       };
     }
   }
@@ -1009,12 +1009,12 @@ export async function syncPostComments(
     .first<FacebookPostRecord>();
 
   if (!post) {
-    return { success: false, comments: [], count: 0, error: "Không tìm thấy bài viết." };
+    return { success: false, comments: [], count: 0, error: "Post not found." };
   }
 
   const pageInfo = await getDecryptedPageToken(db, env, post.page_id, ownerUserId);
   if (!pageInfo) {
-    return { success: false, comments: [], count: 0, error: "Token Fanpage hết hạn." };
+    return { success: false, comments: [], count: 0, error: "The Page token has expired." };
   }
 
   const nowIso = new Date().toISOString();
@@ -1028,7 +1028,7 @@ export async function syncPostComments(
   try {
     res = await fetch(commentsUrl);
   } catch (e: any) {
-    return { success: false, comments: [], count: 0, error: `Lỗi kết nối Meta: ${e?.message}` };
+    return { success: false, comments: [], count: 0, error: `Could not reach Facebook: ${e?.message}` };
   }
 
   const rawJson = (await res.json()) as any;
@@ -1037,7 +1037,7 @@ export async function syncPostComments(
       success: false,
       comments: [],
       count: 0,
-      error: rawJson.error?.message || "Không thể tải bình luận từ Facebook."
+      error: rawJson.error?.message || "Could not load comments from Facebook."
     };
   }
 
@@ -1049,7 +1049,7 @@ export async function syncPostComments(
     if (!commentId) continue;
 
     const fromId = c.from?.id || "";
-    const fromName = c.from?.name || "Người dùng Facebook";
+    const fromName = c.from?.name || "Facebook user";
     const msg = c.message || "";
     const parentId = c.parent?.id || null;
     const createdTime = c.created_time || nowIso;
@@ -1128,7 +1128,7 @@ export async function createFacebookCommentOrReply(
   const { postId, parentCommentId, message, ownerUserId } = options;
 
   if (!message || !message.trim()) {
-    return { success: false, error: "Nội dung bình luận không được để trống." };
+    return { success: false, error: "Comment cannot be empty." };
   }
 
   const post = await db
@@ -1139,12 +1139,12 @@ export async function createFacebookCommentOrReply(
     .first<FacebookPostRecord>();
 
   if (!post) {
-    return { success: false, error: "Không tìm thấy bài viết." };
+    return { success: false, error: "Post not found." };
   }
 
   const pageInfo = await getDecryptedPageToken(db, env, post.page_id, ownerUserId);
   if (!pageInfo) {
-    return { success: false, error: "Access Token của Fanpage không hợp lệ." };
+    return { success: false, error: "The Page access token is invalid." };
   }
 
   const nowIso = new Date().toISOString();
@@ -1164,14 +1164,14 @@ export async function createFacebookCommentOrReply(
       body: formData.toString()
     });
   } catch (netErr: any) {
-    return { success: false, error: `Lỗi kết nối Meta: ${netErr?.message}` };
+    return { success: false, error: `Could not reach Facebook: ${netErr?.message}` };
   }
 
   const resJson = (await res.json()) as any;
   if (!res.ok || !resJson.id) {
     return {
       success: false,
-      error: resJson.error?.message || "Meta từ chối đăng bình luận."
+      error: resJson.error?.message || "Facebook rejected the comment."
     };
   }
 
@@ -1232,12 +1232,12 @@ export async function deleteOrHideFacebookComment(
     .first<FacebookCommentRecord>();
 
   if (!comment) {
-    return { success: false, error: "Không tìm thấy bình luận." };
+    return { success: false, error: "Comment not found." };
   }
 
   const pageInfo = await getDecryptedPageToken(db, env, comment.page_id, ownerUserId);
   if (!pageInfo) {
-    return { success: false, error: "Token Fanpage hết hạn." };
+    return { success: false, error: "The Page token has expired." };
   }
 
   const graphVersion = env.META_GRAPH_VERSION || "v27.0";
@@ -1250,10 +1250,10 @@ export async function deleteOrHideFacebookComment(
       const res = await fetch(delUrl, { method: "DELETE" });
       const resJson = (await res.json()) as any;
       if (!res.ok || resJson.error || resJson.success === false) {
-        return { success: false, error: resJson.error?.message || "Không thể xóa bình luận trên Facebook." };
+        return { success: false, error: resJson.error?.message || "Could not delete the comment on Facebook." };
       }
     } catch (e: any) {
-      return { success: false, error: `Lỗi kết nối Meta: ${e?.message}` };
+      return { success: false, error: `Could not reach Facebook: ${e?.message}` };
     }
 
     await db.prepare(`DELETE FROM facebook_post_comments WHERE id = ?`).bind(commentId).run();
@@ -1278,10 +1278,10 @@ export async function deleteOrHideFacebookComment(
       });
       const resJson = (await res.json()) as any;
       if (!res.ok || resJson.error || resJson.success === false) {
-        return { success: false, error: resJson.error?.message || "Không thể đổi trạng thái ẩn của bình luận." };
+        return { success: false, error: resJson.error?.message || "Could not change the comment's visibility." };
       }
     } catch (e: any) {
-      return { success: false, error: `Lỗi kết nối Meta: ${e?.message}` };
+      return { success: false, error: `Could not reach Facebook: ${e?.message}` };
     }
 
     await db

@@ -30,7 +30,7 @@ export function usePages() {
       pages.value = Array.isArray(pagesRes) ? pagesRes : ((pagesRes as any)?.pages || []);
       accounts.value = Array.isArray(accountsRes) ? accountsRes : ((accountsRes as any)?.accounts || []);
     } catch (err: any) {
-      toast.error(err?.message || "Không thể tải danh sách Fanpage.");
+      toast.error(err?.message || "Couldn't load Pages.");
     } finally {
       isLoading.value = false;
     }
@@ -62,9 +62,9 @@ export function usePages() {
     try {
       await api.syncPages();
       await loadPages();
-      toast.success("Đã đồng bộ lại danh sách Fanpage từ Facebook!");
+      toast.success("Pages re-synced from Facebook.");
     } catch (err: any) {
-      toast.error(err?.message || "Đồng bộ Fanpage thất bại.");
+      toast.error(err?.message || "Failed to sync Pages.");
     } finally {
       isLoading.value = false;
     }
@@ -91,12 +91,12 @@ export function usePages() {
         accounts.value = res.accounts;
       }
       await loadPages();
-      toast.success(res?.message || "Cập nhật tài khoản & Fanpage thành công!");
+      toast.success(res?.message || "Account and Pages updated.");
       isConnectModalOpen.value = false;
       connectTargetAccountId.value = null;
       return true;
     } catch (err: any) {
-      toast.error(err?.message || "Kết nối thất bại. Vui lòng kiểm tra lại Access Token.");
+      toast.error(err?.message || "Connection failed. Please check your access token.");
       return false;
     } finally {
       isLoading.value = false;
@@ -108,10 +108,10 @@ export function usePages() {
     try {
       await api.deleteAccount(accountId);
       await loadPages();
-      toast.success("Đã xóa tài khoản Facebook thành công.");
+      toast.success("Facebook account removed.");
       return true;
     } catch (err: any) {
-      toast.error(err?.message || "Xóa tài khoản Facebook thất bại.");
+      toast.error(err?.message || "Failed to remove Facebook account.");
       return false;
     } finally {
       isLoading.value = false;

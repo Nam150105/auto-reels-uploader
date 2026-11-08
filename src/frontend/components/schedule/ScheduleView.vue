@@ -10,7 +10,7 @@
           class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
           :class="activeFilter === 'all' ? 'bg-blue-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
         >
-          <span>{{ t('filter_all') }}</span>
+          <span>All</span>
           <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'all' ? 'bg-blue-700 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.total }}</span>
         </button>
 
@@ -20,7 +20,7 @@
           class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
           :class="activeFilter === 'pending' ? 'bg-amber-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
         >
-          <span>{{ t('filter_pending') }}</span>
+          <span>Scheduled</span>
           <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'pending' ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.pending }}</span>
         </button>
 
@@ -30,7 +30,7 @@
           class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
           :class="activeFilter === 'running' ? 'bg-blue-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
         >
-          <span>{{ t('filter_running') }}</span>
+          <span>Publishing</span>
           <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'running' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.running }}</span>
         </button>
 
@@ -40,7 +40,7 @@
           class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
           :class="activeFilter === 'success' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
         >
-          <span>{{ t('filter_success') }}</span>
+          <span>Published</span>
           <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'success' ? 'bg-emerald-700 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.success }}</span>
         </button>
 
@@ -50,7 +50,7 @@
           class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
           :class="activeFilter === 'failed' ? 'bg-rose-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
         >
-          <span>{{ t('filter_failed') }}</span>
+          <span>Failed</span>
           <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'failed' ? 'bg-rose-700 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.failed }}</span>
         </button>
       </div>
@@ -61,7 +61,7 @@
           <input
             v-model="searchQuery"
             type="text"
-            :placeholder="t('search_tasks')"
+            placeholder="Search scheduled posts..."
             class="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
           <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -73,7 +73,7 @@
           type="button"
           @click="() => loadTasks()"
           class="p-2 text-slate-500 hover:text-blue-600 rounded-xl border border-slate-200 hover:bg-slate-50 transition"
-          title="Làm mới"
+          title="Refresh"
         >
           <svg class="w-4 h-4" :class="{ 'animate-spin': isLoading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -89,7 +89,7 @@
     >
       <div class="flex items-center gap-2 text-xs font-semibold text-blue-900">
         <span class="w-2 h-2 rounded-full bg-blue-600"></span>
-        <span>Đã chọn {{ selectedTaskIds.length }} bài đăng</span>
+        <span>{{ selectedTaskIds.length }} selected</span>
       </div>
 
       <div class="flex items-center gap-2">
@@ -101,7 +101,7 @@
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-          <span>Đăng ngay</span>
+          <span>Publish now</span>
         </button>
 
         <button
@@ -112,7 +112,7 @@
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
-          <span>Xóa</span>
+          <span>Delete</span>
         </button>
       </div>
     </div>
@@ -132,12 +132,12 @@
                 />
               </th>
               <th class="py-3 px-4 w-16 text-center">ID</th>
-              <th class="py-3 px-4 w-56">Fanpage</th>
-              <th class="py-3 px-4 min-w-[200px]">Nội dung</th>
-              <th class="py-3 px-4 w-40">Thời gian hẹn đăng</th>
-              <th class="py-3 px-4 w-32 text-center">Trạng thái</th>
-              <th class="py-3 px-4 w-44">Kết quả xuất bản</th>
-              <th class="py-3 px-4 w-32 text-center">Thao tác</th>
+              <th class="py-3 px-4 w-56">Page</th>
+              <th class="py-3 px-4 min-w-[200px]">Content</th>
+              <th class="py-3 px-4 w-40">Scheduled time</th>
+              <th class="py-3 px-4 w-32 text-center">Status</th>
+              <th class="py-3 px-4 w-44">Result</th>
+              <th class="py-3 px-4 w-32 text-center">Actions</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -162,7 +162,7 @@
                 #{{ task.id }}
               </td>
 
-              <!-- Fanpage -->
+              <!-- Page -->
               <td class="py-3 px-4">
                 <div class="flex items-center gap-2 min-w-0">
                   <div class="w-7 h-7 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border border-slate-200">
@@ -179,7 +179,7 @@
               <!-- Caption & Media -->
               <td class="py-3 px-4">
                 <p class="text-slate-800 line-clamp-2 leading-relaxed">
-                  {{ task.caption || '(Không có nội dung)' }}
+                  {{ task.caption || '(No content)' }}
                 </p>
                 <div class="flex items-center gap-2 mt-1">
                   <span v-if="task.media_id || task.video_path" class="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
@@ -187,6 +187,13 @@
                   </span>
                   <span v-if="task.comment_text" class="inline-flex items-center gap-1 text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded truncate max-w-[150px]">
                     💬 {{ task.comment_text }}
+                  </span>
+                  <span
+                    v-else-if="task.comments && task.comments.length"
+                    class="inline-flex items-center gap-1 text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded truncate max-w-[180px]"
+                    :title="commentsTooltip(task)"
+                  >
+                    💬 {{ task.comments.length }} comment{{ task.comments.length > 1 ? "s" : "" }}
                   </span>
                 </div>
               </td>
@@ -232,25 +239,28 @@
                     rel="noopener noreferrer"
                     class="inline-flex items-center gap-1 font-bold text-blue-600 hover:text-blue-800 hover:underline"
                   >
-                    <span>Xem bài viết FB</span>
+                    <span>View on Facebook</span>
                     <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                     </svg>
                   </a>
 
                   <!-- Comment State -->
-                  <div v-if="task.comment_text" class="text-[10px]">
+                  <div v-if="task.comment_text || (task.comments && task.comments.length)" class="text-[10px]">
                     <span v-if="task.comment_status === 'success'" class="text-emerald-600 font-semibold">
-                      ✓ Đã bình luận
+                      ✓ {{ task.comments && task.comments.length ? task.comment_log || "Commented" : "Commented" }}
+                    </span>
+                    <span v-else-if="task.comment_status === 'scheduled' || task.comment_status === 'processing'" class="text-slate-500 font-semibold">
+                      {{ task.comment_log || "Comments waiting" }}
                     </span>
                     <div v-else-if="task.comment_status === 'failed'" class="flex items-center gap-1.5 text-rose-600 font-semibold">
-                      <span>Lỗi cmt</span>
+                      <span>{{ task.comments && task.comments.length ? task.comment_log || "Comment failed" : "Comment failed" }}</span>
                       <button
                         type="button"
                         @click="retryComment(task.id)"
                         class="text-blue-600 hover:underline font-bold"
                       >
-                        Thử lại
+                        Retry
                       </button>
                     </div>
                   </div>
@@ -258,11 +268,11 @@
 
                 <!-- Failed: Error Message -->
                 <div v-else-if="task.status === 'failed'" class="text-rose-600 text-[11px] line-clamp-2" :title="task.error_message || ''">
-                  {{ task.error_message || 'Đăng bài thất bại' }}
+                  {{ task.error_message || 'Publishing failed' }}
                 </div>
 
                 <div v-else class="text-slate-400 text-[11px] italic">
-                  Chưa xuất bản
+                  Not published yet
                 </div>
               </td>
 
@@ -275,7 +285,7 @@
                     type="button"
                     @click="publishNow(task.id)"
                     class="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                    title="Đăng ngay bài này"
+                    title="Publish now"
                   >
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -288,7 +298,7 @@
                     type="button"
                     @click="openEditModal(task)"
                     class="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition"
-                    title="Chỉnh sửa lịch/nội dung"
+                    title="Edit schedule or content"
                   >
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -300,7 +310,7 @@
                     type="button"
                     @click="deleteTask(task.id)"
                     class="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                    title="Xóa bài đăng"
+                    title="Delete post"
                   >
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -313,7 +323,7 @@
             <!-- Empty Row -->
             <tr v-if="filteredTasks.length === 0">
               <td colspan="8" class="text-center py-12 text-slate-400 text-xs">
-                Không có bài đăng nào phù hợp với bộ lọc hiện tại.
+                No posts match the current filter.
               </td>
             </tr>
           </tbody>
@@ -333,12 +343,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
-import { useI18n } from "../../utils/i18n";
 import { useTasks } from "../../composables/useTasks";
 import type { TaskRecord, TaskStatus } from "@shared/types";
 import EditTaskModal from "../dialogs/EditTaskModal.vue";
 
-const { t } = useI18n();
 const {
   tasks,
   isLoading,
@@ -385,15 +393,15 @@ const formatStatus = (s: TaskStatus): string => {
   switch (s) {
     case "pending":
     case "scheduled":
-      return "Chờ đăng";
+      return "Scheduled";
     case "queued":
     case "running":
-      return "Đang đăng...";
+      return "Publishing...";
     case "success":
-      return "Thành công";
+      return "Published";
     case "failed":
     case "canceled":
-      return "Thất bại";
+      return "Failed";
     default:
       return s;
   }
@@ -418,4 +426,14 @@ const openEditModal = (task: TaskRecord) => {
   editingTask.value = task;
   isEditModalOpen.value = true;
 };
+
+const commentsTooltip = (task: { comments?: Array<{ text: string; has_image: boolean; status: string; error: string }> }) =>
+  (task.comments || [])
+    .map((c, i) => {
+      const body = c.text || "(photo)";
+      const photo = c.has_image && c.text ? " + photo" : "";
+      const err = c.status === "failed" && c.error ? " — " + c.error : "";
+      return `${i + 1}. ${body}${photo}${err}`;
+    })
+    .join("\n");
 </script>

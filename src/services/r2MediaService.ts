@@ -12,7 +12,8 @@ import {
   completeMediaFileUpload,
   markMediaFileFailed,
   getUserMediaFiles,
-  deleteMediaFileRecord
+  deleteMediaFileRecord,
+  ensureTaskCommentsTable
 } from "../db.ts";
 import { randomHex, bytesToBase64Url, base64UrlToBytes, sha256Hex } from "../utils/crypto.ts";
 
@@ -51,7 +52,7 @@ export function validateVideoMetadata(
   if (!hasAllowedExt) {
     return {
       valid: false,
-      message: `Định dạng file '${cleanName}' không được hỗ trợ. Chỉ chấp nhận: ${ALLOWED_VIDEO_EXTENSIONS.join(", ")}.`,
+      message: `File type '${cleanName}' is not supported. Allowed: ${ALLOWED_VIDEO_EXTENSIONS.join(", ")}.`,
       normalizedMime: "video/mp4",
       sanitizedName: cleanName
     };
@@ -61,7 +62,7 @@ export function validateVideoMetadata(
   if (sizeBytes <= 0) {
     return {
       valid: false,
-      message: "File video rỗng (0 bytes).",
+      message: "The video file is empty.",
       normalizedMime: "video/mp4",
       sanitizedName: cleanName
     };
@@ -69,7 +70,7 @@ export function validateVideoMetadata(
   if (sizeBytes > maxBytes) {
     return {
       valid: false,
-      message: `Dung lượng video (${(sizeBytes / 1048576).toFixed(1)} MB) vượt quá giới hạn cho phép (${(maxBytes / 1048576).toFixed(0)} MB).`,
+      message: `The video (${(sizeBytes / 1048576).toFixed(1)} MB) exceeds the ${(maxBytes / 1048576).toFixed(0)} MB limit.`,
       normalizedMime: "video/mp4",
       sanitizedName: cleanName
     };
@@ -79,7 +80,7 @@ export function validateVideoMetadata(
   if (rawMime && !ALLOWED_VIDEO_MIME_TYPES.includes(rawMime) && !rawMime.startsWith("video/")) {
     return {
       valid: false,
-      message: `MIME type '${rawMime}' không hợp lệ cho video Reels.`,
+      message: `File type '${rawMime}' is not valid for Reels.`,
       normalizedMime: "video/mp4",
       sanitizedName: cleanName
     };
@@ -185,7 +186,7 @@ export async function streamVideoToStorage(
     return {
       success: false,
       status: 404,
-      message: "Không tìm thấy phiên upload media hoặc bạn không có quyền sở hữu."
+      message: "Upload session not found. Please upload the video again."
     };
   }
 
@@ -195,15 +196,15 @@ export async function streamVideoToStorage(
     return {
       success: false,
       status: 413,
-      message: `Dung lượng upload vượt quá giới hạn cho phép (${(maxBytes / 1048576).toFixed(0)} MB).`
+      message: `The upload exceeds the ${(maxBytes / 1048576).toFixed(0)} MB limit.`
     };
   }
 
   const bucket = getR2Bucket(env);
   if (bucket) {
     if (!request.body) {
-      await markMediaFileFailed(db, media.id, ownerUserId, "Request body rỗng khi tải lên R2.");
-      return { success: false, status: 400, message: "Request body rỗng." };
+      await markMediaFileFailed(db, media.id, ownerUserId, "The upload was empty.");
+      return { success: false, status: 400, message: "The upload was empty." };
     }
     const r2Obj = await bucket.put(media.object_key, request.body, {
       httpMetadata: { contentType: media.mime_type },
@@ -221,12 +222,12 @@ export async function streamVideoToStorage(
         db,
         media.id,
         ownerUserId,
-        "Không thể xác minh object tồn tại trên R2 hoặc file có dung lượng 0 bytes."
+        "The uploaded file could not be verified or is empty."
       );
       return {
         success: false,
         status: 500,
-        message: "Không thể xác minh file video trên Cloudflare R2 sau khi tải lên."
+        message: "The video could not be verified after upload. Please upload it again."
       };
     }
 
@@ -246,13 +247,13 @@ export async function streamVideoToStorage(
   const buf = await request.arrayBuffer();
   const bytes = new Uint8Array(buf);
   if (bytes.byteLength === 0) {
-    return { success: false, status: 400, message: "Dữ liệu video rỗng." };
+    return { success: false, status: 400, message: "The video data is empty." };
   }
   if (bytes.byteLength > 15 * 1024 * 1024) {
     return {
       success: false,
       status: 413,
-      message: "Chưa gắn R2 Bucket (MEDIA_BUCKET). Chế độ lưu tạm chỉ hỗ trợ tối đa 15MB."
+      message: "Video storage is unavailable right now. Only files up to 15 MB can be uploaded."
     };
   }
 
@@ -298,7 +299,7 @@ export async function finalizeVideoUpload(
     return {
       success: false,
       status: 404,
-      message: "Không tìm thấy media_id hoặc bạn không có quyền truy cập."
+      message: "Video not found."
     };
   }
 
@@ -310,12 +311,12 @@ export async function finalizeVideoUpload(
         db,
         media.id,
         ownerUserId,
-        "Chưa tìm thấy file video trên Cloudflare R2 hoặc dung lượng bằng 0."
+        "The uploaded video file was not found or is empty."
       );
       return {
         success: false,
         status: 400,
-        message: "Chưa tìm thấy file video trên Cloudflare R2. Vui lòng tải file lên trước khi hoàn tất."
+        message: "The video file was not found. Please upload it before finishing."
       };
     }
     const updated = await completeMediaFileUpload(
@@ -344,7 +345,7 @@ export async function finalizeVideoUpload(
       return {
         success: false,
         status: 400,
-        message: "File video chưa được tải lên thành công."
+        message: "The video has not finished uploading."
       };
     }
     const updated = await completeMediaFileUpload(db, media.id, ownerUserId);
@@ -392,7 +393,7 @@ export async function verifyMediaOnR2BeforeTaskOrPublish(
   if (!cleanRef) {
     return {
       verified: false,
-      error: "Thiếu thông tin file video. Vui lòng chọn và tải video lên R2 trước."
+      error: "No video selected. Please choose and upload a video first."
     };
   }
 
@@ -400,7 +401,7 @@ export async function verifyMediaOnR2BeforeTaskOrPublish(
   if (!media) {
     return {
       verified: false,
-      error: "Nguồn video chưa được tải lên Cloudflare R2. Vui lòng chờ tải video lên R2 hoàn tất trước khi lưu hoặc đăng Task."
+      error: "The video has not been uploaded yet. Please wait for the upload to finish before saving or publishing."
     };
   }
 
@@ -411,7 +412,7 @@ export async function verifyMediaOnR2BeforeTaskOrPublish(
         verified: false,
         error:
           finalized.message ||
-          `Video '${media.original_filename}' chưa hoàn tất tải lên R2 (status=${media.upload_status}). Vui lòng tải lại video.`
+          `Video '${media.original_filename}' has not finished uploading (status=${media.upload_status}). Please upload it again.`
       };
     }
     media = finalized.media;
@@ -423,7 +424,7 @@ export async function verifyMediaOnR2BeforeTaskOrPublish(
     if (!headObj || headObj.size <= 0) {
       return {
         verified: false,
-        error: `Object '${media.object_key}' không tồn tại hoặc có dung lượng 0 bytes trên Cloudflare R2. Vui lòng tải lại video.`
+        error: `The video file is no longer available. Please upload it again.`
       };
     }
     return {
@@ -472,7 +473,7 @@ export async function openVideoFromStorage(
   if (!media) {
     return {
       found: false,
-      error: "Không tìm thấy video trong kho lưu trữ R2 của bạn hoặc bạn không có quyền sở hữu file này."
+      error: "Video not found."
     };
   }
 
@@ -483,7 +484,7 @@ export async function openVideoFromStorage(
     } else {
       return {
         found: false,
-        error: `Video '${media.original_filename}' chưa hoàn tất quá trình tải lên (status=${media.upload_status}).`
+        error: `Video '${media.original_filename}' has not finished uploading (status=${media.upload_status}).`
       };
     }
   }
@@ -495,7 +496,7 @@ export async function openVideoFromStorage(
       if ((obj.size || media.size_bytes) <= 0) {
         return {
           found: false,
-          error: `Object '${media.object_key}' trên Cloudflare R2 bị rỗng (0 bytes).`
+          error: `The video file is empty. Please upload it again.`
         };
       }
       return {
@@ -510,7 +511,7 @@ export async function openVideoFromStorage(
     if (media.storage_backend === "r2") {
       return {
         found: false,
-        error: `Object '${media.object_key}' không còn tồn tại trong Cloudflare R2.`
+        error: `The video file is no longer available. Please upload it again.`
       };
     }
   }
@@ -525,7 +526,7 @@ export async function openVideoFromStorage(
   if (!fallbackRow) {
     return {
       found: false,
-      error: "Không tìm thấy nội dung binary của video trong bộ nhớ lưu trữ."
+      error: "The video file is no longer available. Please upload it again."
     };
   }
 
@@ -557,7 +558,7 @@ export async function deleteUserVideo(
   if (!existing) {
     return {
       deleted: false,
-      message: "Không tìm thấy file video hoặc bạn không có quyền xóa file này."
+      message: "Video file not found."
     };
   }
 
@@ -575,7 +576,7 @@ export async function deleteUserVideo(
   if (activeRef && Number(activeRef.cnt) > 0) {
     return {
       deleted: false,
-      message: `Không thể xóa video '${existing.original_filename}' vì đang có ${Number(activeRef.cnt)} tác vụ chờ đăng hoặc đang xử lý sử dụng video này.`
+      message: `Cannot delete video '${existing.original_filename}' because ${Number(activeRef.cnt)} pending or in-progress post(s) use it.`
     };
   }
 
@@ -583,7 +584,7 @@ export async function deleteUserVideo(
   if (!deletedRecord) {
     return {
       deleted: false,
-      message: "Không tìm thấy file video hoặc bạn không có quyền xóa file này."
+      message: "Video file not found."
     };
   }
 
@@ -625,6 +626,7 @@ export async function cleanupExpiredR2Media(
   deleted_keys: string[];
 }> {
   const cutoffTime = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+  await ensureTaskCommentsTable(db);
 
   const { results: expiredMedia } = await db
     .prepare(
@@ -640,6 +642,10 @@ export async function cleanupExpiredR2Media(
                t.status IN ('queued', 'processing', 'running')
                OR (t.status = 'pending' AND t.scheduled_at IS NOT NULL)
              )
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM task_comments c
+           WHERE c.image_media_id = m.id AND c.status IN ('pending', 'scheduled', 'processing')
          )
        ORDER BY m.created_at ASC
        LIMIT ?`
@@ -697,8 +703,8 @@ export async function cleanupExpiredR2Media(
         .prepare(
           `UPDATE tasks
            SET log = CASE
-             WHEN log IS NULL OR log = '' THEN '[Video R2 đã tự động xóa sau 30 ngày]'
-             ELSE log || '\n[Video R2 đã tự động xóa sau 30 ngày]'
+             WHEN log IS NULL OR log = '' THEN '[Video automatically deleted after 30 days]'
+             ELSE log || '\n[Video automatically deleted after 30 days]'
            END,
            updated_at = ?
            WHERE media_id = ?`
@@ -728,7 +734,7 @@ export async function uploadVideoPart(
   const { mediaId, uploadId, partNumber, ownerUserId } = params;
 
   if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > MULTIPART_MAX_PARTS) {
-    return { success: false, status: 400, message: "part_number không hợp lệ (1 - 10000)." };
+    return { success: false, status: 400, message: "Invalid upload part number (1-10000)." };
   }
 
   const media = await getMediaFileById(db, mediaId, ownerUserId);
@@ -736,30 +742,30 @@ export async function uploadVideoPart(
     return {
       success: false,
       status: 404,
-      message: "Không tìm thấy phiên upload media hoặc bạn không có quyền sở hữu."
+      message: "Upload session not found. Please upload the video again."
     };
   }
   if (!media.r2_upload_id || media.r2_upload_id !== uploadId) {
-    return { success: false, status: 400, message: "upload_id không khớp với phiên upload của media này." };
+    return { success: false, status: 400, message: "This upload session does not match the video. Please upload it again." };
   }
   if (media.upload_status === "ready") {
-    return { success: false, status: 409, message: "Phiên upload này đã hoàn tất." };
+    return { success: false, status: 409, message: "This upload is already complete." };
   }
 
   const bucket = getR2Bucket(env);
   if (!bucket || !bucket.resumeMultipartUpload) {
-    return { success: false, status: 500, message: "Chưa gắn R2 Bucket hỗ trợ multipart upload." };
+    return { success: false, status: 500, message: "Large video uploads are not available right now." };
   }
 
   const bytes = new Uint8Array(await request.arrayBuffer());
   if (bytes.byteLength === 0) {
-    return { success: false, status: 400, message: "Phân đoạn video rỗng." };
+    return { success: false, status: 400, message: "A video part was empty. Please try again." };
   }
   if (bytes.byteLength > MULTIPART_CHUNK_SIZE_BYTES) {
     return {
       success: false,
       status: 413,
-      message: `Phân đoạn vượt quá kích thước cho phép (${MULTIPART_CHUNK_SIZE_BYTES} bytes).`
+      message: `A video part exceeds the allowed size (${MULTIPART_CHUNK_SIZE_BYTES} bytes).`
     };
   }
 
@@ -771,7 +777,7 @@ export async function uploadVideoPart(
     return {
       success: false,
       status: 502,
-      message: `Lỗi ghi phân đoạn ${partNumber} lên R2: ${(err as Error).message}`
+      message: `Could not upload part ${partNumber}: ${(err as Error).message}`
     };
   }
 }
@@ -795,14 +801,14 @@ export async function completeMultipartVideoUpload(
     return {
       success: false,
       status: 404,
-      message: "Không tìm thấy media_id hoặc bạn không có quyền truy cập."
+      message: "Video not found."
     };
   }
   if (media.upload_status === "ready") {
     return { success: true, status: 200, media };
   }
   if (!media.r2_upload_id || media.r2_upload_id !== uploadId) {
-    return { success: false, status: 400, message: "upload_id không khớp với phiên upload của media này." };
+    return { success: false, status: 400, message: "This upload session does not match the video. Please upload it again." };
   }
 
   const parts = (params.parts || [])
@@ -810,23 +816,23 @@ export async function completeMultipartVideoUpload(
     .filter((p) => Number.isInteger(p.partNumber) && p.partNumber > 0 && p.etag)
     .sort((a, b) => a.partNumber - b.partNumber);
   if (parts.length === 0) {
-    return { success: false, status: 400, message: "Danh sách phân đoạn (parts) rỗng hoặc không hợp lệ." };
+    return { success: false, status: 400, message: "The list of uploaded video parts is empty or invalid." };
   }
 
   const bucket = getR2Bucket(env);
   if (!bucket || !bucket.resumeMultipartUpload) {
-    return { success: false, status: 500, message: "Chưa gắn R2 Bucket hỗ trợ multipart upload." };
+    return { success: false, status: 500, message: "Large video uploads are not available right now." };
   }
 
   const mp = bucket.resumeMultipartUpload(media.object_key, uploadId);
   try {
     await mp.complete(parts);
   } catch (err) {
-    await markMediaFileFailed(db, media.id, ownerUserId, `Ghép phân đoạn R2 thất bại: ${(err as Error).message}`);
+    await markMediaFileFailed(db, media.id, ownerUserId, `Could not combine the video parts: ${(err as Error).message}`);
     return {
       success: false,
       status: 502,
-      message: `Không thể ghép các phân đoạn video trên R2: ${(err as Error).message}`
+      message: `Could not combine the video parts: ${(err as Error).message}`
     };
   }
 
@@ -834,8 +840,8 @@ export async function completeMultipartVideoUpload(
   const maxBytes = getMaxVideoSizeBytes(env);
   if (!headObj || headObj.size <= 0 || headObj.size > maxBytes) {
     const reason = !headObj || headObj.size <= 0
-      ? "Không tìm thấy file video trên R2 sau khi ghép phân đoạn."
-      : `Dung lượng video vượt quá giới hạn cho phép (${(maxBytes / 1048576).toFixed(0)} MB).`;
+      ? "The video file was not found after combining its parts. Please upload it again."
+      : `The video exceeds the ${(maxBytes / 1048576).toFixed(0)} MB limit.`;
     if (headObj) {
       try { await bucket.delete(media.object_key); } catch {}
     }
@@ -853,4 +859,134 @@ export async function completeMultipartVideoUpload(
     "auto-reels-media"
   );
   return { success: true, status: 200, media: updated || media };
+}
+
+// ============================================================================
+// Comment images: small photos attached to auto-comments (JPG / PNG / GIF / WEBP)
+// ============================================================================
+
+export const MAX_COMMENT_IMAGE_BYTES = 8 * 1024 * 1024;
+const COMMENT_IMAGE_TYPES: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp"
+};
+
+function sniffImageMime(bytes: Uint8Array): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+    return "image/gif";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return null;
+}
+
+/** Receives the raw image body (one request) and stores it for later use in a comment. */
+export async function uploadCommentImage(
+  request: Request,
+  db: D1Database,
+  env: Env,
+  ownerUserId: string
+): Promise<{ success: boolean; status: number; message?: string; media?: MediaFileRecord }> {
+  const declaredLength = Number(request.headers.get("Content-Length") || 0);
+  if (declaredLength > MAX_COMMENT_IMAGE_BYTES) {
+    return { success: false, status: 413, message: "Image is too large. The maximum size is 8 MB." };
+  }
+
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    return { success: false, status: 400, message: "The image file is empty." };
+  }
+  if (bytes.byteLength > MAX_COMMENT_IMAGE_BYTES) {
+    return { success: false, status: 413, message: "Image is too large. The maximum size is 8 MB." };
+  }
+
+  const mime = sniffImageMime(bytes);
+  if (!mime || !COMMENT_IMAGE_TYPES[mime]) {
+    return { success: false, status: 400, message: "Unsupported image. Please use JPG, PNG, GIF or WEBP." };
+  }
+  const ext = COMMENT_IMAGE_TYPES[mime];
+
+  let rawName = "";
+  try {
+    rawName = decodeURIComponent(request.headers.get("X-File-Name") || "");
+  } catch {
+    rawName = "";
+  }
+  const baseName =
+    rawName
+      .replace(/\.[^.]+$/, "")
+      .replace(/[^a-zA-Z0-9._-]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60) || "image";
+  const filename = `${baseName}.${ext}`;
+
+  const mediaId = `img_${Date.now()}_${randomHex(6)}`;
+  const objectKey = `users/${ownerUserId}/comment-images/${mediaId}.${ext}`;
+  const checksum = await sha256Hex(bytes);
+  const bucket = getR2Bucket(env);
+
+  if (bucket) {
+    try {
+      await bucket.put(objectKey, bytes, {
+        httpMetadata: { contentType: mime },
+        customMetadata: { ownerUserId, mediaId, kind: "comment_image" }
+      });
+    } catch {
+      return { success: false, status: 500, message: "Could not save the image. Please try again." };
+    }
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO media_blobs_fallback (media_id, owner_user_id, data_base64, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(media_id) DO UPDATE SET data_base64 = excluded.data_base64, created_at = excluded.created_at`
+      )
+      .bind(mediaId, ownerUserId, bytesToBase64Url(bytes), new Date().toISOString())
+      .run();
+  }
+
+  const media = await createMediaFileInit(db, {
+    id: mediaId,
+    ownerUserId,
+    objectKey,
+    originalFilename: filename,
+    mimeType: mime,
+    sizeBytes: bytes.byteLength,
+    sha256Checksum: checksum,
+    storageBackend: bucket ? "r2" : "d1_fallback",
+    uploadStatus: "ready"
+  });
+  return { success: true, status: 200, media };
+}
+
+/** Loads a stored comment image. Returns null when it is missing or not an image. */
+export async function loadCommentImage(
+  db: D1Database,
+  env: Env,
+  mediaId: string,
+  ownerUserId: string
+): Promise<{ bytes: Uint8Array; mimeType: string; filename: string } | null> {
+  const opened = await openVideoFromStorage(db, env, mediaId, ownerUserId);
+  if (!opened.found || !opened.media || !opened.getBytes) return null;
+  const mimeType = String(opened.media.mime_type || "");
+  if (!mimeType.startsWith("image/")) return null;
+  const bytes = await opened.getBytes();
+  if (!bytes || bytes.byteLength === 0) return null;
+  return { bytes, mimeType, filename: opened.media.original_filename || "image.jpg" };
 }

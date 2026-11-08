@@ -10,7 +10,7 @@ import type { D1Database, Env, ExecutionContext, QueueTaskMessage } from "../typ
 import { nowUtcSeconds } from "../utils/timezone.ts";
 import { randomHex } from "../utils/crypto.ts";
 import { appendTaskStageLog, recordTaskAuditLog, claimDueScheduledComments } from "../db.ts";
-import { processTaskQueueMessages, postScheduledTaskComment } from "../queue/publishQueue.ts";
+import { processTaskQueueMessages, postScheduledTaskComment, dispatchDueTaskComments } from "../queue/publishQueue.ts";
 import { cleanupExpiredR2Media } from "../services/r2MediaService.ts";
 import { syncDueReelsInsightsBatch } from "../services/reelsInsightsService.ts";
 
@@ -88,7 +88,7 @@ export async function dispatchDueScheduledTasks(
              idempotency_key = ?,
              next_retry_at = NULL,
              locked_until = NULL,
-             log = 'Đến giờ hẹn lịch -> Đang đăng video...',
+             log = 'Scheduled time reached - publishing video...',
              updated_at = ?
          WHERE id = ?
            AND status = ?`
@@ -104,7 +104,7 @@ export async function dispatchDueScheduledTasks(
         row.owner_user_id,
         "INFO",
         "cron_dispatched",
-        `Cron Scheduler kích hoạt tác vụ đến hạn (UTC=${now}).`
+        `Scheduled time reached; publishing started (UTC=${now}).`
       );
       await recordTaskAuditLog(db, {
         taskId: row.id,
@@ -156,6 +156,12 @@ export async function dispatchDueScheduledComments(
   nowUtc: number,
   limit = 3
 ): Promise<number> {
+  // Multi-comment rows (new composer) first, then legacy single comments
+  let multiCount = 0;
+  try {
+    multiCount = await dispatchDueTaskComments(db, env, nowUtc, 5);
+  } catch {}
+
   const due = await claimDueScheduledComments(db, nowUtc, limit);
   for (const row of due) {
     try {
@@ -164,10 +170,10 @@ export async function dispatchDueScheduledComments(
       try {
         await db
           .prepare("UPDATE tasks SET comment_status = 'failed', comment_log = ? WHERE id = ?")
-          .bind("Đăng bình luận tự động thất bại. Vui lòng thử lại.", row.id)
+          .bind("Auto comment failed. Please try again.", row.id)
           .run();
       } catch {}
     }
   }
-  return due.length;
+  return due.length + multiCount;
 }

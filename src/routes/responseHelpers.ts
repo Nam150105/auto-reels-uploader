@@ -131,10 +131,10 @@ export function renderOAuthCallbackHtml(options: {
         : "✕";
 
   const ogTitle = options.isEndpointReadyProbe
-    ? "Quản lý fanpage - Kết nối Facebook"
-    : `${options.title} - Quản lý fanpage`;
+    ? "FB Reels Auto Scheduler - Connect Facebook"
+    : `${options.title} - FB Reels Auto Scheduler`;
   const ogDesc = options.isEndpointReadyProbe
-    ? "Hệ thống quản lý Fanpage và lên lịch đăng Reels tự động."
+    ? "Manage your Pages and schedule Reels automatically."
     : options.message;
 
   const redirectTarget = options.isEndpointReadyProbe
@@ -172,7 +172,7 @@ export function renderOAuthCallbackHtml(options: {
 
   return htmlResponse(
     `<!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -180,7 +180,7 @@ export function renderOAuthCallbackHtml(options: {
   <meta property="fb:app_id" content="1469615908436980" />
   <meta property="og:url" content="https://pagefb.namnangno.click/api/meta/callback" />
   <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="Quản lý fanpage" />
+  <meta property="og:site_name" content="FB Reels Auto Scheduler" />
   <meta property="og:title" content="${escapeHtml(ogTitle)}" />
   <meta property="og:description" content="${escapeHtml(ogDesc)}" />
   <script src="https://cdn.tailwindcss.com"></script>
@@ -191,7 +191,7 @@ export function renderOAuthCallbackHtml(options: {
     <h1 class="text-lg font-bold text-white mb-1">${escapeHtml(options.title)}</h1>
     ${options.subtitle ? `<p class="text-xs text-emerald-400 font-semibold mb-2">${escapeHtml(options.subtitle)}</p>` : ""}
     <p class="text-xs text-slate-300 mb-5">${escapeHtml(options.message)}</p>
-    <a href="${escapeHtml(redirectTarget)}" class="inline-block px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition">Quay về trang Quản lý</a>
+    <a href="${escapeHtml(redirectTarget)}" class="inline-block px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition">Back to the app</a>
   </div>
   ${popupAndRedirectScript}
 </body>

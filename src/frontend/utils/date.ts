@@ -55,7 +55,7 @@ export function vnDateTimeToUtcSeconds(dateStr: string, timeStr: string): number
 export function formatUtcToVnDisplay(utcSeconds: number | null | undefined): string {
   if (!utcSeconds || utcSeconds <= 0) return "--";
   const d = new Date(utcSeconds * 1000);
-  return new Intl.DateTimeFormat("vi-VN", {
+  return new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Ho_Chi_Minh",
     day: "2-digit",
     month: "2-digit",
@@ -85,11 +85,11 @@ export function getDefaultScheduleTime(): { date: string; time: string } {
   };
 }
 
-/** Hẹn giờ đăng phải sau thời điểm hiện tại tối thiểu bao nhiêu phút */
+/** Minimum number of minutes a scheduled post must be ahead of now */
 export const MIN_SCHEDULE_LEAD_MINUTES = 5;
 
 /**
- * Mốc sớm nhất được phép hẹn: hiện tại + 5 phút, làm tròn LÊN phút kế tiếp (giờ Việt Nam).
+ * Earliest allowed slot: now + 5 minutes, rounded UP to the next minute (Vietnam time).
  */
 export function getEarliestScheduleSlot(leadMinutes = MIN_SCHEDULE_LEAD_MINUTES): {
   date: string;
@@ -103,7 +103,7 @@ export function getEarliestScheduleSlot(leadMinutes = MIN_SCHEDULE_LEAD_MINUTES)
 }
 
 /**
- * Kiểm tra ngày giờ (giờ Việt Nam) có hợp lệ để hẹn đăng không (>= hiện tại + 5 phút).
+ * Check whether a date/time (Vietnam time) can be scheduled (>= now + 5 minutes).
  */
 export function isScheduleSlotAllowed(
   dateStr: string,
@@ -116,8 +116,8 @@ export function isScheduleSlotAllowed(
 }
 
 /**
- * Cộng thêm số phút vào một mốc giờ Việt Nam, trả về ngày giờ Việt Nam mới
- * (không phụ thuộc múi giờ của trình duyệt).
+ * Add minutes to a Vietnam-time slot and return the new Vietnam date/time
+ * (independent of the browser's time zone).
  */
 export function addMinutesToVnSlot(
   dateStr: string,

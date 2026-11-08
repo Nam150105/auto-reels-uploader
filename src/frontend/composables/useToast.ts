@@ -24,10 +24,10 @@ export function useToast() {
     return id;
   };
 
-  const success = (message: string, title = "Thành công") => show(message, "success", title);
-  const error = (message: string, title = "Lỗi") => show(message, "error", title, 6000);
-  const info = (message: string, title = "Thông báo") => show(message, "info", title);
-  const warning = (message: string, title = "Cảnh báo") => show(message, "warning", title);
+  const success = (message: string, title = "Success") => show(message, "success", title);
+  const error = (message: string, title = "Error") => show(message, "error", title, 6000);
+  const info = (message: string, title = "Info") => show(message, "info", title);
+  const warning = (message: string, title = "Warning") => show(message, "warning", title);
 
   const remove = (id: string) => {
     toasts.value = toasts.value.filter((t) => t.id !== id);

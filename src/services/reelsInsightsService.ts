@@ -61,18 +61,18 @@ export interface ParsedMetricOutcome {
 }
 
 export const METRIC_LABELS: Record<string, string> = {
-  fb_reels_total_plays: "Tổng lượt phát Reels (Initial + Replay)",
-  blue_reels_play_count: "Lượt phát khởi đầu (Initial Plays)",
-  fb_reels_replay_count: "Lượt phát lại (Replays)",
-  views: "Lượt xem Video (Views)",
-  post_impressions_unique: "Lượt tiếp cận duy nhất (Reach)",
-  post_video_view_time: "Tổng thời gian xem (ms)",
-  post_video_avg_time_watched: "Thời gian xem trung bình (ms)",
-  post_video_social_actions: "Tương tác xã hội (Reactions / Comments / Shares)",
-  likes: "Lượt thích / Cảm xúc",
-  comments: "Bình luận",
-  shares: "Lượt chia sẻ",
-  post_video_retention_graph: "Biểu đồ giữ chân người xem (Retention)"
+  fb_reels_total_plays: "Total Reels plays (initial + replays)",
+  blue_reels_play_count: "Initial plays",
+  fb_reels_replay_count: "Replays",
+  views: "Video views",
+  post_impressions_unique: "Unique reach",
+  post_video_view_time: "Total watch time (ms)",
+  post_video_avg_time_watched: "Average watch time (ms)",
+  post_video_social_actions: "Social actions (reactions / comments / shares)",
+  likes: "Likes / reactions",
+  comments: "Comments",
+  shares: "Shares",
+  post_video_retention_graph: "Audience retention graph"
 };
 
 function getCurrentVnDateString(): string {
@@ -180,7 +180,7 @@ export async function syncSingleReelInsights(
       post_id: "",
       synced_at: nowIso,
       warnings: [],
-      message: "Không tìm thấy task hoặc bạn không có quyền truy cập."
+      message: "Post not found."
     };
   }
 
@@ -199,7 +199,7 @@ export async function syncSingleReelInsights(
       post_id: task.post_id || "",
       synced_at: nowIso,
       warnings: [],
-      message: "Task này chưa đăng Reels thành công hoặc chưa có Video ID trên Facebook."
+      message: "This post has not been published as a Reel yet, or has no Facebook video ID."
     };
   }
 
@@ -219,12 +219,12 @@ export async function syncSingleReelInsights(
 
   if (permCheck.hasReadInsights === false) {
     warnings.push(
-      "Access Token hiện tại chưa có quyền read_insights. Chức năng đăng Reels vẫn hoạt động, nhưng không thể lấy đầy đủ dữ liệu thống kê Reels."
+      "The access token is missing the read_insights permission. Publishing Reels still works, but Reels stats will be incomplete."
     );
   }
   if (permCheck.canAnalyze === false) {
     warnings.push(
-      "Tài khoản hiện không có quyền ANALYZE trên Page này để đọc Insights."
+      "This account lacks the ANALYZE role on this Page, so Insights can't be read."
     );
   }
 
@@ -239,7 +239,7 @@ export async function syncSingleReelInsights(
     const finalStatus = isExpired ? "token_expired" : "permission_required";
     const errMsg =
       permCheck.message ||
-      "Page Access Token không hợp lệ hoặc đã hết hạn. Vui lòng cập nhật Access Token.";
+      "The Page access token is invalid or expired. Please update the access token.";
 
     await updateTaskAnalyticsState(db, task.id, finalStatus, errMsg, nowIso);
     return {
@@ -398,7 +398,7 @@ export async function syncSingleReelInsights(
     }
   } catch (netErr) {
     topErrorMessage = sanitizeSensitiveText(
-      `Lỗi kết nối khi lấy video_insights: ${(netErr as Error).message}`
+      `Connection error while loading video insights: ${(netErr as Error).message}`
     );
     for (const mName of REEL_VIDEO_INSIGHT_METRICS) {
       metricMap.set(mName, {
@@ -539,7 +539,7 @@ export async function syncSingleReelInsights(
         db,
         pageRow.connected_account_id,
         "expired",
-        topErrorMessage || "Access Token đã hết hạn khi đồng bộ Insights.",
+        topErrorMessage || "The access token expired while syncing Insights.",
         null,
         "expired"
       );
@@ -549,7 +549,7 @@ export async function syncSingleReelInsights(
       db,
       task.id,
       "token_expired",
-      topErrorMessage || "Access Token đã hết hạn.",
+      topErrorMessage || "The access token has expired.",
       nowIso
     );
 
@@ -562,7 +562,7 @@ export async function syncSingleReelInsights(
       synced_at: nowIso,
       warnings,
       error_type: "TOKEN_EXPIRED",
-      message: topErrorMessage || "Access Token đã hết hạn. Vui lòng cập nhật Access Token mới."
+      message: topErrorMessage || "The access token has expired. Please update it."
     };
   }
 
@@ -806,8 +806,8 @@ export async function syncSingleReelInsights(
     warnings,
     message:
       finalAnalyticsStatus === "permission_required"
-        ? warnings[0] || topErrorMessage || "Thiếu quyền read_insights hoặc ANALYZE để đọc đầy đủ thống kê."
-        : "Đã đồng bộ dữ liệu thống kê Reels từ Meta Graph API.",
+        ? warnings[0] || topErrorMessage || "Missing the read_insights permission or ANALYZE role, so stats may be incomplete."
+        : "Reels stats synced from Facebook.",
     snapshot: {
       task_id: task.id,
       sync_date: syncDateVn,
@@ -918,8 +918,8 @@ export async function syncUserReelsInsights(
     results,
     message:
       targets.length === 0
-        ? "Chưa có bài Reels nào đã đăng thành công để đồng bộ thống kê."
-        : `Đã đồng bộ thống kê ${syncedCount}/${targets.length} bài Reels.`
+        ? "No published Reels to sync stats for yet."
+        : `Synced stats for ${syncedCount}/${targets.length} Reels.`
   };
 }
 
@@ -1061,17 +1061,17 @@ export async function getReelsAnalyticsDashboard(
   const permissionWarnings: string[] = [];
   if (accounts.length > 0 && !hasReadInsights) {
     permissionWarnings.push(
-      "Access Token hiện tại chưa có quyền read_insights. Chức năng đăng Reels vẫn hoạt động, nhưng không thể lấy đầy đủ dữ liệu thống kê Reels."
+      "The access token is missing the read_insights permission. Publishing Reels still works, but Reels stats will be incomplete."
     );
   }
   if (pagesMissingAnalyze.length > 0) {
     permissionWarnings.push(
-      "Tài khoản hiện không có quyền ANALYZE trên Page này để đọc Insights."
+      "This account lacks the ANALYZE role on this Page, so Insights can't be read."
     );
   }
   if (pagesMissingPermission.length > 0) {
     permissionWarnings.push(
-      "Page này chưa có trong token mới hoặc thiếu quyền quản lý."
+      "This Page is not in the new token, or you lack admin access to it."
     );
   }
 
@@ -1143,7 +1143,7 @@ export async function getReelsAnalyticsDashboard(
       facebook_page_id: t.facebook_page_id,
       page_name: t.page_name || t.facebook_page_id || "Unnamed Page",
       page_avatar: t.page_avatar || "",
-      caption: t.caption || "(Không có caption)",
+      caption: t.caption || "(No caption)",
       video_id: t.video_id || "",
       post_id: t.post_id || "",
       permalink_url:

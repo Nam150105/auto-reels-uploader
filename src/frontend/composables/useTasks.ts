@@ -23,7 +23,7 @@ export function useTasks() {
       tasks.value = res.tasks || [];
     } catch (err: any) {
       if (!silent) {
-        toast.error(err?.message || "Không thể tải danh sách bài đăng.");
+        toast.error(err?.message || "Couldn't load posts.");
       }
     } finally {
       if (!silent) isLoading.value = false;
@@ -91,10 +91,10 @@ export function useTasks() {
     isActionLoading.value = true;
     try {
       const res = await api.publishTaskNow(taskId);
-      toast.success(res?.message || "Đã gửi yêu cầu đăng ngay!");
+      toast.success(res?.message || "Publish request sent.");
       await loadTasks(true);
     } catch (err: any) {
-      toast.error(err?.message || "Đăng ngay thất bại.");
+      toast.error(err?.message || "Failed to publish now.");
     } finally {
       isActionLoading.value = false;
     }
@@ -105,11 +105,11 @@ export function useTasks() {
     isActionLoading.value = true;
     try {
       const res = await api.publishBulkNow(selectedTaskIds.value);
-      toast.success(res?.message || `Đã đưa ${selectedTaskIds.value.length} bài vào hàng đợi đăng ngay!`);
+      toast.success(res?.message || `Queued ${selectedTaskIds.value.length} post(s) to publish now.`);
       selectedTaskIds.value = [];
       await loadTasks(true);
     } catch (err: any) {
-      toast.error(err?.message || "Đăng ngay hàng loạt thất bại.");
+      toast.error(err?.message || "Failed to publish selected posts.");
     } finally {
       isActionLoading.value = false;
     }
@@ -119,11 +119,11 @@ export function useTasks() {
     isActionLoading.value = true;
     try {
       await api.deleteTask(taskId, deleteFb);
-      toast.success("Đã xóa bài đăng.");
+      toast.success("Post deleted.");
       selectedTaskIds.value = selectedTaskIds.value.filter((i) => i !== taskId);
       await loadTasks(true);
     } catch (err: any) {
-      toast.error(err?.message || "Xóa bài đăng thất bại.");
+      toast.error(err?.message || "Failed to delete post.");
     } finally {
       isActionLoading.value = false;
     }
@@ -131,17 +131,17 @@ export function useTasks() {
 
   const bulkDelete = async () => {
     if (selectedTaskIds.value.length === 0) return;
-    if (!confirm(`Bạn có chắc chắn muốn xóa ${selectedTaskIds.value.length} bài đăng đã chọn?`)) {
+    if (!confirm(`Delete ${selectedTaskIds.value.length} selected post(s)?`)) {
       return;
     }
     isActionLoading.value = true;
     try {
       await api.bulkDeleteTasks(selectedTaskIds.value);
-      toast.success(`Đã xóa ${selectedTaskIds.value.length} bài đăng.`);
+      toast.success(`Deleted ${selectedTaskIds.value.length} post(s).`);
       selectedTaskIds.value = [];
       await loadTasks(true);
     } catch (err: any) {
-      toast.error(err?.message || "Xóa bài hàng loạt thất bại.");
+      toast.error(err?.message || "Failed to delete selected posts.");
     } finally {
       isActionLoading.value = false;
     }
@@ -151,10 +151,10 @@ export function useTasks() {
     isActionLoading.value = true;
     try {
       const res = await api.retryTaskComment(taskId);
-      toast.success(res?.message || "Đã đăng lại bình luận thành công!");
+      toast.success(res?.message || "Comment posted.");
       await loadTasks(true);
     } catch (err: any) {
-      toast.error(err?.message || "Thử lại bình luận thất bại.");
+      toast.error(err?.message || "Failed to retry comment.");
     } finally {
       isActionLoading.value = false;
     }

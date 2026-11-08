@@ -90,10 +90,33 @@ export interface TaskRecord {
   comment_status?: string | null;
   comment_id?: string | null;
   comment_log?: string | null;
+  comments?: TaskCommentSummary[];
   published_at?: string | null;
   error_message?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+/** One auto-comment as returned with a task in the schedule list */
+export interface TaskCommentSummary {
+  position: number;
+  text: string;
+  has_image: boolean;
+  delay_minutes: number;
+  status: "pending" | "scheduled" | "processing" | "success" | "failed";
+  error: string;
+}
+
+/** One auto-comment being written in the composer (text and/or one image, own delay) */
+export interface ComposerComment {
+  id: string;
+  text: string;
+  delayMinutes: number;
+  imageMediaId: string;
+  imageName: string;
+  imagePreviewUrl: string;
+  isUploading: boolean;
+  uploadError: string;
 }
 
 export interface BulkComposerRow {
@@ -108,9 +131,7 @@ export interface BulkComposerRow {
   isUploading?: boolean;
   scheduleDate: string;
   scheduleTime: string;
-  commentText: string;
-  commentDelayMinutes: number;
-  commentDelayOption: string;
+  comments: ComposerComment[];
   isSubmitting?: boolean;
   status?: "draft" | "queued" | "error";
   errorMessage?: string;
@@ -135,38 +156,55 @@ export interface SingleComposerState {
   isSubmitting: boolean;
 }
 
-/** null = chưa có dữ liệu từ Facebook (hiển thị "—"), không suy đoán */
-export interface PageAnalyticsComparison {
+/** Analytics read live from the Meta Graph API. null = Facebook did not return this number. */
+export interface LivePageStats {
   page_id: string;
   page_name: string;
   avatar_url: string;
-  followers_count: number | null;
-  posts_30d: number;
-  total_views: number | null;
-  total_reach: number | null;
-  total_likes: number | null;
-  total_comments: number | null;
-  total_shares: number | null;
-  token_status: string;
-  can_analyze: boolean;
+  followers: number | null;
+  new_follows: number | null;
+  views: number | null;
+  engagement: number | null;
+  reels_count: number;
+  reel_plays: number | null;
+  reel_reach: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  status: "ok" | "partial" | "reconnect" | "error";
+  status_message: string;
 }
 
-export interface AnalyticsTimeSeriesPoint {
-  date: string;
-  views: number;
-  reach: number;
-  interactions: number;
+export interface LiveReel {
+  video_id: string;
+  page_id: string;
+  page_name: string;
+  description: string;
+  created_time: string;
+  permalink_url: string;
+  plays: number | null;
+  reach: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
 }
 
 export interface AnalyticsDashboard {
+  source: "meta_graph_api";
+  range_days: number;
+  fetched_at: string;
+  cached: boolean;
   total_pages: number;
   total_followers: number | null;
-  views_7d: number;
-  views_30d: number;
-  posts_7d: number;
-  posts_30d: number;
-  pages: PageAnalyticsComparison[];
-  time_series: AnalyticsTimeSeriesPoint[];
+  new_follows: number | null;
+  views: number | null;
+  views_7d: number | null;
+  engagement: number | null;
+  reels_count: number;
+  reels_count_7d: number;
+  reel_plays: number | null;
+  pages: LivePageStats[];
+  time_series: Array<{ date: string; views: number | null; engagement: number | null; new_follows: number | null }>;
+  top_reels: LiveReel[];
   warnings: string[];
-  last_synced_at?: string | null;
 }

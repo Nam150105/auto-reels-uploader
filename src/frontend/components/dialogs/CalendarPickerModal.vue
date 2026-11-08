@@ -14,7 +14,7 @@
               @click="changeMonth(-1)"
               :disabled="!canGoPrevMonth"
               class="p-1 rounded transition text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:pointer-events-none"
-              title="Tháng trước"
+              title="Previous month"
             >
               &lsaquo;
             </button>
@@ -23,7 +23,7 @@
               type="button"
               @click="changeMonth(1)"
               class="p-1 rounded transition text-slate-400 hover:text-slate-700"
-              title="Tháng sau"
+              title="Next month"
             >
               &rsaquo;
             </button>
@@ -56,7 +56,7 @@
 
         <!-- Right: Time Columns -->
         <div class="w-24 pl-3 border-l border-slate-100 flex flex-col">
-          <div class="text-[10px] font-bold text-slate-400 uppercase text-center pb-2">Giờ : Phút</div>
+          <div class="text-[10px] font-bold text-slate-400 uppercase text-center pb-2">Hour : Min</div>
           <div class="flex gap-1 h-52 overflow-hidden">
             <div ref="hourColRef" class="flex-1 overflow-y-auto pr-0.5 space-y-1 text-center scrollbar-thin">
               <button
@@ -103,7 +103,7 @@
       </div>
 
       <p class="mt-3 text-[11px] text-slate-500 bg-slate-50 rounded-lg px-2.5 py-1.5">
-        Chỉ hẹn được từ <strong class="text-slate-700">{{ earliestDisplay }}</strong> trở đi (sau hiện tại tối thiểu {{ leadMinutes }} phút).
+        Earliest available: <strong class="text-slate-700">{{ earliestDisplay }}</strong> (at least {{ leadMinutes }} minutes from now).
       </p>
 
       <div class="flex items-center justify-between pt-3 mt-2 border-t border-slate-100 text-xs">
@@ -112,7 +112,7 @@
           @click="selectEarliest"
           class="text-blue-600 hover:text-blue-800 font-semibold px-2 py-1 rounded hover:bg-blue-50 transition"
         >
-          Sớm nhất
+          Earliest
         </button>
         <div class="flex items-center gap-2">
           <span class="text-slate-600 font-mono text-[11px]">{{ selectionDisplay }}</span>
@@ -154,11 +154,25 @@ const emit = defineEmits<{
 }>();
 
 const leadMinutes = computed(() => props.minLeadMinutes);
-const weekdays = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const monthNames = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+];
 const hoursList = Array.from({ length: 24 }, (_, i) => padZero(i));
 const minutesList = Array.from({ length: 60 }, (_, i) => padZero(i));
 
-// Mốc sớm nhất được tính lại định kỳ khi đang mở để các ô quá khứ tự khóa theo thời gian thực
+// Recompute the earliest slot periodically while open so past cells lock in real time
 const tick = ref(0);
 let timer: ReturnType<typeof setInterval> | null = null;
 const earliest = computed(() => {
@@ -196,7 +210,7 @@ const isMinuteDisabled = (m: string) =>
     selectedHour.value === earliestHour.value &&
     m < earliestMinute.value);
 
-/** Đưa lựa chọn về mốc hợp lệ gần nhất nếu đang rơi vào quá khứ */
+/** Move the selection to the nearest valid slot if it falls in the past */
 const clampSelection = () => {
   const e = earliest.value;
   if (selectedDateStr.value < e.date) {
@@ -253,14 +267,14 @@ watch(
   { immediate: true }
 );
 
-// Thời gian trôi qua khi đang mở: tự động đẩy lựa chọn lên mốc hợp lệ
+// As time passes while open, push the selection forward to a valid slot
 watch(earliest, clampSelection);
 
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer);
 });
 
-const monthYearDisplay = computed(() => `Tháng ${viewMonth.value + 1}, ${viewYear.value}`);
+const monthYearDisplay = computed(() => `${monthNames[viewMonth.value]} ${viewYear.value}`);
 
 const canGoPrevMonth = computed(() => {
   const ey = Number(earliest.value.date.slice(0, 4));
@@ -280,7 +294,7 @@ interface DayCell {
 const calendarDays = computed<DayCell[]>(() => {
   const y = viewYear.value;
   const m = viewMonth.value;
-  // Tính thứ trong tuần theo UTC để không phụ thuộc múi giờ trình duyệt
+  // Compute the weekday in UTC so it doesn't depend on the browser's time zone
   const firstDayOfWeek = new Date(Date.UTC(y, m, 1)).getUTCDay();
   const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
   const todayStr = getEarliestScheduleSlot(0).date;

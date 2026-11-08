@@ -8,6 +8,7 @@
  * - DELETE /api/media/{media_id}
  * - GET /api/media/{media_id}/stream
  * - POST /api/upload/video (Tương thích ngược cho luồng upload 1 bước)
+ * - POST /api/media/upload-image (ảnh đính kèm bình luận, tối đa 8MB)
  */
 
 import type { D1Database, Env, UserRecord } from "../types.ts";
@@ -19,7 +20,8 @@ import {
   completeMultipartVideoUpload,
   listUserVideos,
   deleteUserVideo,
-  openVideoFromStorage
+  openVideoFromStorage,
+  uploadCommentImage
 } from "../services/r2MediaService.ts";
 import { jsonResponse } from "./responseHelpers.ts";
 
@@ -52,7 +54,7 @@ export async function handleMediaRoutes(
       });
 
       if (!initRes.success || !initRes.media) {
-        return jsonResponse({ detail: initRes.message || "Không thể tạo phiên upload." }, 400);
+        return jsonResponse({ detail: initRes.message || "Could not start the upload." }, 400);
       }
 
       return jsonResponse({
@@ -69,19 +71,34 @@ export async function handleMediaRoutes(
       });
     } catch (err) {
       return jsonResponse(
-        { detail: `Lỗi khởi tạo upload R2: ${(err as Error).message}` },
+        { detail: `Could not start the upload: ${(err as Error).message}` },
         400
       );
     }
   }
 
   // 2. Truyền trực tiếp luồng binary video vào R2 (Streaming Upload)
+  // Comment image upload (raw body, one request)
+  if (pathname === "/api/media/upload-image" && (method === "POST" || method === "PUT")) {
+    const res = await uploadCommentImage(request, db, env, currentUser.id);
+    if (!res.success || !res.media) {
+      return jsonResponse({ detail: res.message || "Could not upload the image." }, res.status || 400);
+    }
+    return jsonResponse({
+      success: true,
+      media_id: res.media.id,
+      filename: res.media.original_filename,
+      size_bytes: res.media.size_bytes,
+      mime_type: res.media.mime_type
+    });
+  }
+
   const streamUploadMatch = /^\/api\/media\/upload-stream\/([^/]+)$/.exec(pathname);
   if (streamUploadMatch && (method === "PUT" || method === "POST")) {
     const mediaId = decodeURIComponent(streamUploadMatch[1]);
     const res = await streamVideoToStorage(request, db, env, mediaId, currentUser.id);
     if (!res.success) {
-      return jsonResponse({ detail: res.message || "Lỗi tải dữ liệu lên R2." }, res.status);
+      return jsonResponse({ detail: res.message || "Upload failed. Please try again." }, res.status);
     }
     return jsonResponse({
       success: true,
@@ -97,7 +114,7 @@ export async function handleMediaRoutes(
     const uploadId = (url.searchParams.get("upload_id") || "").trim();
     const partNumber = Number(url.searchParams.get("part_number"));
     if (!mediaId || !uploadId) {
-      return jsonResponse({ detail: "Thiếu tham số media_id hoặc upload_id." }, 400);
+      return jsonResponse({ detail: "Missing upload details. Please try uploading again." }, 400);
     }
     const res = await uploadVideoPart(request, db, env, {
       mediaId,
@@ -106,7 +123,7 @@ export async function handleMediaRoutes(
       ownerUserId: currentUser.id
     });
     if (!res.success) {
-      return jsonResponse({ detail: res.message || "Lỗi tải phân đoạn lên R2." }, res.status);
+      return jsonResponse({ detail: res.message || "Could not upload part of the video. Please try again." }, res.status);
     }
     return jsonResponse({ success: true, media_id: mediaId, part_number: res.part_number, etag: res.etag });
   }
@@ -117,7 +134,7 @@ export async function handleMediaRoutes(
       const body = (await request.json()) as Record<string, unknown>;
       const mediaId = String(body.media_id || "").trim();
       if (!mediaId) {
-        return jsonResponse({ detail: "Thiếu tham số media_id." }, 400);
+        return jsonResponse({ detail: "Missing video details. Please try uploading again." }, 400);
       }
 
       const uploadId = body.upload_id ? String(body.upload_id).trim() : "";
@@ -131,7 +148,7 @@ export async function handleMediaRoutes(
             })
           : await finalizeVideoUpload(db, env, mediaId, currentUser.id);
       if (!finRes.success || !finRes.media) {
-        return jsonResponse({ detail: finRes.message || "Chưa hoàn tất upload." }, finRes.status);
+        return jsonResponse({ detail: finRes.message || "The upload is not complete." }, finRes.status);
       }
 
       return jsonResponse({
@@ -146,7 +163,7 @@ export async function handleMediaRoutes(
         media: finRes.media
       });
     } catch (err) {
-      return jsonResponse({ detail: `Lỗi xác nhận upload: ${(err as Error).message}` }, 400);
+      return jsonResponse({ detail: `Could not confirm the upload: ${(err as Error).message}` }, 400);
     }
   }
 
@@ -170,12 +187,12 @@ export async function handleMediaRoutes(
     const mediaId = decodeURIComponent(deleteMediaMatch[1]);
     const delRes = await deleteUserVideo(db, env, mediaId, currentUser.id);
     if (!delRes.deleted) {
-      return jsonResponse({ detail: delRes.message || "Không tìm thấy file video." }, 404);
+      return jsonResponse({ detail: delRes.message || "Video file not found." }, 404);
     }
     return jsonResponse({
       success: true,
       deleted_id: mediaId,
-      message: "Đã xóa file video khỏi Cloudflare R2."
+      message: "Video deleted."
     });
   }
 
@@ -185,7 +202,7 @@ export async function handleMediaRoutes(
     const mediaId = decodeURIComponent(streamReadMatch[1] || streamReadMatch[2]);
     const opened = await openVideoFromStorage(db, env, mediaId, currentUser.id);
     if (!opened.found || !opened.stream) {
-      return jsonResponse({ detail: opened.error || "Không tìm thấy video." }, 404);
+      return jsonResponse({ detail: opened.error || "Video not found." }, 404);
     }
     return new Response(opened.stream, {
       status: 200,
@@ -211,7 +228,7 @@ export async function handleMediaRoutes(
       const form = await request.formData();
       const filePart = form.get("file") || form.get("video");
       if (!filePart || typeof filePart === "string") {
-        return jsonResponse({ detail: "Vui lòng chọn file video hợp lệ." }, 400);
+        return jsonResponse({ detail: "Please choose a valid video file." }, 400);
       }
       const blob = filePart as File;
       filename = blob.name || filename;
@@ -222,7 +239,7 @@ export async function handleMediaRoutes(
         mimeType: blob.type || "video/mp4"
       });
       if (!initRes.success || !initRes.media) {
-        return jsonResponse({ detail: initRes.message || "File không hợp lệ." }, 400);
+        return jsonResponse({ detail: initRes.message || "Invalid file." }, 400);
       }
 
       const synthReq = new Request(request.url, {
@@ -242,7 +259,7 @@ export async function handleMediaRoutes(
         currentUser.id
       );
       if (!streamRes.success || !streamRes.media) {
-        return jsonResponse({ detail: streamRes.message || "Lỗi lưu video." }, streamRes.status);
+        return jsonResponse({ detail: streamRes.message || "Could not save the video." }, streamRes.status);
       }
 
       return jsonResponse({
@@ -254,7 +271,7 @@ export async function handleMediaRoutes(
         size_mb: Math.round((streamRes.media.size_bytes / 1048576) * 100) / 100,
         video_path: `r2://${streamRes.media.id}`,
         stream_url: `/api/media/${streamRes.media.id}/stream`,
-        message: `Đã tải lên Cloudflare R2 thành công: ${streamRes.media.original_filename}`
+        message: `Uploaded: ${streamRes.media.original_filename}`
       });
     }
 
@@ -266,7 +283,7 @@ export async function handleMediaRoutes(
       mimeType: contentType || "video/mp4"
     });
     if (!initRes.success || !initRes.media) {
-      return jsonResponse({ detail: initRes.message || "File không hợp lệ." }, 400);
+      return jsonResponse({ detail: initRes.message || "Invalid file." }, 400);
     }
 
     const streamRes = await streamVideoToStorage(
@@ -277,7 +294,7 @@ export async function handleMediaRoutes(
       currentUser.id
     );
     if (!streamRes.success || !streamRes.media) {
-      return jsonResponse({ detail: streamRes.message || "Lỗi lưu video." }, streamRes.status);
+      return jsonResponse({ detail: streamRes.message || "Could not save the video." }, streamRes.status);
     }
 
     return jsonResponse({
@@ -289,7 +306,7 @@ export async function handleMediaRoutes(
       size_mb: Math.round((streamRes.media.size_bytes / 1048576) * 100) / 100,
       video_path: `r2://${streamRes.media.id}`,
       stream_url: `/api/media/${streamRes.media.id}/stream`,
-      message: `Đã tải lên Cloudflare R2 thành công: ${streamRes.media.original_filename}`
+      message: `Uploaded: ${streamRes.media.original_filename}`
     });
   }
 

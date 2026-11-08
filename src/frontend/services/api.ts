@@ -22,15 +22,15 @@ class ApiError extends Error {
   }
 }
 
-/** Từ khóa kỹ thuật nội bộ không được hiển thị cho người dùng */
+/** Internal technical terms that must never be shown to users */
 const INTERNAL_TERMS = /\b(R2|D1|Cloudflare|Worker|bucket|object[_ ]?key|upload_id|media_id|r2:\/\/|SQL|SQLITE|stack|TypeError|undefined)\b/i;
 
 export function toFriendlyError(message: unknown, status = 0): string {
   const text = String(message || "").trim();
   if (!text || INTERNAL_TERMS.test(text)) {
-    if (status === 413) return "Video quá lớn. Vui lòng chọn video nhỏ hơn.";
-    if (status >= 500) return "Hệ thống đang bận. Vui lòng thử lại sau ít phút.";
-    return "Không thể xử lý yêu cầu. Vui lòng thử lại.";
+    if (status === 413) return "The file is too large. Please choose a smaller one.";
+    if (status >= 500) return "The service is busy. Please try again in a few minutes.";
+    return "Something went wrong. Please try again.";
   }
   return text;
 }
@@ -145,8 +145,7 @@ export const api = {
     publish_mode: "now" | "schedule";
     schedule_date?: string;
     schedule_time?: string;
-    comment_text?: string;
-    comment_delay_minutes?: number;
+    comments?: CommentPayload[];
   }): Promise<{ success: boolean; task_ids: number[]; created_count: number; message: string }> {
     return request("/api/tasks", {
       method: "POST",
@@ -162,8 +161,7 @@ export const api = {
       video_path?: string;
       schedule_date: string;
       schedule_time: string;
-      comment_text?: string;
-      comment_delay_minutes?: number;
+      comments?: CommentPayload[];
     }>;
   }): Promise<{ success: boolean; created_count: number; message: string }> {
     return request("/api/tasks/bulk", {
@@ -232,7 +230,7 @@ export const api = {
     });
   },
 
-  // Tải video (chia nhỏ theo phân đoạn)
+  // Video upload (in chunks)
   async uploadVideo(
     file: File,
     onProgress?: (percent: number) => void
@@ -260,7 +258,7 @@ export const api = {
       return raw ? toFriendlyError(raw, res.status) : fallback;
     };
 
-    // Không có phiên multipart (ví dụ môi trường local chưa gắn R2): tải toàn bộ file trong 1 request
+    // No multipart session (e.g. local dev): upload the whole file in one request
     if (!upload_id) {
       const streamRes = await fetch(upload_url || `/api/media/upload-stream/${encodeURIComponent(media_id)}`, {
         method: "PUT",
@@ -269,7 +267,7 @@ export const api = {
         credentials: "same-origin"
       });
       if (!streamRes.ok) {
-        throw new Error(await readError(streamRes, "Tải video thất bại. Vui lòng thử lại."));
+        throw new Error(await readError(streamRes, "Video upload failed. Please try again."));
       }
       if (onProgress) onProgress(99);
     } else {
@@ -295,7 +293,7 @@ export const api = {
         });
 
         if (!partRes.ok) {
-          throw new Error(await readError(partRes, "Tải video thất bại. Vui lòng kiểm tra mạng và thử lại."));
+          throw new Error(await readError(partRes, "Video upload failed. Check your connection and try again."));
         }
 
         const partData = await partRes.json();
@@ -337,65 +335,38 @@ export const api = {
     return completeRes;
   },
 
-  // Analytics
-  async getAnalytics(): Promise<AnalyticsDashboard> {
-    const raw = await request<any>("/api/insights/reels?range=30d");
-    return mapInsightsToDashboard(raw);
+  // Comment image (one request, max 8 MB)
+  async uploadCommentImage(file: File): Promise<{ media_id: string; filename: string }> {
+    const res = await fetch("/api/media/upload-image", {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        "X-File-Name": encodeURIComponent(file.name || "image")
+      },
+      body: file,
+      credentials: "same-origin"
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.media_id) {
+      const raw = data && (data.detail || data.message || data.error);
+      throw new Error(raw ? toFriendlyError(raw, res.status) : "Image upload failed. Please try again.");
+    }
+    return { media_id: String(data.media_id), filename: String(data.filename || file.name) };
   },
 
-  async syncAnalytics(): Promise<{ message: string }> {
-    const res = await request<any>("/api/insights/sync", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-    const synced = Number(res?.synced_count || 0);
-    return {
-      message: synced > 0 ? `Đã cập nhật số liệu cho ${synced} Reels.` : "Đã cập nhật số liệu mới nhất từ Facebook."
-    };
+  // Analytics (read live from Facebook)
+  async getAnalytics(days = 30): Promise<AnalyticsDashboard> {
+    return request<AnalyticsDashboard>(`/api/insights/live?days=${days}`);
+  },
+
+  async syncAnalytics(days = 30): Promise<AnalyticsDashboard> {
+    return request<AnalyticsDashboard>(`/api/insights/live?days=${days}&refresh=1`);
   }
 };
 
-const numOrNull = (v: unknown): number | null => {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
-
-/** Chuyển dữ liệu thống kê từ máy chủ sang cấu trúc màn hình Thống kê (giữ null khi chưa có dữ liệu) */
-export function mapInsightsToDashboard(raw: any): AnalyticsDashboard {
-  const overview = raw?.overview || {};
-  const charts = raw?.charts || {};
-  const comparison: any[] = Array.isArray(charts.page_comparison) ? charts.page_comparison : [];
-  const series: any[] = Array.isArray(charts.views_over_time) ? charts.views_over_time : [];
-
-  return {
-    total_pages: Number(overview.total_pages_count || comparison.length || 0),
-    total_followers: numOrNull(overview.total_followers),
-    views_7d: Number(overview.views_7d || 0),
-    views_30d: Number(overview.views_30d || 0),
-    posts_7d: Number(overview.posts_7d || 0),
-    posts_30d: Number(overview.posts_30d || 0),
-    pages: comparison.map((p) => ({
-      page_id: String(p.facebook_page_id || p.page_id || ""),
-      page_name: String(p.page_name || ""),
-      avatar_url: String(p.avatar_url || ""),
-      followers_count: numOrNull(p.followers),
-      posts_30d: Number(p.posts_30d || 0),
-      total_views: numOrNull(p.views),
-      total_reach: numOrNull(p.reach),
-      total_likes: numOrNull(p.likes),
-      total_comments: numOrNull(p.comments),
-      total_shares: numOrNull(p.shares),
-      token_status: String(p.token_status || "unknown"),
-      can_analyze: Boolean(p.can_analyze)
-    })),
-    time_series: series.map((pt) => ({
-      date: String(pt.date || ""),
-      views: Number(pt.views || 0),
-      reach: Number(pt.reach || 0),
-      interactions: Number(pt.interactions || 0)
-    })),
-    warnings: Array.isArray(raw?.permission_warnings) ? raw.permission_warnings.map(String) : [],
-    last_synced_at: raw?.last_synced_at || null
-  };
+/** One auto-comment sent to the server */
+export interface CommentPayload {
+  text: string;
+  image_media_id?: string;
+  delay_minutes: number;
 }

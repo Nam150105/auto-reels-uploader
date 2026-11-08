@@ -191,10 +191,10 @@ export function parseVnScheduleToUtc(
         missingDate: true,
         missingTime: true,
         fieldErrors: {
-          schedule_date: "Vui lòng nhập ngày đăng (YYYY-MM-DD hoặc DD/MM/YYYY).",
-          schedule_time: "Vui lòng nhập giờ đăng (HH:MM 24h)."
+          schedule_date: "Please enter a date (YYYY-MM-DD or DD/MM/YYYY).",
+          schedule_time: "Please enter a time (HH:MM, 24h)."
         },
-        error: "Bắt buộc nhập đầy đủ cả Ngày đăng và Giờ đăng (không được để trống)."
+        error: "Both a date and a time are required."
       };
     }
     return { scheduledAtUtc: null, normalizedDate: "", normalizedTime: "", isValid: true };
@@ -206,10 +206,10 @@ export function parseVnScheduleToUtc(
       missingDate: !dStr,
       missingTime: !tStr,
       fieldErrors: {
-        schedule_date: !dStr ? "Vui lòng nhập ngày đăng (YYYY-MM-DD hoặc DD/MM/YYYY)." : undefined,
-        schedule_time: !tStr ? "Vui lòng nhập giờ đăng (HH:MM 24h)." : undefined
+        schedule_date: !dStr ? "Please enter a date (YYYY-MM-DD or DD/MM/YYYY)." : undefined,
+        schedule_time: !tStr ? "Please enter a time (HH:MM, 24h)." : undefined
       },
-      error: "Phải nhập đầy đủ cả Ngày đăng (YYYY-MM-DD) và Giờ đăng (HH:MM 24h) theo giờ Việt Nam."
+      error: "Enter both a date (YYYY-MM-DD) and a time (HH:MM, 24h) in Vietnam time."
     };
   }
 
@@ -230,7 +230,7 @@ export function parseVnScheduleToUtc(
     return {
       scheduledAtUtc: null,
       isValid: false,
-      error: `Định dạng lịch hẹn không hợp lệ (${dStr} ${tStr}). Yêu cầu YYYY-MM-DD và HH:MM (24 tiếng) theo giờ Việt Nam.`
+      error: `Invalid schedule format (${dStr} ${tStr}). Use YYYY-MM-DD and HH:MM (24h) in Vietnam time.`
     };
   }
 
@@ -243,7 +243,7 @@ export function parseVnScheduleToUtc(
     return {
       scheduledAtUtc: null,
       isValid: false,
-      error: `Giá trị ngày/giờ không hợp lệ (${dStr} ${tStr}).`
+      error: `Invalid date or time (${dStr} ${tStr}).`
     };
   }
 
@@ -257,7 +257,7 @@ export function parseVnScheduleToUtc(
     return {
       scheduledAtUtc: null,
       isValid: false,
-      error: `Ngày không tồn tại trong lịch (${dStr}).`
+      error: `This date does not exist (${dStr}).`
     };
   }
 
@@ -277,7 +277,7 @@ export function parseVnScheduleToUtc(
         normalizedTime,
         isValid: false,
         isPast: true,
-        error: `Thời gian đặt lịch (${dStr} ${normalizedTime} giờ VN - 24h) đã qua hoặc trùng với thời điểm hiện tại. Vui lòng chọn thời gian trong tương lai.`
+        error: `The scheduled time (${dStr} ${normalizedTime}, Vietnam time) is in the past or right now. Please choose a future time.`
       };
     }
 
@@ -288,7 +288,7 @@ export function parseVnScheduleToUtc(
         normalizedTime,
         isValid: false,
         isPast: false,
-        error: `Thời gian đặt lịch (${dStr} ${normalizedTime} giờ VN - 24h) phải cách thời điểm hiện tại tối thiểu 1 phút.`
+        error: `The scheduled time (${dStr} ${normalizedTime}, Vietnam time) must be at least 1 minute from now.`
       };
     }
   }

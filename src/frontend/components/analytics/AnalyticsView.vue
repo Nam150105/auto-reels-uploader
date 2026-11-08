@@ -1,306 +1,211 @@
 <template>
   <div class="h-full flex flex-col p-4 lg:p-6 overflow-y-auto select-none">
-    <!-- Top Bar: Header & Sync Now Button -->
+    <!-- Top bar -->
     <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
       <div>
-        <h2 class="text-base font-bold text-slate-800">
-          {{ t('analytics_overview') }}
-        </h2>
+        <h2 class="text-base font-bold text-slate-800">Analytics</h2>
         <p class="text-xs text-slate-500 mt-0.5">
-          Số liệu Reels và Fanpage lấy từ Facebook (30 ngày gần nhất).
-          <span v-if="dashboard?.last_synced_at" class="text-slate-400 ml-1">
-            (Đồng bộ lần cuối: {{ formatLastSync(dashboard.last_synced_at) }})
-          </span>
+          Live from Facebook for your connected Pages.
+          <span v-if="dashboard?.fetched_at" class="text-slate-400 ml-1">Updated {{ formatTime(dashboard.fetched_at) }}</span>
         </p>
       </div>
 
       <div class="flex items-center gap-2">
+        <select
+          v-model.number="rangeDays"
+          @change="loadAnalytics()"
+          class="px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          <option :value="7">Last 7 days</option>
+          <option :value="30">Last 30 days</option>
+          <option :value="90">Last 90 days</option>
+        </select>
         <button
           type="button"
-          :disabled="isSyncing"
+          :disabled="isSyncing || isLoading"
           @click="syncInsights"
           class="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-xs shadow-sm transition"
         >
-          <svg class="w-4 h-4" :class="{ 'animate-spin': isSyncing }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg class="w-4 h-4" :class="{ 'animate-spin': isSyncing || isLoading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          <span>{{ isSyncing ? t('syncing') : t('sync_now') }}</span>
+          <span>{{ isSyncing ? "Refreshing..." : "Refresh" }}</span>
         </button>
       </div>
     </div>
 
-    <div
-      v-if="dashboard?.warnings?.length"
-      class="mb-4 p-3 rounded-2xl border border-amber-200 bg-amber-50 text-amber-800 text-xs space-y-1"
-    >
-      <p v-for="(w, i) in dashboard.warnings" :key="i">{{ w }}</p>
+    <div v-if="isLoading && !dashboard" class="flex-1 flex items-center justify-center text-xs text-slate-400 py-20">
+      Loading numbers from Facebook...
     </div>
 
-    <!-- 4 Overview Metric Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      <!-- 1. FOLLOWERS -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs relative overflow-hidden group">
-        <div class="flex items-center justify-between pb-2 text-slate-400">
-          <span class="text-[11px] font-bold tracking-wider uppercase text-slate-500">{{ t('card_followers') }}</span>
-          <div class="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-            </svg>
+    <template v-else>
+      <div
+        v-if="dashboard?.warnings?.length"
+        class="mb-4 p-3 rounded-2xl border border-amber-200 bg-amber-50 text-amber-800 text-xs space-y-1"
+      >
+        <p v-for="(w, i) in dashboard.warnings" :key="i">{{ w }}</p>
+      </div>
+
+      <!-- Overview cards -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div v-for="card in cards" :key="card.label" class="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+          <span class="text-[11px] font-bold tracking-wider uppercase text-slate-500">{{ card.label }}</span>
+          <p class="text-2xl font-black text-slate-900 tracking-tight mt-2">{{ formatNumber(card.value) }}</p>
+          <span class="text-[10px] font-semibold mt-1 block" :class="card.tone">{{ card.hint }}</span>
+        </div>
+      </div>
+
+      <!-- Daily chart -->
+      <div class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 mb-6 shadow-xs">
+        <div class="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-100 mb-4">
+          <h3 class="font-bold text-sm text-slate-800">Daily Page activity</h3>
+          <div class="flex items-center gap-4 text-xs font-semibold">
+            <span class="flex items-center gap-1.5 text-blue-600">
+              <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+              Views
+            </span>
+            <span class="flex items-center gap-1.5 text-emerald-600">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+              Engagement
+            </span>
           </div>
         </div>
-        <p class="text-2xl font-black text-slate-900 tracking-tight">
-          {{ formatNumber(dashboard?.total_followers ?? null) }}
-        </p>
-        <span class="text-[10px] text-emerald-600 font-semibold mt-1 block">
-          {{ dashboard?.total_followers == null ? 'Nhấn "Đồng bộ ngay" để cập nhật' : `Tổng của ${dashboard?.total_pages || 0} Fanpage` }}
-        </span>
-      </div>
 
-      <!-- 2. VIEWS 7D -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs relative overflow-hidden group">
-        <div class="flex items-center justify-between pb-2 text-slate-400">
-          <span class="text-[11px] font-bold tracking-wider uppercase text-slate-500">{{ t('card_views_7d') }}</span>
-          <div class="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-            </svg>
+        <div v-if="chartPoints.length === 0" class="h-40 flex items-center justify-center text-xs text-slate-400 text-center px-6">
+          Facebook did not return daily Page insights for this period.
+        </div>
+        <div v-else class="w-full h-56 relative">
+          <svg class="w-full h-full overflow-visible" viewBox="0 0 800 200" preserveAspectRatio="none">
+            <line x1="0" y1="30" x2="800" y2="30" stroke="#f1f5f9" stroke-width="1" />
+            <line x1="0" y1="100" x2="800" y2="100" stroke="#f1f5f9" stroke-width="1" />
+            <line x1="0" y1="170" x2="800" y2="170" stroke="#f1f5f9" stroke-width="1" />
+            <path :d="viewsArea" fill="url(#viewsGradient)" opacity="0.2" />
+            <path :d="viewsLine" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+            <path :d="engagementLine" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+            <defs>
+              <linearGradient id="viewsGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#2563eb" />
+                <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <div class="flex items-center justify-between text-[11px] text-slate-400 pt-2 font-mono">
+            <span v-for="label in xLabels" :key="label">{{ label }}</span>
           </div>
         </div>
-        <p class="text-2xl font-black text-slate-900 tracking-tight">
-          {{ formatNumber(dashboard?.views_7d || 0) }}
-        </p>
-        <span class="text-[10px] text-indigo-600 font-semibold mt-1 block">
-          Của các Reels đăng trong 7 ngày qua
-        </span>
       </div>
 
-      <!-- 3. VIEWS 30D -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs relative overflow-hidden group">
-        <div class="flex items-center justify-between pb-2 text-slate-400">
-          <span class="text-[11px] font-bold tracking-wider uppercase text-slate-500">{{ t('card_views_30d') }}</span>
-          <div class="w-8 h-8 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-            </svg>
-          </div>
+      <!-- Pages table -->
+      <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs mb-6">
+        <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 class="font-bold text-sm text-slate-800">Pages</h3>
+          <span class="text-xs text-slate-500 font-medium">"—" means Facebook did not return this number</span>
         </div>
-        <p class="text-2xl font-black text-slate-900 tracking-tight">
-          {{ formatNumber(dashboard?.views_30d || 0) }}
-        </p>
-        <span class="text-[10px] text-purple-600 font-semibold mt-1 block">
-          Của các Reels đăng trong 30 ngày qua
-        </span>
-      </div>
-
-      <!-- 4. NEW FOLLOWS 30D -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs relative overflow-hidden group">
-        <div class="flex items-center justify-between pb-2 text-slate-400">
-          <span class="text-[11px] font-bold tracking-wider uppercase text-slate-500">{{ t('card_new_follows_30d') }}</span>
-          <div class="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3-3h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-            </svg>
-          </div>
-        </div>
-        <p class="text-2xl font-black text-slate-900 tracking-tight">
-          {{ formatNumber(dashboard?.posts_30d || 0) }}
-        </p>
-        <span class="text-[10px] text-emerald-600 font-semibold mt-1 block">
-          {{ dashboard?.posts_7d || 0 }} bài trong 7 ngày qua
-        </span>
-      </div>
-    </div>
-
-    <!-- Reels View Trends SVG Chart -->
-    <div class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 mb-6 shadow-xs">
-      <div class="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
-        <h3 class="font-bold text-sm text-slate-800">
-          {{ t('reels_performance_chart') }}
-        </h3>
-        <div class="flex items-center gap-4 text-xs font-semibold">
-          <span class="flex items-center gap-1.5 text-blue-600">
-            <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-            Lượt xem (Views)
-          </span>
-          <span class="flex items-center gap-1.5 text-indigo-500">
-            <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
-            Tiếp cận (Reach)
-          </span>
-        </div>
-      </div>
-
-      <!-- Custom Pure SVG Chart -->
-      <div class="w-full h-56 relative">
-        <svg class="w-full h-full overflow-visible" viewBox="0 0 800 200" preserveAspectRatio="none">
-          <!-- Horizontal Grid Lines -->
-          <line x1="0" y1="40" x2="800" y2="40" stroke="#f1f5f9" stroke-width="1" />
-          <line x1="0" y1="100" x2="800" y2="100" stroke="#f1f5f9" stroke-width="1" />
-          <line x1="0" y1="160" x2="800" y2="160" stroke="#f1f5f9" stroke-width="1" />
-
-          <!-- Views Path (Blue Area & Line) -->
-          <path
-            :d="chartViewsAreaPath"
-            fill="url(#blueGradient)"
-            opacity="0.2"
-          />
-          <path
-            :d="chartViewsLinePath"
-            fill="none"
-            stroke="#2563eb"
-            stroke-width="3"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-
-          <!-- Reach Line (Indigo) -->
-          <path
-            :d="chartReachLinePath"
-            fill="none"
-            stroke="#6366f1"
-            stroke-width="2.5"
-            stroke-dasharray="4 4"
-            stroke-linecap="round"
-          />
-
-          <!-- Points -->
-          <circle
-            v-for="(pt, idx) in chartPoints"
-            :key="idx"
-            :cx="pt.x"
-            :cy="pt.yViews"
-            r="4"
-            fill="#2563eb"
-            stroke="#ffffff"
-            stroke-width="2"
-          />
-
-          <defs>
-            <linearGradient id="blueGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#2563eb" />
-              <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
-            </linearGradient>
-          </defs>
-        </svg>
-
-        <!-- X-Axis Labels -->
-        <div class="flex items-center justify-between text-[11px] text-slate-400 pt-2 font-mono">
-          <span v-for="pt in chartPoints" :key="pt.date">{{ pt.date }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Page Performance Comparison Table -->
-    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs flex-1">
-      <div class="p-4 border-b border-slate-100 flex items-center justify-between">
-        <h3 class="font-bold text-sm text-slate-800">
-          {{ t('page_comparison_title') }}
-        </h3>
-        <span class="text-xs text-slate-500 font-medium">
-          {{ (dashboard?.pages || []).length }} Fanpage · "—" là chưa có dữ liệu
-        </span>
-      </div>
-
-      <div class="overflow-x-auto scrollbar-thin">
-        <table class="w-full text-xs text-left">
-          <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
-            <tr>
-              <th class="py-3 px-4">{{ t('col_page') }}</th>
-              <th class="py-3 px-4 text-right">{{ t('col_followers') }}</th>
-              <th class="py-3 px-4 text-right">{{ t('col_posts') }}</th>
-              <th class="py-3 px-4 text-right">{{ t('col_views') }}</th>
-              <th class="py-3 px-4 text-right">{{ t('col_reach') }}</th>
-              <th class="py-3 px-4 text-right">{{ t('col_likes') }}</th>
-              <th class="py-3 px-4 text-right">{{ t('col_comments') }}</th>
-              <th class="py-3 px-4 text-right">{{ t('col_shares') }}</th>
-              <th class="py-3 px-4 text-center">Kết nối</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            <tr
-              v-for="page in (dashboard?.pages || [])"
-              :key="page.page_id"
-              class="hover:bg-slate-50/70 transition"
-            >
-              <!-- Page Name & Avatar -->
-              <td class="py-3 px-4">
-                <div class="flex items-center gap-2.5 min-w-0">
-                  <div class="w-8 h-8 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border border-slate-200">
-                    <img v-if="page.avatar_url" :src="page.avatar_url" class="w-full h-full object-cover" />
-                    <span v-else class="w-full h-full flex items-center justify-center font-bold text-slate-500 text-[10px]">FB</span>
+        <div class="overflow-x-auto scrollbar-thin">
+          <table class="w-full text-xs text-left">
+            <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+              <tr>
+                <th class="py-3 px-4">Page</th>
+                <th class="py-3 px-4 text-right">Followers</th>
+                <th class="py-3 px-4 text-right">New followers</th>
+                <th class="py-3 px-4 text-right">Views</th>
+                <th class="py-3 px-4 text-right">Engagement</th>
+                <th class="py-3 px-4 text-right">Reels</th>
+                <th class="py-3 px-4 text-right">Reel plays</th>
+                <th class="py-3 px-4 text-right">Likes</th>
+                <th class="py-3 px-4 text-right">Comments</th>
+                <th class="py-3 px-4 text-right">Shares</th>
+                <th class="py-3 px-4 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="page in dashboard?.pages || []" :key="page.page_id" class="hover:bg-slate-50/70 transition">
+                <td class="py-3 px-4">
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <div class="w-8 h-8 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border border-slate-200">
+                      <img v-if="page.avatar_url" :src="page.avatar_url" class="w-full h-full object-cover" />
+                      <span v-else class="w-full h-full flex items-center justify-center font-bold text-slate-500 text-[10px]">FB</span>
+                    </div>
+                    <p class="font-bold text-slate-800 truncate text-xs max-w-[180px]">{{ page.page_name }}</p>
                   </div>
-                  <div class="min-w-0">
-                    <p class="font-bold text-slate-800 truncate text-xs">{{ page.page_name }}</p>
-                    <p class="text-[10px] text-slate-400 font-mono truncate">{{ page.page_id }}</p>
-                  </div>
-                </div>
-              </td>
-
-              <!-- Followers -->
-              <td class="py-3 px-4 text-right font-bold text-slate-900">
-                {{ formatNumber(page.followers_count) }}
-              </td>
-
-              <!-- Total Reels -->
-              <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.posts_30d) }}
-              </td>
-
-              <!-- Total Views -->
-              <td class="py-3 px-4 text-right font-bold text-blue-600">
-                {{ formatNumber(page.total_views) }}
-              </td>
-
-              <!-- Total Reach -->
-              <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_reach) }}
-              </td>
-
-              <!-- Likes -->
-              <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_likes) }}
-              </td>
-
-              <!-- Comments -->
-              <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_comments) }}
-              </td>
-
-              <!-- Shares -->
-              <td class="py-3 px-4 text-right text-slate-700">
-                {{ formatNumber(page.total_shares) }}
-              </td>
-
-              <!-- Token Status -->
-              <td class="py-3 px-4 text-center">
-                <span
-                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
-                  :class="page.token_status === 'valid' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'"
-                >
-                  <span>{{ page.token_status === 'valid' ? '✓ Hoạt động' : '! Cần kết nối lại' }}</span>
-                </span>
-              </td>
-            </tr>
-
-            <tr v-if="!dashboard?.pages || dashboard.pages.length === 0">
-              <td colspan="9" class="text-center py-10 text-slate-400 text-xs">
-                Chưa có Fanpage nào. Hãy kết nối Fanpage rồi nhấn "Đồng bộ ngay".
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                </td>
+                <td class="py-3 px-4 text-right font-bold text-slate-900">{{ formatNumber(page.followers) }}</td>
+                <td class="py-3 px-4 text-right text-emerald-600 font-semibold">{{ formatNumber(page.new_follows) }}</td>
+                <td class="py-3 px-4 text-right font-bold text-blue-600">{{ formatNumber(page.views) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.engagement) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.reels_count) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.reel_plays) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.likes) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.comments) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(page.shares) }}</td>
+                <td class="py-3 px-4 text-center">
+                  <span
+                    class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold"
+                    :class="statusClass(page.status)"
+                    :title="page.status_message"
+                  >
+                    {{ statusLabel(page.status) }}
+                  </span>
+                </td>
+              </tr>
+              <tr v-if="!dashboard?.pages?.length">
+                <td colspan="11" class="text-center py-10 text-slate-400 text-xs">
+                  No Pages yet. Connect a Facebook Page to see its numbers.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+
+      <!-- Top Reels -->
+      <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+        <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 class="font-bold text-sm text-slate-800">Top Reels</h3>
+          <span class="text-xs text-slate-500 font-medium">All Reels on your Pages in this period</span>
+        </div>
+        <div class="overflow-x-auto scrollbar-thin">
+          <table class="w-full text-xs text-left">
+            <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+              <tr>
+                <th class="py-3 px-4">Reel</th>
+                <th class="py-3 px-4 text-right">Plays</th>
+                <th class="py-3 px-4 text-right">Reach</th>
+                <th class="py-3 px-4 text-right">Likes</th>
+                <th class="py-3 px-4 text-right">Comments</th>
+                <th class="py-3 px-4 text-right">Shares</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="reel in dashboard?.top_reels || []" :key="reel.video_id" class="hover:bg-slate-50/70 transition">
+                <td class="py-3 px-4 max-w-[320px]">
+                  <a :href="reel.permalink_url" target="_blank" rel="noopener noreferrer" class="font-semibold text-slate-800 hover:text-blue-600 line-clamp-2 break-words">
+                    {{ reel.description || "(no caption)" }}
+                  </a>
+                  <p class="text-[10px] text-slate-400 mt-0.5">{{ reel.page_name }} · {{ formatDate(reel.created_time) }}</p>
+                </td>
+                <td class="py-3 px-4 text-right font-bold text-blue-600">{{ formatNumber(reel.plays) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(reel.reach) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(reel.likes) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(reel.comments) }}</td>
+                <td class="py-3 px-4 text-right text-slate-700">{{ formatNumber(reel.shares) }}</td>
+              </tr>
+              <tr v-if="!dashboard?.top_reels?.length">
+                <td colspan="6" class="text-center py-10 text-slate-400 text-xs">No Reels were posted in this period.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
-import { useI18n } from "../../utils/i18n";
 import { useAnalytics } from "../../composables/useAnalytics";
 
-const { t } = useI18n();
-const { dashboard, isSyncing, loadAnalytics, syncInsights } = useAnalytics();
+const { dashboard, isLoading, isSyncing, rangeDays, loadAnalytics, syncInsights } = useAnalytics();
 
 onMounted(() => {
   loadAnalytics();
@@ -308,73 +213,95 @@ onMounted(() => {
 
 const formatNumber = (num: number | null | undefined): string => {
   if (num === null || num === undefined || !Number.isFinite(num)) return "—";
-  return new Intl.NumberFormat("vi-VN").format(num);
+  return new Intl.NumberFormat("en-US").format(num);
 };
 
-const formatLastSync = (isoStr: string): string => {
+const VN_TZ = "Asia/Ho_Chi_Minh";
+const formatTime = (iso: string) => {
   try {
-    const d = new Date(isoStr);
-    return new Intl.DateTimeFormat("vi-VN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      day: "2-digit",
-      month: "2-digit"
-    }).format(d);
+    return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: VN_TZ }).format(new Date(iso));
   } catch {
-    return isoStr;
+    return iso;
+  }
+};
+const formatDate = (iso: string) => {
+  try {
+    return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: VN_TZ }).format(new Date(iso));
+  } catch {
+    return iso;
   }
 };
 
-// SVG Chart Calculations
-const chartPoints = computed(() => {
-  const ts = dashboard.value?.time_series || [];
-  if (ts.length === 0) {
-    // Generate placeholder 7 days
-    const mock = [];
-    const now = new Date();
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(now.getDate() - i);
-      const ds = `${d.getDate()}/${d.getMonth() + 1}`;
-      mock.push({ date: ds, views: 0, reach: 0 });
+const cards = computed(() => {
+  const d = dashboard.value;
+  const days = d?.range_days || rangeDays.value;
+  return [
+    {
+      label: "Followers",
+      value: d?.total_followers ?? null,
+      hint: `Across ${d?.total_pages || 0} Page(s)`,
+      tone: "text-blue-600"
+    },
+    {
+      label: `New followers (${days}d)`,
+      value: d?.new_follows ?? null,
+      hint: d?.new_follows == null ? "Not provided by Facebook" : "People who started following",
+      tone: "text-emerald-600"
+    },
+    {
+      label: `Page views (${days}d)`,
+      value: d?.views ?? null,
+      hint: d?.views_7d != null ? `${formatNumber(d.views_7d)} in the last 7 days` : "Content views on your Pages",
+      tone: "text-indigo-600"
+    },
+    {
+      label: `Reels posted (${days}d)`,
+      value: d ? d.reels_count : null,
+      hint: d?.reel_plays != null ? `${formatNumber(d.reel_plays)} plays in total` : `${d?.reels_count_7d || 0} in the last 7 days`,
+      tone: "text-purple-600"
     }
-    return mock.map((pt, idx) => ({
-      date: pt.date,
-      x: 50 + idx * 115,
-      yViews: 170,
-      yReach: 170
-    }));
-  }
+  ];
+});
 
-  const maxVal = Math.max(...ts.map((p) => Math.max(p.views, p.reach, 100)));
-  const stepX = 700 / Math.max(ts.length - 1, 1);
+const statusLabel = (s: string) =>
+  s === "ok" ? "✓ OK" : s === "partial" ? "Partial data" : s === "reconnect" ? "Reconnect" : "Unavailable";
+const statusClass = (s: string) =>
+  s === "ok"
+    ? "bg-emerald-50 text-emerald-700"
+    : s === "partial"
+      ? "bg-amber-50 text-amber-700"
+      : "bg-rose-50 text-rose-700";
 
+// Chart
+const chartPoints = computed(() => {
+  const ts = (dashboard.value?.time_series || []).filter((p) => p.views !== null || p.engagement !== null);
+  if (ts.length === 0) return [];
+  const maxVal = Math.max(1, ...ts.map((p) => Math.max(p.views ?? 0, p.engagement ?? 0)));
+  const stepX = ts.length > 1 ? 760 / (ts.length - 1) : 0;
   return ts.map((pt, idx) => ({
-    date: `${pt.date.substring(8, 10)}/${pt.date.substring(5, 7)}`, // DD/MM
-    x: 50 + idx * stepX,
-    yViews: 170 - (pt.views / maxVal) * 140,
-    yReach: 170 - (pt.reach / maxVal) * 140
+    date: `${pt.date.substring(8, 10)}/${pt.date.substring(5, 7)}`,
+    x: 20 + idx * stepX,
+    yViews: 170 - ((pt.views ?? 0) / maxVal) * 140,
+    yEng: 170 - ((pt.engagement ?? 0) / maxVal) * 140
   }));
 });
 
-const chartViewsLinePath = computed(() => {
+const linePath = (key: "yViews" | "yEng") =>
+  chartPoints.value.reduce((acc, pt, i) => `${acc} ${i === 0 ? "M" : "L"} ${pt.x} ${pt[key]}`, "");
+
+const viewsLine = computed(() => linePath("yViews"));
+const engagementLine = computed(() => linePath("yEng"));
+const viewsArea = computed(() => {
   const pts = chartPoints.value;
   if (pts.length === 0) return "";
-  return pts.reduce((acc, pt, i) => `${acc} ${i === 0 ? "M" : "L"} ${pt.x} ${pt.yViews}`, "");
+  return `${viewsLine.value} L ${pts[pts.length - 1].x} 180 L ${pts[0].x} 180 Z`;
 });
 
-const chartViewsAreaPath = computed(() => {
+/** At most 7 evenly spaced date labels */
+const xLabels = computed(() => {
   const pts = chartPoints.value;
-  if (pts.length === 0) return "";
-  const line = chartViewsLinePath.value;
-  const last = pts[pts.length - 1];
-  const first = pts[0];
-  return `${line} L ${last.x} 180 L ${first.x} 180 Z`;
-});
-
-const chartReachLinePath = computed(() => {
-  const pts = chartPoints.value;
-  if (pts.length === 0) return "";
-  return pts.reduce((acc, pt, i) => `${acc} ${i === 0 ? "M" : "L"} ${pt.x} ${pt.yReach}`, "");
+  if (pts.length <= 7) return pts.map((p) => p.date);
+  const step = (pts.length - 1) / 6;
+  return Array.from({ length: 7 }, (_, i) => pts[Math.round(i * step)].date);
 });
 </script>

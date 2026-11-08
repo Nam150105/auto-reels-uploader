@@ -121,19 +121,19 @@ export function assertTaskMutable(
     video_id?: string | null;
     post_id?: string | null;
   },
-  actionLabel = "chỉnh sửa"
+  actionLabel = "edited"
 ): void {
   if (isTaskPublishedAndLocked(task)) {
     throw new TaskLockError(
       "TASK_ALREADY_PUBLISHED",
-      `TASK_ALREADY_PUBLISHED: Task đã đăng Reels thành công và không thể ${actionLabel}. Task này đã đăng Reels thành công. Dữ liệu đăng đã được khóa để bảo toàn lịch sử. Bạn vẫn có thể xem thông tin và thống kê bài đăng.`,
+      `TASK_ALREADY_PUBLISHED: This Reel is already published and cannot be ${actionLabel}. Its data is locked to preserve history. You can still view its details and stats.`,
       403
     );
   }
   if (isTaskCurrentlyRunning(task)) {
     throw new TaskLockError(
       "TASK_IN_PROGRESS",
-      `TASK_IN_PROGRESS: Task đang trong quá trình xử lý đăng Reels, không thể ${actionLabel} lúc này.`,
+      `TASK_IN_PROGRESS: This post is being published and cannot be ${actionLabel} right now.`,
       409
     );
   }
@@ -955,21 +955,21 @@ export async function createUser(
 ): Promise<{ success: boolean; message?: string; user?: UserRecord }> {
   const cleanUser = (username || "").trim().toLowerCase();
   if (!cleanUser || cleanUser.length < 3) {
-    return { success: false, message: "Tên đăng nhập phải có ít nhất 3 ký tự." };
+    return { success: false, message: "Username must be at least 3 characters." };
   }
   if (!/^[a-z0-9_.\-@]+$/.test(cleanUser)) {
     return {
       success: false,
-      message: "Tên đăng nhập chỉ được chứa chữ cái, chữ số và các ký tự _, ., -, @."
+      message: "Username can only contain letters, numbers, and the characters _ . - @"
     };
   }
   if (!password || password.length < 6) {
-    return { success: false, message: "Mật khẩu phải có ít nhất 6 ký tự." };
+    return { success: false, message: "Password must be at least 6 characters." };
   }
 
   const existing = await getUserByUsername(db, cleanUser);
   if (existing) {
-    return { success: false, message: "Tên đăng nhập này đã được sử dụng." };
+    return { success: false, message: "This username is already taken." };
   }
 
   const userId = `usr_${randomHex(6)}`;
@@ -1057,7 +1057,7 @@ export async function consumeOAuthState(
   if (!state) {
     return {
       valid: false,
-      message: "Thiếu tham số CSRF state trong phản hồi từ Facebook."
+      message: "The Facebook response is missing the security state. Please try again."
     };
   }
 
@@ -1079,7 +1079,7 @@ export async function consumeOAuthState(
   if (!row) {
     return {
       valid: false,
-      message: "Mã xác thực bảo mật (CSRF State) không tồn tại hoặc đã bị thu hồi."
+      message: "The security state is invalid or was revoked. Please try connecting again."
     };
   }
 
@@ -1087,7 +1087,7 @@ export async function consumeOAuthState(
   if (row.used === 1) {
     return {
       valid: false,
-      message: "Phiên xác thực OAuth này đã được sử dụng trước đó. Vui lòng thử lại."
+      message: "This sign-in link was already used. Please try again."
     };
   }
 
@@ -1100,14 +1100,14 @@ export async function consumeOAuthState(
   if ((updateRes.meta?.changes || 0) === 0) {
     return {
       valid: false,
-      message: "Phiên xác thực OAuth đã được xử lý ở một yêu cầu khác."
+      message: "This sign-in request is already being processed."
     };
   }
 
   if (now > row.expires_at) {
     return {
       valid: false,
-      message: "Phiên kết nối OAuth đã hết hạn (quá 10 phút). Vui lòng thực hiện lại."
+      message: "The connection session expired (over 10 minutes). Please try again."
     };
   }
 
@@ -2697,7 +2697,7 @@ export async function addTask(
           : "SCHEDULE_INVALID";
     throw new ScheduleValidationError({
       code,
-      message: parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.",
+      message: parsedSchedule.error || "The scheduled time is invalid or in the past.",
       httpStatus: 400,
       fieldErrors: parsedSchedule.fieldErrors,
       isPast: parsedSchedule.isPast,
@@ -2723,7 +2723,7 @@ export async function addTask(
          trigger_source, timezone, status, publish_status, is_locked, idempotency_key, attempt_count, max_attempts,
          log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, ?, 0, 3, 'Pending', '', '', '', '', ?, '', ?, ?)`;
 
   const insertParamsWithAudit = [
     params.ownerUserId,
@@ -2763,7 +2763,7 @@ export async function addTask(
              scheduled_at, timezone, status, idempotency_key, attempt_count, max_attempts,
              log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
              created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', ?, ?, 0, 3, 'Pending', '', '', '', '', ?, '', ?, ?)`;
       res = await db
         .prepare(fallbackSql)
         .bind(
@@ -2797,8 +2797,8 @@ export async function addTask(
       "INFO",
       "created",
       scheduledAt
-        ? `Tạo tác vụ hẹn lịch đăng lúc ${finalScheduleDate} ${finalScheduleTime} (24h Asia/Ho_Chi_Minh -> UTC ${scheduledAt}).`
-        : "Tạo tác vụ đăng Reels mới."
+        ? `Post scheduled for ${finalScheduleDate} ${finalScheduleTime} (Vietnam time, UTC ${scheduledAt}).`
+        : "New Reel post created."
     );
     await recordTaskAuditLog(db, {
       taskId,
@@ -2813,8 +2813,8 @@ export async function addTask(
       oldStatus: "",
       newStatus: status,
       reason: effectiveTriggerSource === "excel_bulk"
-        ? "Khởi tạo tác vụ hàng loạt từ bảng tính Excel"
-        : "Khởi tạo task mới với lịch đăng bắt buộc",
+        ? "Bulk posts created from spreadsheet"
+        : "New post created with a schedule",
       metadata: { facebook_page_id: pageId, trigger_source: effectiveTriggerSource }
     });
   }
@@ -3123,7 +3123,7 @@ export async function updateTask(
   if (!existing) return false;
 
   // Khóa toàn bộ thao tác chỉnh sửa khi Task đã đăng Reels thành công hoặc đang chạy (Mục 1.2 & 1.5)
-  assertTaskMutable(existing, "chỉnh sửa");
+  assertTaskMutable(existing, "edited");
 
   const newPageId =
     params.facebookPageId !== undefined ? params.facebookPageId : existing.facebook_page_id;
@@ -3150,7 +3150,7 @@ export async function updateTask(
           : "SCHEDULE_INVALID";
     throw new ScheduleValidationError({
       code,
-      message: parsedSchedule.error || "Thời gian đặt lịch không hợp lệ hoặc đã qua.",
+      message: parsedSchedule.error || "The scheduled time is invalid or in the past.",
       httpStatus: 400,
       fieldErrors: parsedSchedule.fieldErrors,
       isPast: parsedSchedule.isPast,
@@ -3263,7 +3263,7 @@ export async function updateTask(
   if ((res.meta?.changes || 0) === 0) {
     const recheck = await getTask(db, taskId, params.ownerUserId);
     if (recheck) {
-      assertTaskMutable(recheck, "chỉnh sửa");
+      assertTaskMutable(recheck, "edited");
     }
   }
 
@@ -3283,7 +3283,7 @@ export async function updateTask(
     newScheduleText: `${finalScheduleDate} ${finalScheduleTime}`.trim(),
     oldStatus: existing.raw_status || existing.status,
     newStatus: existing.raw_status === "cancelled" ? "pending" : existing.raw_status || existing.status,
-    reason: scheduleChanged ? "Cập nhật lịch đăng & thông tin task" : "Cập nhật nội dung task"
+    reason: scheduleChanged ? "Updated schedule and post details" : "Updated post content"
   });
 
   return true;
@@ -3587,7 +3587,7 @@ export async function resetTask(
   if (!existing) return false;
 
   // Khóa không cho chuyển task đã đăng thành công hoặc đang chạy về trạng thái chờ đăng (Mục 1.2 & 1.5)
-  assertTaskMutable(existing, "đặt lại trạng thái chờ đăng");
+  assertTaskMutable(existing, "reset");
 
   const now = new Date().toISOString();
   const res = await db
@@ -3603,7 +3603,7 @@ export async function resetTask(
            error_code = NULL,
            error_subcode = NULL,
            retryable = 1,
-           log = 'Đã đặt lại - Chờ xử lý',
+           log = 'Reset - Pending',
            video_id = '',
            post_id = '',
            video_url = '',
@@ -3623,7 +3623,7 @@ export async function resetTask(
   if ((res.meta?.changes || 0) === 0) {
     const recheck = await getTask(db, taskId, ownerUserId);
     if (recheck) {
-      assertTaskMutable(recheck, "đặt lại trạng thái chờ đăng");
+      assertTaskMutable(recheck, "reset");
     }
   }
 
@@ -3638,7 +3638,7 @@ export async function resetTask(
     newScheduleText: `${existing.schedule_date || ""} ${existing.schedule_time || ""}`.trim(),
     oldStatus: existing.raw_status || existing.status,
     newStatus: "pending",
-    reason: "Người dùng đặt lại trạng thái chờ đăng / thử lại"
+    reason: "User reset the post to pending / retry"
   });
 
   return true;
@@ -3702,7 +3702,7 @@ export async function prepareTasksForPublishNow(
       ineligibleTasks.push({
         id,
         code: "TASK_NOT_FOUND",
-        reason: "Task không tồn tại hoặc không thuộc quyền sở hữu của bạn."
+        reason: "Post not found."
       });
       continue;
     }
@@ -3711,7 +3711,7 @@ export async function prepareTasksForPublishNow(
       ineligibleTasks.push({
         id,
         code: "TASK_ALREADY_PUBLISHED",
-        reason: "Task đã đăng Reels thành công và đã khóa lịch sử."
+        reason: "This Reel is already published and locked."
       });
       continue;
     }
@@ -3720,7 +3720,7 @@ export async function prepareTasksForPublishNow(
       ineligibleTasks.push({
         id,
         code: "TASK_IN_PROGRESS",
-        reason: "Task đang trong quá trình xử lý đăng hoặc đã nằm trong hàng đợi."
+        reason: "This post is already publishing or queued."
       });
       continue;
     }
@@ -3729,7 +3729,7 @@ export async function prepareTasksForPublishNow(
       ineligibleTasks.push({
         id,
         code: "MISSING_PAGE",
-        reason: "Task chưa được gắn Fanpage đích."
+        reason: "No target Page is assigned to this post."
       });
       continue;
     }
@@ -3738,7 +3738,7 @@ export async function prepareTasksForPublishNow(
       ineligibleTasks.push({
         id,
         code: "MISSING_VIDEO",
-        reason: "Task thiếu nguồn video R2 hợp lệ."
+        reason: "This post has no valid video."
       });
       continue;
     }
@@ -3785,7 +3785,7 @@ export async function prepareTasksForPublishNow(
         isoNow,
         actorUserId,
         triggerSource,
-        `Đăng ngay lúc ${vnNow.schedule_date} ${vnNow.schedule_time} (lịch gốc: ${oldScheduleText || "chưa đặt"})`,
+        `Publish now at ${vnNow.schedule_date} ${vnNow.schedule_time} (original schedule: ${oldScheduleText || "none"})`,
         isoNow,
         id,
         params.ownerUserId
@@ -3796,7 +3796,7 @@ export async function prepareTasksForPublishNow(
       ineligibleTasks.push({
         id,
         code: "TASK_STATE_CHANGED",
-        reason: "Trạng thái task vừa thay đổi ở tiến trình khác (đang chạy hoặc đã khóa)."
+        reason: "The post status just changed (running or locked)."
       });
       continue;
     }
@@ -3807,7 +3807,7 @@ export async function prepareTasksForPublishNow(
       params.ownerUserId,
       "INFO",
       "manual_publish_now",
-      `Kích hoạt Đăng ngay (${triggerSource}). Cập nhật lịch đăng từ [${oldScheduleText || "trống"}] -> [${vnNow.schedule_date} ${vnNow.schedule_time} / UTC=${nowSec}].`
+      `Publish now triggered (${triggerSource}). Schedule changed from [${oldScheduleText || "empty"}] to [${vnNow.schedule_date} ${vnNow.schedule_time} / UTC=${nowSec}].`
     );
 
     await recordTaskAuditLog(db, {
@@ -3823,8 +3823,8 @@ export async function prepareTasksForPublishNow(
       newStatus: "queued",
       reason:
         triggerSource === "bulk_publish_now"
-          ? "Người dùng chọn nhiều task và bấm Đăng ngay"
-          : "Người dùng bấm Đăng ngay trên task",
+          ? "User selected multiple posts and clicked Publish now"
+          : "User clicked Publish now on the post",
       metadata: {
         trigger_source: triggerSource,
         facebook_page_id: task.facebook_page_id
@@ -3897,7 +3897,7 @@ export async function rescheduleTasksBulk(
           : "SCHEDULE_INVALID";
     throw new ScheduleValidationError({
       code,
-      message: parsedBase.error || "Thời gian đặt lịch mới không hợp lệ hoặc đã qua.",
+      message: parsedBase.error || "The new scheduled time is invalid or in the past.",
       httpStatus: 400,
       fieldErrors: parsedBase.fieldErrors,
       isPast: parsedBase.isPast,
@@ -3945,7 +3945,7 @@ export async function rescheduleTasksBulk(
       skippedTasks.push({
         id,
         code: "TASK_NOT_FOUND",
-        reason: "Task không tồn tại."
+        reason: "Post not found."
       });
       continue;
     }
@@ -3954,7 +3954,7 @@ export async function rescheduleTasksBulk(
       skippedTasks.push({
         id,
         code: "TASK_ALREADY_PUBLISHED",
-        reason: "Task đã đăng Reels thành công (đã khóa)."
+        reason: "This Reel is already published (locked)."
       });
       continue;
     }
@@ -3963,7 +3963,7 @@ export async function rescheduleTasksBulk(
       skippedTasks.push({
         id,
         code: "TASK_IN_PROGRESS",
-        reason: "Task đang xử lý đăng, không thể đổi lịch."
+        reason: "This post is publishing and cannot be rescheduled."
       });
       continue;
     }
@@ -4005,7 +4005,7 @@ export async function rescheduleTasksBulk(
         targetVn.schedule_date,
         targetVn.schedule_time,
         targetUtc,
-        `Đã đổi lịch đăng sang ${targetVn.schedule_date} ${targetVn.schedule_time}`,
+        `Rescheduled to ${targetVn.schedule_date} ${targetVn.schedule_time}`,
         isoNow,
         id,
         params.ownerUserId
@@ -4016,7 +4016,7 @@ export async function rescheduleTasksBulk(
       skippedTasks.push({
         id,
         code: "TASK_STATE_CHANGED",
-        reason: "Không thể cập nhật do trạng thái task vừa thay đổi."
+        reason: "Could not update because the post status just changed."
       });
       continue;
     }
@@ -4034,8 +4034,8 @@ export async function rescheduleTasksBulk(
       newStatus: "pending",
       reason:
         intervalSec > 0
-          ? `Đổi lịch hàng loạt (giãn cách ${params.intervalMinutes} phút/task)`
-          : "Đổi lịch hàng loạt cùng giờ",
+          ? `Bulk reschedule (${params.intervalMinutes} min apart)`
+          : "Bulk reschedule at the same time",
       metadata: { interval_minutes: params.intervalMinutes || 0 }
     });
 
@@ -4093,14 +4093,14 @@ export async function cancelTasksBulk(
   for (const id of validIds) {
     const task = taskMap.get(id);
     if (!task) {
-      skippedTasks.push({ id, code: "TASK_NOT_FOUND", reason: "Task không tồn tại." });
+      skippedTasks.push({ id, code: "TASK_NOT_FOUND", reason: "Post not found." });
       continue;
     }
     if (isTaskPublishedAndLocked(task)) {
       skippedTasks.push({
         id,
         code: "TASK_ALREADY_PUBLISHED",
-        reason: "Task đã đăng Reels thành công (đã khóa)."
+        reason: "This Reel is already published (locked)."
       });
       continue;
     }
@@ -4108,7 +4108,7 @@ export async function cancelTasksBulk(
       skippedTasks.push({
         id,
         code: "TASK_IN_PROGRESS",
-        reason: "Task đang xử lý đăng, không thể hủy lịch."
+        reason: "This post is publishing and cannot be cancelled."
       });
       continue;
     }
@@ -4121,7 +4121,7 @@ export async function cancelTasksBulk(
              locked_until = NULL,
              lease_owner = NULL,
              next_retry_at = NULL,
-             log = 'Đã hủy lịch đăng theo yêu cầu người dùng',
+             log = 'Schedule cancelled by user',
              updated_at = ?
          WHERE id = ?
            AND owner_user_id = ?
@@ -4144,13 +4144,13 @@ export async function cancelTasksBulk(
         newScheduleText: `${task.schedule_date || ""} ${task.schedule_time || ""}`.trim(),
         oldStatus: task.raw_status || task.status,
         newStatus: "cancelled",
-        reason: "Người dùng hủy lịch đăng"
+        reason: "User cancelled the schedule"
       });
     } else {
       skippedTasks.push({
         id,
         code: "TASK_STATE_CHANGED",
-        reason: "Không thể hủy lịch do trạng thái task vừa thay đổi."
+        reason: "Could not cancel because the post status just changed."
       });
     }
   }
@@ -4175,12 +4175,12 @@ export async function deleteTask(
     if (isTaskCurrentlyRunning(existing)) {
       throw new TaskLockError(
         "TASK_CURRENTLY_RUNNING",
-        "TASK_CURRENTLY_RUNNING: Bài viết đang trong quá trình xuất bản, không thể xóa lúc này.",
+        "TASK_CURRENTLY_RUNNING: This post is being published and cannot be deleted right now.",
         409
       );
     }
   } else {
-    assertTaskMutable(existing, "xóa");
+    assertTaskMutable(existing, "deleted");
   }
 
   const deleteSql = options?.allowPublished
@@ -4192,7 +4192,7 @@ export async function deleteTask(
   if ((res.meta?.changes || 0) === 0) {
     const recheck = await getTask(db, taskId, ownerUserId);
     if (recheck) {
-      assertTaskMutable(recheck, "xóa");
+      assertTaskMutable(recheck, "deleted");
     }
   }
 
@@ -4207,7 +4207,7 @@ export async function deleteTask(
     newScheduleText: "",
     oldStatus: existing.raw_status || existing.status,
     newStatus: "deleted",
-    reason: "Người dùng xóa task"
+    reason: "User deleted the post"
   });
 
   let orphanMediaId: string | null = null;
@@ -4299,7 +4299,7 @@ export async function deleteTasksBulk(
   if (deletableTasks.length === 0 && lockedTaskIds.length > 0) {
     throw new TaskLockError(
       "TASK_ALREADY_PUBLISHED",
-      "TASK_ALREADY_PUBLISHED: Task đã đăng Reels thành công và không thể xóa. Các task đã xuất bản hoặc đang xử lý đã được khóa để bảo toàn lịch sử.",
+      "TASK_ALREADY_PUBLISHED: This Reel is already published and cannot be deleted. Published or in-progress posts are locked to preserve history.",
       403
     );
   }
@@ -4355,7 +4355,7 @@ export async function resetRunningTasks(
            locked_until = NULL,
            lease_owner = NULL,
            next_retry_at = NULL,
-           log = 'Đã dừng theo yêu cầu người dùng -> Chờ chạy lại',
+           log = 'Stopped by user - waiting to run again',
            updated_at = ?
        WHERE status IN ('running', 'queued', 'processing') AND owner_user_id = ?`
     )
@@ -4635,7 +4635,7 @@ export async function claimDueScheduledComments(
   for (const row of rows) {
     const upd = await db
       .prepare(
-        `UPDATE tasks SET comment_status = 'processing', comment_log = 'Đang đăng bình luận tự động...', updated_at = ?
+        `UPDATE tasks SET comment_status = 'processing', comment_log = 'Posting auto comment...', updated_at = ?
          WHERE id = ? AND comment_status = 'scheduled'`
       )
       .bind(nowIso, row.id)
@@ -4678,7 +4678,7 @@ export async function insertComposerTasksBatch(
        trigger_source, timezone, status, publish_status, is_locked, idempotency_key, attempt_count, max_attempts,
        log, video_id, post_id, video_url, comment_id, comment_status, comment_log,
        created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', 'pending', 'pending', 0, ?, 0, 3, 'Chờ xử lý', '', '', '', '', ?, '', ?, ?)`;
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Asia/Ho_Chi_Minh', 'pending', 'pending', 0, ?, 0, 3, 'Pending', '', '', '', '', ?, '', ?, ?)`;
 
   const inserts = rows.map((r) => {
     const cleanComment = r.commentText.trim();
@@ -4730,4 +4730,286 @@ export async function insertComposerTasksBatch(
     }
   }
   return taskIds.filter((id) => id > 0);
+}
+
+// ============================================================================
+// MULTI-COMMENT: Each published post can carry several auto-comments
+// (text and/or one image), each with its own delay after publishing.
+// ============================================================================
+
+export const MAX_COMMENTS_PER_POST = 10;
+export const MAX_COMMENT_TEXT_LENGTH = 8000;
+
+export interface TaskCommentRow {
+  id: number;
+  task_id: number;
+  owner_user_id: string;
+  position: number;
+  message: string;
+  image_media_id: string | null;
+  delay_minutes: number;
+  status: "pending" | "scheduled" | "processing" | "success" | "failed";
+  due_at: number | null;
+  comment_id: string | null;
+  error_message: string | null;
+  attempts: number;
+  posted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+let taskCommentsTableReady = false;
+
+export async function ensureTaskCommentsTable(db: D1Database): Promise<void> {
+  if (taskCommentsTableReady) return;
+  try {
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS task_comments (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           task_id INTEGER NOT NULL,
+           owner_user_id TEXT NOT NULL,
+           position INTEGER NOT NULL DEFAULT 0,
+           message TEXT NOT NULL DEFAULT '',
+           image_media_id TEXT,
+           delay_minutes INTEGER NOT NULL DEFAULT 0,
+           status TEXT NOT NULL DEFAULT 'pending',
+           due_at INTEGER,
+           comment_id TEXT,
+           error_message TEXT,
+           attempts INTEGER NOT NULL DEFAULT 0,
+           posted_at TEXT,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL
+         )`
+      )
+      .run();
+    await db
+      .prepare("CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments (task_id, position)")
+      .run();
+    await db
+      .prepare("CREATE INDEX IF NOT EXISTS idx_task_comments_due ON task_comments (status, due_at)")
+      .run();
+    taskCommentsTableReady = true;
+  } catch {
+    // Table creation is retried on the next call
+  }
+}
+
+/** Insert all comments for many tasks with a single statement (stays within Workers Free query limits). */
+export async function insertTaskCommentsBulk(
+  db: D1Database,
+  ownerUserId: string,
+  rows: Array<{
+    taskId: number;
+    position: number;
+    message: string;
+    imageMediaId: string | null;
+    delayMinutes: number;
+  }>
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  await ensureTaskCommentsTable(db);
+  const now = new Date().toISOString();
+  const payload = JSON.stringify(
+    rows.map((r) => ({
+      t: r.taskId,
+      p: r.position,
+      m: r.message,
+      i: r.imageMediaId || null,
+      d: normalizeCommentDelayMinutes(r.delayMinutes)
+    }))
+  );
+  const res = await db
+    .prepare(
+      `INSERT INTO task_comments (task_id, owner_user_id, position, message, image_media_id, delay_minutes, status, created_at, updated_at)
+       SELECT json_extract(value, '$.t'), ?, json_extract(value, '$.p'), json_extract(value, '$.m'),
+              json_extract(value, '$.i'), json_extract(value, '$.d'), 'pending', ?, ?
+       FROM json_each(?)`
+    )
+    .bind(ownerUserId, now, now, payload)
+    .run();
+  return Number(res.meta?.changes || rows.length);
+}
+
+/** After a post is published: each pending comment becomes due at publish time + its own delay. */
+export async function scheduleTaskCommentsAfterPublish(
+  db: D1Database,
+  taskId: number,
+  publishedAtUtc: number
+): Promise<number> {
+  await ensureTaskCommentsTable(db);
+  const res = await db
+    .prepare(
+      `UPDATE task_comments
+       SET status = 'scheduled', due_at = ? + delay_minutes * 60, updated_at = ?
+       WHERE task_id = ? AND status = 'pending'`
+    )
+    .bind(publishedAtUtc, new Date().toISOString(), taskId)
+    .run();
+  return Number(res.meta?.changes || 0);
+}
+
+/** Atomically claim due comments (scheduled -> processing). Optionally restricted to one task. */
+export async function claimDueTaskCommentRows(
+  db: D1Database,
+  nowUtc: number,
+  limit: number,
+  taskId?: number
+): Promise<TaskCommentRow[]> {
+  await ensureTaskCommentsTable(db);
+  let candidates: TaskCommentRow[] = [];
+  try {
+    const res = taskId
+      ? await db
+          .prepare(
+            `SELECT * FROM task_comments
+             WHERE task_id = ? AND status = 'scheduled' AND due_at IS NOT NULL AND due_at <= ?
+             ORDER BY due_at ASC, position ASC LIMIT ?`
+          )
+          .bind(taskId, nowUtc, limit)
+          .all<TaskCommentRow>()
+      : await db
+          .prepare(
+            `SELECT * FROM task_comments
+             WHERE status = 'scheduled' AND due_at IS NOT NULL AND due_at <= ?
+             ORDER BY due_at ASC, task_id ASC, position ASC LIMIT ?`
+          )
+          .bind(nowUtc, limit)
+          .all<TaskCommentRow>();
+    candidates = res.results || [];
+  } catch {
+    return [];
+  }
+
+  const claimed: TaskCommentRow[] = [];
+  const nowIso = new Date().toISOString();
+  for (const row of candidates) {
+    const upd = await db
+      .prepare(
+        `UPDATE task_comments SET status = 'processing', attempts = attempts + 1, updated_at = ?
+         WHERE id = ? AND status = 'scheduled'`
+      )
+      .bind(nowIso, row.id)
+      .run();
+    if (Number(upd.meta?.changes || 0) > 0) claimed.push({ ...row, status: "processing" });
+  }
+  return claimed;
+}
+
+export async function finishTaskCommentRow(
+  db: D1Database,
+  id: number,
+  result: { success: boolean; commentId?: string | null; error?: string }
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  await db
+    .prepare(
+      `UPDATE task_comments
+       SET status = ?, comment_id = ?, error_message = ?, posted_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(
+      result.success ? "success" : "failed",
+      result.commentId || null,
+      result.success ? null : sanitizeSensitiveText(result.error || "Could not post the comment."),
+      result.success ? nowIso : null,
+      nowIso,
+      id
+    )
+    .run();
+}
+
+/** Put failed comments of a task back in the queue so they are retried right away. */
+export async function requeueFailedTaskComments(
+  db: D1Database,
+  taskId: number,
+  ownerUserId: string,
+  nowUtc: number
+): Promise<number> {
+  await ensureTaskCommentsTable(db);
+  const res = await db
+    .prepare(
+      `UPDATE task_comments SET status = 'scheduled', due_at = ?, error_message = NULL, updated_at = ?
+       WHERE task_id = ? AND owner_user_id = ? AND status = 'failed'`
+    )
+    .bind(nowUtc, new Date().toISOString(), taskId, ownerUserId)
+    .run();
+  return Number(res.meta?.changes || 0);
+}
+
+export async function countTaskComments(db: D1Database, taskId: number): Promise<number> {
+  await ensureTaskCommentsTable(db);
+  const row = await db
+    .prepare("SELECT COUNT(*) AS c FROM task_comments WHERE task_id = ?")
+    .bind(taskId)
+    .first<{ c: number }>();
+  return Number(row?.c || 0);
+}
+
+/** Roll the per-comment states up into tasks.comment_status / comment_log for the schedule list. */
+export async function refreshTaskCommentSummary(db: D1Database, taskId: number): Promise<void> {
+  await ensureTaskCommentsTable(db);
+  const stats = await db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS ok,
+              SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+              SUM(CASE WHEN status IN ('pending', 'scheduled') THEN 1 ELSE 0 END) AS waiting,
+              SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS running,
+              MIN(CASE WHEN status = 'scheduled' THEN due_at END) AS next_due
+       FROM task_comments WHERE task_id = ?`
+    )
+    .bind(taskId)
+    .first<{ total: number; ok: number; failed: number; waiting: number; running: number; next_due: number | null }>();
+  const total = Number(stats?.total || 0);
+  if (total === 0) return;
+  const ok = Number(stats?.ok || 0);
+  const failed = Number(stats?.failed || 0);
+  const waiting = Number(stats?.waiting || 0);
+  const running = Number(stats?.running || 0);
+
+  let status = "success";
+  if (running > 0) status = "processing";
+  else if (waiting > 0) status = "scheduled";
+  else if (failed > 0) status = "failed";
+
+  const parts = [`${ok}/${total} comments posted`];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (waiting > 0) parts.push(`${waiting} waiting`);
+  await db
+    .prepare(
+      `UPDATE tasks SET comment_status = ?, comment_log = ?, comment_due_at = ?, updated_at = ? WHERE id = ?`
+    )
+    .bind(status, parts.join(", "), stats?.next_due ?? null, new Date().toISOString(), taskId)
+    .run();
+}
+
+/** Comments for many tasks in one query (used by the schedule list). */
+export async function getTaskCommentsForTasks(
+  db: D1Database,
+  ownerUserId: string,
+  taskIds: number[]
+): Promise<Map<number, TaskCommentRow[]>> {
+  const map = new Map<number, TaskCommentRow[]>();
+  if (taskIds.length === 0) return map;
+  await ensureTaskCommentsTable(db);
+  try {
+    const res = await db
+      .prepare(
+        `SELECT * FROM task_comments
+         WHERE owner_user_id = ? AND task_id IN (SELECT value FROM json_each(?))
+         ORDER BY task_id ASC, position ASC`
+      )
+      .bind(ownerUserId, JSON.stringify(taskIds))
+      .all<TaskCommentRow>();
+    for (const row of res.results || []) {
+      const list = map.get(Number(row.task_id)) || [];
+      list.push(row);
+      map.set(Number(row.task_id), list);
+    }
+  } catch {
+    // Older databases without the table: no comments
+  }
+  return map;
 }

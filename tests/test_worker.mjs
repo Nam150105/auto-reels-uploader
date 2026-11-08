@@ -26,6 +26,7 @@ import { sanitizeSensitiveText } from "../src/utils/sanitize.ts";
 import { consumeSingleTaskMessage } from "../src/queue/publishQueue.ts";
 import { addTask } from "../src/db.ts";
 import { dispatchDueScheduledComments } from "../src/scheduler/cronDispatcher.ts";
+import { processTaskComments } from "../src/queue/publishQueue.ts";
 
 // ============================================================================
 // MOCK CLOUDFLARE D1 & R2 BUCKET CHO MÔI TRƯỜNG TEST
@@ -937,15 +938,22 @@ async function runAll30Tests() {
         throw new Error("Gateway timeout 504 on comment publish");
       }
       let cMsg = "";
-      try {
-        const parsed = JSON.parse(init?.body || "{}");
-        cMsg = parsed.message || "";
-      } catch {
-        const p = new URLSearchParams(init?.body || "");
-        cMsg = p.get("message") || "";
+      let cHasImage = false;
+      if (init?.body instanceof FormData) {
+        cMsg = String(init.body.get("message") || "");
+        const src = init.body.get("source");
+        cHasImage = Boolean(src && typeof src === "object" && src.size > 0);
+      } else {
+        try {
+          const parsed = JSON.parse(init?.body || "{}");
+          cMsg = parsed.message || "";
+        } catch {
+          const p = new URLSearchParams(init?.body || "");
+          cMsg = p.get("message") || "";
+        }
       }
       const cId = `cmt_${Math.random().toString(36).substring(2, 9)}`;
-      commentsCreatedOnFacebook.push({ id: cId, message: cMsg });
+      commentsCreatedOnFacebook.push({ id: cId, message: cMsg, has_image: cHasImage });
       return new Response(JSON.stringify({ id: cId }), { status: 200 });
     }
 
@@ -1194,7 +1202,7 @@ async function runAll30Tests() {
   });
   assert.equal(cbDenied.status, 200);
   const cbDeniedHtml = await cbDenied.text();
-  assert.ok(cbDeniedHtml.includes("Bạn chưa cấp quyền kết nối Facebook"));
+  assert.ok(cbDeniedHtml.includes("You did not grant permission to connect Facebook"));
 
   // Kiểm tra trường hợp Facebook thiếu quyền bắt buộc
   const oauthMissingPerm = await (
@@ -1206,7 +1214,7 @@ async function runAll30Tests() {
   );
   assert.equal(cbMissingPerm.status, 400);
   const cbMissingPermHtml = await cbMissingPerm.text();
-  assert.ok(cbMissingPermHtml.includes("Facebook chưa cấp đủ quyền cần thiết"));
+  assert.ok(cbMissingPermHtml.includes("Facebook did not grant all required permissions"));
 
   // Kiểm tra trường hợp tài khoản không quản lý Fanpage nào
   const oauthNoPages = await (
@@ -1218,7 +1226,7 @@ async function runAll30Tests() {
   );
   assert.equal(cbNoPages.status, 200);
   const cbNoPagesHtml = await cbNoPages.text();
-  assert.ok(cbNoPagesHtml.includes("Tài khoản này chưa quản lý Fanpage nào"));
+  assert.ok(cbNoPagesHtml.includes("This account does not manage any Pages"));
 
   // Kiểm tra danh sách Admin của User A (không lộ access_token / masked_token, kèm danh sách pages của từng Admin)
   const accsAResp = await callWorker("/api/meta/accounts", {
@@ -1424,7 +1432,7 @@ async function runAll30Tests() {
     schedule_time: slotTooSoon.schedule_time
   });
   assert.equal(tooSoonResp.status, 400, "Hẹn giờ < hiện tại + 5 phút phải bị chặn");
-  assert.match((await tooSoonResp.json()).detail, /ít nhất 5 phút/);
+  assert.match((await tooSoonResp.json()).detail, /at least 5 minutes/);
 
   const noVideoResp = await postJson("/api/tasks", {
     facebook_page_ids: ["page_101"],
@@ -1434,7 +1442,7 @@ async function runAll30Tests() {
   });
   assert.equal(noVideoResp.status, 400);
   const noVideoJson = await noVideoResp.json();
-  assert.match(noVideoJson.detail, /chọn video/);
+  assert.match(noVideoJson.detail, /choose a video/);
   assert.ok(!leaksInternals(noVideoJson.detail), "Thông báo lỗi không được lộ thông tin hệ thống");
 
   const badMediaResp = await postJson("/api/tasks", {
@@ -1481,10 +1489,18 @@ async function runAll30Tests() {
   for (const r of schedRows) {
     assert.equal(r.status, "pending");
     assert.equal(r.media_id, composerMediaId);
-    assert.equal(Number(r.comment_delay_minutes), 30);
     assert.equal(r.comment_status, "pending");
     assert.ok(Number(r.scheduled_at) >= nowSecC + 14 * 60, "scheduled_at phải đúng giờ đã chọn (giờ VN -> UTC)");
   }
+  // comment_text cũ được chuyển thành 1 dòng trong task_comments (độ trễ 30 phút) cho mỗi bài
+  const legacyCmtRows = (
+    await d1
+      .prepare("SELECT task_id, message, delay_minutes FROM task_comments WHERE task_id IN (?, ?)")
+      .bind(schedJson.task_ids[0], schedJson.task_ids[1])
+      .all()
+  ).results;
+  assert.equal(legacyCmtRows.length, 2);
+  assert.ok(legacyCmtRows.every((c) => c.message === "Link ở bình luận" && Number(c.delay_minutes) === 30));
 
   // GET /api/tasks trả về mảng chứa các task vừa tạo
   const listAfterCompose = await (
@@ -1504,7 +1520,7 @@ async function runAll30Tests() {
     ]
   });
   assert.equal(badBulkResp.status, 400);
-  assert.match((await badBulkResp.json()).detail, /Bài #2/);
+  assert.match((await badBulkResp.json()).detail, /Post #2/);
   assert.equal(await countTasks(), beforeBadBulk, "Không được tạo task dở dang khi 1 dòng không hợp lệ");
 
   const okBulkResp = await postJson("/api/tasks/bulk", {
@@ -1580,6 +1596,208 @@ async function runAll30Tests() {
     assert.ok(!/Nguyễn Anh Đức/.test(pc.admin_name || ""), "Không dùng tên quản trị viên giả");
   }
   console.log("    · bình luận hẹn giờ sau khi Cron xử lý:", cmtDueAfter.comment_status);
+
+  // --------------------------------------------------------------------------
+  // [TEST 15d] Nhiều bình luận cho 1 bài, bình luận kèm ảnh, mỗi bình luận có độ trễ riêng
+  // --------------------------------------------------------------------------
+  const uploadImage = (bytes, name) =>
+    callWorker("/api/media/upload-image", {
+      method: "POST",
+      headers: {
+        Cookie: `session_token=${tokenA}`,
+        "Content-Type": "image/png",
+        "X-File-Name": encodeURIComponent(name)
+      },
+      body: bytes
+    });
+  const pngBytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
+  const imgResp = await uploadImage(pngBytes, "ảnh bình luận.png");
+  assert.equal(imgResp.status, 200);
+  const imgJson = await imgResp.json();
+  assert.match(imgJson.media_id, /^img_/);
+  assert.equal(imgJson.mime_type, "image/png");
+
+  const fakeImgResp = await uploadImage(Buffer.from("this is not an image"), "fake.png");
+  assert.equal(fakeImgResp.status, 400, "File không phải ảnh thật phải bị từ chối");
+
+  const imgAsVideoResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_101"],
+    media_id: imgJson.media_id,
+    publish_mode: "schedule",
+    ...slotOk
+  });
+  assert.equal(imgAsVideoResp.status, 400, "Ảnh không được dùng làm video Reels");
+
+  const multiResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_101"],
+    media_id: composerMediaId,
+    publish_mode: "schedule",
+    ...slotOk,
+    caption: "Multi comment test",
+    comments: [
+      { text: "First comment", delay_minutes: 0 },
+      { text: "", image_media_id: imgJson.media_id, delay_minutes: 0 },
+      { text: "Later comment", delay_minutes: 30 },
+      { text: "   " }
+    ]
+  });
+  assert.equal(multiResp.status, 200);
+  const multiTaskId = (await multiResp.json()).task_ids[0];
+  composerTaskIds.push(multiTaskId);
+
+  const multiRows = async () =>
+    (
+      await d1
+        .prepare("SELECT position, message, image_media_id, delay_minutes, status, due_at FROM task_comments WHERE task_id = ? ORDER BY position")
+        .bind(multiTaskId)
+        .all()
+    ).results;
+  let mRows = await multiRows();
+  assert.equal(mRows.length, 3, "Bình luận trống bị bỏ qua, còn 3 bình luận");
+  assert.deepEqual(mRows.map((r) => r.status), ["pending", "pending", "pending"]);
+  assert.equal(mRows[1].image_media_id, imgJson.media_id);
+  const multiTask = await d1.prepare("SELECT comment_text, comment_status FROM tasks WHERE id = ?").bind(multiTaskId).first();
+  assert.equal(multiTask.comment_text, "");
+  assert.equal(multiTask.comment_status, "pending");
+
+  // Giả lập Reels đã đăng xong -> 2 bình luận độ trễ 0 được đăng ngay, bình luận 30 phút chờ Cron
+  await d1
+    .prepare("UPDATE tasks SET status = 'success', publish_status = 'success', video_id = 'vid_multi', post_id = 'page_101_vid_multi' WHERE id = ?")
+    .bind(multiTaskId)
+    .run();
+  const fbCommentsBefore = commentsCreatedOnFacebook.length;
+  const publishedAt = Math.floor(Date.now() / 1000);
+  const inline = await processTaskComments(d1, env, multiTaskId, { publishedAtUtc: publishedAt });
+  assert.equal(inline.posted, 2, `posted=${inline.posted} failed=${inline.failed}`);
+  const postedNow = commentsCreatedOnFacebook.slice(fbCommentsBefore);
+  assert.equal(postedNow.length, 2);
+  assert.equal(postedNow[0].message, "First comment");
+  assert.equal(postedNow[1].has_image, true, "Bình luận thứ 2 phải gửi kèm ảnh");
+  mRows = await multiRows();
+  assert.deepEqual(mRows.map((r) => r.status), ["success", "success", "scheduled"]);
+  assert.equal(Number(mRows[2].due_at), publishedAt + 30 * 60);
+  assert.equal(
+    (await d1.prepare("SELECT comment_status FROM tasks WHERE id = ?").bind(multiTaskId).first()).comment_status,
+    "scheduled"
+  );
+
+  // Cron sau 30 phút đăng nốt bình luận còn lại
+  await dispatchDueScheduledComments(d1, env, publishedAt + 30 * 60 + 5, 3);
+  mRows = await multiRows();
+  assert.deepEqual(mRows.map((r) => r.status), ["success", "success", "success"]);
+  assert.equal(commentsCreatedOnFacebook.slice(fbCommentsBefore).length, 3);
+  const multiTaskAfter = await d1.prepare("SELECT comment_status, comment_log FROM tasks WHERE id = ?").bind(multiTaskId).first();
+  assert.equal(multiTaskAfter.comment_status, "success");
+  assert.match(multiTaskAfter.comment_log, /3\/3/);
+
+  // Danh sách lịch đăng trả kèm các bình luận
+  const listWithComments = await (
+    await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  const listedMulti = listWithComments.find((t) => t.id === multiTaskId);
+  assert.equal(listedMulti.comments.length, 3);
+  assert.equal(listedMulti.comments[1].has_image, true);
+  await d1.prepare("DELETE FROM task_comments WHERE task_id = ?").bind(multiTaskId).run();
+  console.log("  ✓ [Test 15d] Nhiều bình luận / bài, bình luận kèm ảnh, độ trễ riêng từng bình luận");
+
+  // --------------------------------------------------------------------------
+  // [TEST 15e] Thống kê lấy trực tiếp từ Meta Graph API (batch), không dùng số liệu nội bộ
+  // --------------------------------------------------------------------------
+  const fetchBeforeLive = globalThis.fetch;
+  let liveBatchCalls = 0;
+  const dayIso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString().replace(/\.\d+Z$/, "+0000");
+  const graphOk = (body) => ({ code: 200, body: JSON.stringify(body) });
+  const graphErr = (code, message) => ({ code: 400, body: JSON.stringify({ error: { code, message } }) });
+  globalThis.fetch = async (input, init = {}) => {
+    const u = typeof input === "string" ? input : input.url;
+    if (/graph\.facebook\.com\/v[\d.]+\/$/.test(u) && String(init.method || "").toUpperCase() === "POST") {
+      liveBatchCalls++;
+      const form = new URLSearchParams(String(init.body || ""));
+      const ops = JSON.parse(form.get("batch") || "[]");
+      const out = ops.map((op) => {
+        const rel = op.relative_url;
+        assert.ok(/access_token=/.test(rel), "Mỗi lệnh batch phải mang token của Page");
+        const path = rel.split("?")[0];
+        if (/\/video_reels$/.test(path)) {
+          const pageId = path.split("/")[0];
+          return graphOk({
+            data: [
+              {
+                id: `reel_${pageId}`,
+                description: "Live reel",
+                created_time: dayIso(2),
+                permalink_url: `/reel/reel_${pageId}`,
+                likes: { summary: { total_count: 5 } },
+                comments: { summary: { total_count: 2 } }
+              },
+              { id: `old_${pageId}`, description: "Too old", created_time: dayIso(120) }
+            ]
+          });
+        }
+        if (/\/insights$/.test(path)) {
+          const metric = /metric=([a-z_]+)/.exec(rel)[1];
+          if (metric === "page_media_view" || metric === "page_post_engagements") {
+            return graphOk({ data: [{ name: metric, values: [{ value: 10, end_time: dayIso(1) }, { value: 20, end_time: dayIso(0) }] }] });
+          }
+          if (metric === "page_daily_follows_unique") return graphErr(10, "(#10) Requires read_insights permission");
+          return graphErr(100, "(#100) The value must be a valid insights metric");
+        }
+        if (/\/video_insights$/.test(path)) {
+          const metric = /metric=([a-z_]+)/.exec(rel)[1];
+          const value = {
+            fb_reels_total_plays: 300,
+            blue_reels_play_count: 250,
+            post_impressions_unique: 200,
+            post_video_social_actions: { SHARE: 4, COMMENT: 2, REACTION: 5 }
+          }[metric];
+          return graphOk({ data: [{ name: metric, period: "lifetime", values: [{ value }] }] });
+        }
+        if (!path.includes("/")) {
+          return graphOk({ id: path, name: `Live ${path}`, followers_count: 1000, fan_count: 900 });
+        }
+        return graphErr(100, "unknown");
+      });
+      return new Response(JSON.stringify(out), { status: 200 });
+    }
+    return fetchBeforeLive(input, init);
+  };
+  try {
+    const liveResp = await callWorker("/api/insights/live?days=30&refresh=1", {
+      headers: { Cookie: `session_token=${tokenA}` }
+    });
+    assert.equal(liveResp.status, 200);
+    const live = await liveResp.json();
+    assert.equal(live.source, "meta_graph_api");
+    const readable = live.pages.filter((pg) => pg.status === "partial");
+    assert.ok(readable.length >= 1, "Phải đọc được ít nhất 1 Page qua Graph API");
+    for (const pg of readable) {
+      assert.equal(pg.followers, 1000);
+      assert.equal(pg.views, 30, "Lượt xem lấy từ page_media_view của Meta");
+      assert.equal(pg.engagement, 30);
+      assert.equal(pg.new_follows, null, "Thiếu quyền -> null, không tự bịa");
+      assert.equal(pg.reels_count, 1, "Reels quá khoảng thời gian bị loại");
+      assert.equal(pg.reel_plays, 300);
+      assert.equal(pg.reel_reach, 200);
+      assert.equal(pg.likes, 5);
+      assert.equal(pg.shares, 4);
+    }
+    assert.equal(live.total_followers, 1000 * readable.length);
+    assert.equal(live.new_follows, null);
+    assert.equal(live.top_reels[0].plays, 300);
+    assert.ok(live.top_reels[0].permalink_url.startsWith("https://www.facebook.com/reel/"));
+    assert.ok(live.warnings.some((w) => /read_insights/.test(w)), "Phải cảnh báo thiếu quyền read_insights");
+    assert.ok(liveBatchCalls <= 4, `Gọi Meta theo batch, không gọi từng request (${liveBatchCalls})`);
+
+    const callsBefore = liveBatchCalls;
+    const cachedResp = await (
+      await callWorker("/api/insights/live?days=30", { headers: { Cookie: `session_token=${tokenA}` } })
+    ).json();
+    assert.equal(cachedResp.cached, true);
+    assert.equal(liveBatchCalls, callsBefore, "Lần tải lại trong 10 phút dùng bộ nhớ đệm");
+  } finally {
+    globalThis.fetch = fetchBeforeLive;
+  }
+  console.log("  ✓ [Test 15e] Thống kê lấy trực tiếp từ Meta (Graph batch), thiếu quyền trả null + cảnh báo");
 
   // Dọn dẹp để không ảnh hưởng các bài kiểm thử sau
   for (const id of composerTaskIds) {
@@ -1713,7 +1931,7 @@ async function runAll30Tests() {
   const finishedTask1 = tasksAfterPublish.find((t) => t.id === createdTask1.id);
   assert.equal(finishedTask1.status, "success");
   assert.equal(finishedTask1.video_url, "https://www.facebook.com/reel/vid_reel_1");
-  assert.ok(finishedTask1.log.includes("Đã đăng bình luận tự động"));
+  assert.ok(finishedTask1.log.includes("Auto comment posted"));
   console.log("  ✓ [Test 20] Queue Publishing xuất bản Reels từ R2 + Auto-Comment thành công");
 
   // Kiểm tra Idempotency: Gửi lại đúng Queue Message của finishedTask1 lần nữa -> Không được gọi Graph API lần 2!
@@ -1772,7 +1990,7 @@ async function runAll30Tests() {
     enqueued_at: Math.floor(Date.now() / 1000)
   });
   assert.equal(secondAttempt.status, "dead_letter");
-  assert.ok(secondAttempt.reason.includes("DỪNG AUTO-RETRY CHỐNG ĐĂNG TRÙNG"));
+  assert.ok(secondAttempt.reason.includes("AUTO-RETRY STOPPED TO AVOID A DUPLICATE POST"));
   console.log("  ✓ [Test 21] Queue Retry (Exponential Backoff) & Chặn Auto-Retry khi Ambiguous Publish");
 
   // --------------------------------------------------------------------------
@@ -1805,7 +2023,7 @@ async function runAll30Tests() {
   });
   assert.equal(pastTaskResp.status, 400, "Đặt lịch trong quá khứ phải trả về 400");
   const pastErr = await pastTaskResp.json();
-  assert.ok(pastErr.detail.includes("đã qua hoặc trùng với thời điểm hiện tại"));
+  assert.ok(pastErr.detail.includes("is in the past or right now"));
 
   // [Case 2] Đặt lịch với thời gian quá gần/hiện tại (cách dưới 1 phút) -> Bị từ chối (400)
   const nearPastCheck = parseVnScheduleToUtc("2026-11-07", "00:00", {
@@ -1813,7 +2031,7 @@ async function runAll30Tests() {
     minLeadSeconds: 60
   });
   assert.equal(nearPastCheck.isValid, false);
-  assert.ok(nearPastCheck.error.includes("đã qua hoặc trùng với thời điểm hiện tại"));
+  assert.ok(nearPastCheck.error.includes("is in the past or right now"));
 
   // [Case 3] Đặt lịch với thời gian tương lai hợp lệ -> Chấp nhận, trạng thái scheduled
   const futureTaskResp = await callWorker("/api/tasks", {
@@ -1888,7 +2106,7 @@ async function runAll30Tests() {
   });
   assert.equal(manualStartResp.status, 400);
   const manualStartJson = await manualStartResp.json();
-  assert.ok(manualStartJson.detail.includes("đang chờ đến giờ hẹn"), "Runner thủ công không được kích hoạt task tương lai");
+  assert.ok(manualStartJson.detail.includes("waiting for their scheduled time"), "Runner thủ công không được kích hoạt task tương lai");
 
   // [Case 9] Hủy/Xóa lịch hẹn trước giờ chạy -> Chuyển xóa an toàn, không còn chạy khi đến giờ
   const delSchedResp = await callWorker(`/api/tasks/${futureTask.id}`, {
@@ -2045,14 +2263,14 @@ async function runAll30Tests() {
   const appJsContent = fs.readFileSync(path.join(process.cwd(), "static/js/app.js"), "utf8");
   assert.ok(indexHtmlContent.includes("Graph API Explorer"), "static/index.html phải có hướng dẫn Graph API Explorer");
   assert.ok(indexHtmlContent.includes("1469615908436980"), "static/index.html phải hiển thị Meta App ID 1469615908436980");
-  assert.ok(indexHtmlContent.includes("Liên kết Facebook"), "static/index.html phải có nút Liên kết Facebook");
+  assert.ok(indexHtmlContent.includes("Connect Facebook"), "static/index.html phải có nút Liên kết Facebook");
   assert.ok(indexHtmlContent.includes("directAccessToken"), "static/index.html phải có ô nhập directAccessToken");
   assert.ok(appJsContent.includes("handleConnectToken"), "static/js/app.js phải có hàm handleConnectToken");
   assert.ok(appJsContent.includes("validateVnScheduleClient"), "static/js/app.js phải có hàm validateVnScheduleClient");
   // Yêu cầu 2: Loại bỏ hoàn toàn nút Chạy Thử và modal test diagnostic khỏi UI
   assert.ok(!indexHtmlContent.includes(">Chạy Thử</span>"), "static/index.html không được chứa nút Chạy Thử");
   assert.ok(!indexHtmlContent.includes("showRunTestModal"), "static/index.html không được chứa modal Chạy Thử (showRunTestModal)");
-  assert.ok(indexHtmlContent.includes("Xóa tài khoản Facebook?"), "static/index.html phải có modal Xóa tài khoản Facebook?");
+  assert.ok(indexHtmlContent.includes("Remove Facebook account?"), "static/index.html phải có modal Xóa tài khoản Facebook?");
 
   console.log("  ✓ [Test 27] Không còn bất kỳ URL localhost:8000 / 127.0.0.1:8000 trong Production");
   console.log("  ✓ [Test 28] Không lộ META_APP_SECRET hoặc Access Token trong Frontend & Config");
@@ -2297,7 +2515,7 @@ async function runAll30Tests() {
   });
   assert.equal(duplicateRetryResp.status, 200);
   const duplicateRetryData = await duplicateRetryResp.json();
-  assert.ok(duplicateRetryData.message.includes("đã được đăng thành công"));
+  assert.ok(duplicateRetryData.message.includes("already been posted"));
   assert.equal(duplicateRetryData.comment_id, finishedNetRetried.comment_id);
   console.log("    ✓ [Scenario 9] Chống đăng trùng Reels & Comment: Idempotency bảo vệ toàn vẹn");
 
@@ -2491,7 +2709,7 @@ async function runAll30Tests() {
   assert.equal(mediaAfterCleanup.upload_status, "expired");
 
   const taskAfterCleanup = await d1.prepare("SELECT log FROM tasks WHERE id = ?").bind(oldTask.id).first();
-  assert.ok(taskAfterCleanup.log.includes("30 ngày"), "Task log phải ghi nhận video đã tự động dọn dẹp sau 30 ngày");
+  assert.ok(taskAfterCleanup.log.includes("30 days"), "Task log phải ghi nhận video đã tự động dọn dẹp sau 30 ngày");
   console.log("  ✓ [Test 33] Video lưu trên R2 tự xóa sau 1 tháng (30 ngày) & Đồng bộ Cron/API");
 
   // --------------------------------------------------------------------------
@@ -2525,7 +2743,7 @@ async function runAll30Tests() {
   });
   assert.equal(unuploadedTaskResp.status, 400, "Không được phép tạo Task khi video chưa tải lên R2");
   const unuploadedTaskErr = await unuploadedTaskResp.json();
-  assert.ok(unuploadedTaskErr.detail.includes("Cloudflare R2"));
+  assert.ok(unuploadedTaskErr.detail.includes("has not been uploaded yet"));
 
   // 2. Tạo task bằng tên file gốc ĐÃ tải lên R2 ('alice_reel_01.mp4') -> Tự động ánh xạ về r2://<media_id>
   const byFilenameTaskResp = await callWorker("/api/tasks", {
@@ -2551,7 +2769,7 @@ async function runAll30Tests() {
   });
   assert.equal(delProtectedMediaResp.status, 404);
   const delProtectedMediaData = await delProtectedMediaResp.json();
-  assert.ok(delProtectedMediaData.detail.includes("Không thể xóa video"));
+  assert.ok(delProtectedMediaData.detail.includes("Cannot delete video"));
 
   // 4. Kiểm tra hàm thống nhất verifyPageTokenAndPermissions
   const { verifyPageTokenAndPermissions } = await import("../src/services/metaGraphService.ts");
@@ -2625,7 +2843,7 @@ async function runAll30Tests() {
   assert.equal(editPublishedErr.error_code, "TASK_ALREADY_PUBLISHED");
   assert.ok(
     editPublishedErr.detail.startsWith(
-      "TASK_ALREADY_PUBLISHED: Task đã đăng Reels thành công và không thể chỉnh sửa."
+      "TASK_ALREADY_PUBLISHED: This Reel is already published and cannot be edited."
     )
   );
 
@@ -2831,7 +3049,7 @@ async function runAll30Tests() {
   });
   assert.equal(insightsPageResp.status, 200);
   const insightsHtml = await insightsPageResp.text();
-  assert.ok(insightsHtml.includes("Thống kê Reels"), "Route /insights phải hiển thị giao diện Thống kê Reels");
+  assert.ok(insightsHtml.includes("Reels analytics"), "Route /insights phải hiển thị giao diện Thống kê Reels");
   console.log("  ✓ [Test 38] Quyền read_insights + ANALYZE, Đồng bộ Meta Video Insights v27.0, Lưu Snapshot D1 & Cô lập Multi-User");
 
   // --------------------------------------------------------------------------
@@ -2929,7 +3147,7 @@ async function runAll30Tests() {
   );
   assert.equal(
     partialUpdateData.missing_pages_warning,
-    "Page này chưa có trong token mới hoặc thiếu quyền quản lý."
+    "This Page is not in the new token, or you lack admin access to it."
   );
 
   const pagesAfterPartial = await (
@@ -3550,7 +3768,7 @@ async function runAll30Tests() {
   });
   assert.equal(unuploadedVideoResp.status, 400, "Chặn task khi video chưa được tải lên R2");
   const unuploadedData = await unuploadedVideoResp.json();
-  assert.ok(unuploadedData.detail.includes("chưa được tải lên Cloudflare R2"));
+  assert.ok(unuploadedData.detail.includes("has not been uploaded yet"));
 
   // 4. Chặn lịch bắt đầu trong quá khứ
   const pastBulkScheduleResp = await callWorker("/api/tasks/bulk", {
@@ -3907,7 +4125,7 @@ async function runAll30Tests() {
   assert.equal(syncExpResp.status, 400);
   const syncExpJson = await syncExpResp.json();
   assert.equal(syncExpJson.success, false);
-  assert.ok(syncExpJson.detail.includes("Access Token của Fanpage đã hết hạn hoặc bị thu hồi (Code 190)"));
+  assert.ok(syncExpJson.detail.includes("The Page access token has expired or was revoked (Code 190)"));
   console.log("    ✓ [Scenario 1] Phát hiện chính xác token hết hạn (190) & trả về thông báo hướng dẫn người dùng");
 
   // Test Case 2: Token thiếu quyền (code 200)
@@ -3918,7 +4136,7 @@ async function runAll30Tests() {
   assert.equal(syncPermResp.status, 400);
   const syncPermJson = await syncPermResp.json();
   assert.equal(syncPermJson.success, false);
-  assert.ok(syncPermJson.detail.includes("Tài khoản không đủ quyền đọc bài viết của Fanpage này"));
+  assert.ok(syncPermJson.detail.includes("This account cannot read this Page's posts"));
   console.log("    ✓ [Scenario 2] Phát hiện chính xác thiếu quyền (200) & chỉ rõ pages_read_user_content");
 
   // Test Case 3: Meta từ chối fields attachments -> Fallback Tier 2 tự động thành công
@@ -3941,7 +4159,7 @@ async function runAll30Tests() {
   const syncEmptyJson = await syncEmptyResp.json();
   assert.equal(syncEmptyJson.success, true);
   assert.equal(syncEmptyJson.synced_count, 0);
-  assert.ok(syncEmptyJson.message.includes("chưa có bài viết nào"));
+  assert.ok(syncEmptyJson.message.includes("has no published posts"));
   console.log("    ✓ [Scenario 4] Xử lý chính xác Fanpage thực sự chưa có bài viết (không báo lỗi nhầm)");
 
   // Test Case 5: Đồng bộ lại không tạo trùng bài viết (Idempotent Upsert)
@@ -3966,17 +4184,17 @@ async function runAll30Tests() {
   const scheduleResp = await callWorker("/schedule", { headers: { Cookie: `session_token=${tokenA}` } });
   assert.equal(scheduleResp.status, 200, "Route /schedule phải trả về 200 OK");
   const schedHtml = await scheduleResp.text();
-  assert.ok(schedHtml.includes("Lên Lịch &amp; Đăng Bài") || schedHtml.includes("Lên Lịch & Đăng Bài"), "Trang /schedule phải chứa giao diện Lên Lịch & Đăng Bài");
+  assert.ok(schedHtml.includes("Schedule &amp; publish posts") || schedHtml.includes("Schedule & publish posts"), "Trang /schedule phải chứa giao diện Lên Lịch & Đăng Bài");
 
   const analyticsResp = await callWorker("/analytics", { headers: { Cookie: `session_token=${tokenA}` } });
   assert.equal(analyticsResp.status, 200, "Route /analytics phải trả về 200 OK");
   const analHtml = await analyticsResp.text();
-  assert.ok(analHtml.includes("Thống kê Reels &amp; Bài Viết"), "Trang /analytics phải chứa giao diện Thống Kê & Bài Viết");
+  assert.ok(analHtml.includes("Reels &amp; post analytics"), "Trang /analytics phải chứa giao diện Thống Kê & Bài Viết");
 
   const pagesResp = await callWorker("/pages", { headers: { Cookie: `session_token=${tokenA}` } });
   assert.equal(pagesResp.status, 200, "Route /pages phải trả về 200 OK");
   const pagesHtml = await pagesResp.text();
-  assert.ok(pagesHtml.includes("Quản Lý Fanpage"), "Trang /pages phải chứa giao diện Quản Lý Fanpage");
+  assert.ok(pagesHtml.includes("Manage Pages"), "Trang /pages phải chứa giao diện Quản Lý Fanpage");
 
   // 2. Tạo 1 task pending và 1 task published trong D1 để kiểm tra bộ lọc exclude_published
   await d1.prepare(`

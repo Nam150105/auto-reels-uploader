@@ -1,6 +1,6 @@
 <template>
   <div class="h-screen w-screen flex overflow-hidden bg-slate-50 font-sans text-slate-900">
-    <!-- Dark Sidebar: Exactly 3 Main Menus (Viết bài, Lịch đăng, Thống kê) -->
+    <!-- Dark Sidebar: Exactly 3 Main Menus (Compose, Schedule, Analytics) -->
     <Sidebar
       :activeTab="activeTab"
       @switch-tab="switchTab"
@@ -25,20 +25,20 @@
       >
         <div class="flex items-center gap-2 text-xs text-amber-900 font-medium">
           <span>⚠️</span>
-          <span>Access Token đã hết hạn ({{ expiredAccountNames }}). Vui lòng cập nhật lại token trong Graph API Explorer.</span>
+          <span>Access token expired ({{ expiredAccountNames }}). Please update the token in Graph API Explorer.</span>
         </div>
         <button
           type="button"
           @click="openConnectModal(expiredAccounts[0]?.id)"
           class="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition shrink-0 shadow-xs"
         >
-          🔑 Cập nhật Token
+          🔑 Update token
         </button>
       </div>
 
       <!-- Main Dynamic View Area -->
       <main class="flex-1 overflow-hidden relative">
-        <!-- Tab 1: Viết bài (Compose) -->
+        <!-- Tab 1: Compose -->
         <template v-if="activeTab === 'compose'">
           <SingleComposer
             v-if="composeMode === 'single'"
@@ -50,10 +50,10 @@
           />
         </template>
 
-        <!-- Tab 2: Lịch đăng (Schedule) -->
+        <!-- Tab 2: Schedule -->
         <ScheduleView v-else-if="activeTab === 'schedule'" />
 
-        <!-- Tab 3: Thống kê (Analytics) -->
+        <!-- Tab 3: Analytics -->
         <AnalyticsView v-else-if="activeTab === 'analytics'" />
       </main>
     </div>
@@ -114,7 +114,7 @@ const switchTab = (tab: "compose" | "schedule" | "analytics") => {
   activeTab.value = tab;
 };
 
-// When user creates a single or bulk task, automatically switch to Lịch đăng tab!
+// When user creates a single or bulk task, automatically switch to the Schedule tab!
 const handleTaskCreated = () => {
   activeTab.value = "schedule";
 };

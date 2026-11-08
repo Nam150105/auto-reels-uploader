@@ -193,11 +193,11 @@ export function verifyCsrfProtection(request: Request, env: Env): { valid: boole
       if (!allowedHosts.has(originHost)) {
         return {
           valid: false,
-          reason: `CSRF Protection: Origin '${origin}' không được phép gọi API thay đổi dữ liệu.`
+          reason: `CSRF Protection: Origin '${origin}' is not allowed to change data.`
         };
       }
     } catch {
-      return { valid: false, reason: "CSRF Protection: Origin header không hợp lệ." };
+      return { valid: false, reason: "CSRF Protection: Invalid Origin header." };
     }
   } else if (referer) {
     try {
@@ -205,11 +205,11 @@ export function verifyCsrfProtection(request: Request, env: Env): { valid: boole
       if (!allowedHosts.has(refHost)) {
         return {
           valid: false,
-          reason: `CSRF Protection: Referer '${referer}' không hợp lệ.`
+          reason: `CSRF Protection: Referer '${referer}' is not allowed.`
         };
       }
     } catch {
-      return { valid: false, reason: "CSRF Protection: Referer header không hợp lệ." };
+      return { valid: false, reason: "CSRF Protection: Invalid Referer header." };
     }
   }
 

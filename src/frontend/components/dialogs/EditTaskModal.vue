@@ -3,7 +3,7 @@
     <div class="bg-white rounded-2xl shadow-2xl border border-slate-100 max-w-lg w-full p-6 animate-in fade-in zoom-in duration-150 select-none">
       <div class="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
         <h3 class="text-base font-bold text-slate-800">
-          Chỉnh sửa bài đăng #{{ task.id }}
+          Edit post #{{ task.id }}
         </h3>
         <button type="button" @click="$emit('close')" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -13,7 +13,7 @@
       </div>
 
       <div class="space-y-4 text-xs">
-        <!-- Fanpage Info -->
+        <!-- Page Info -->
         <div class="flex items-center gap-2.5 p-2 rounded-xl bg-slate-50 border border-slate-200">
           <div class="w-8 h-8 rounded-full bg-slate-200 overflow-hidden flex-shrink-0">
             <img v-if="task.page_avatar" :src="task.page_avatar" class="w-full h-full object-cover" />
@@ -21,13 +21,13 @@
           </div>
           <div>
             <span class="font-bold text-slate-800 block">{{ task.page_name || task.facebook_page_id }}</span>
-            <span class="text-[10px] text-slate-500">ID Fanpage: {{ task.facebook_page_id }}</span>
+            <span class="text-[10px] text-slate-500">Page ID: {{ task.facebook_page_id }}</span>
           </div>
         </div>
 
         <!-- Caption -->
         <div>
-          <label class="block font-semibold text-slate-700 mb-1">Nội dung bài viết:</label>
+          <label class="block font-semibold text-slate-700 mb-1">Caption:</label>
           <textarea
             v-model="caption"
             rows="3"
@@ -37,7 +37,7 @@
 
         <!-- Schedule Date & Time -->
         <div>
-          <label class="block font-semibold text-slate-700 mb-1">Thời gian đăng (giờ Việt Nam):</label>
+          <label class="block font-semibold text-slate-700 mb-1">Publish time (Vietnam time, GMT+7):</label>
           <button
             type="button"
             @click="isCalendarOpen = true"
@@ -50,17 +50,17 @@
             </svg>
           </button>
           <p v-if="!isScheduleSlotAllowed(scheduleDate, scheduleTime)" class="mt-1 text-[11px] text-rose-600">
-            Thời gian này đã qua. Vui lòng chọn thời điểm sau hiện tại ít nhất 5 phút.
+            This time has passed. Please pick a time at least 5 minutes from now.
           </p>
         </div>
 
         <!-- First Comment -->
         <div>
-          <label class="block font-semibold text-slate-700 mb-1">Bình luận đầu tiên:</label>
+          <label class="block font-semibold text-slate-700 mb-1">First comment:</label>
           <input
             v-model="commentText"
             type="text"
-            placeholder="Nội dung bình luận tự động..."
+            placeholder="Auto-comment text..."
             class="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
         </div>
@@ -72,7 +72,7 @@
           @click="$emit('close')"
           class="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium text-xs transition"
         >
-          Hủy bỏ
+          Cancel
         </button>
         <button
           type="button"
@@ -84,7 +84,7 @@
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
           </svg>
-          <span>{{ isSubmitting ? 'Đang lưu...' : 'Lưu thay đổi' }}</span>
+          <span>{{ isSubmitting ? 'Saving...' : 'Save changes' }}</span>
         </button>
       </div>
     </div>
@@ -127,7 +127,7 @@ const isCalendarOpen = ref(false);
 
 const scheduleDisplay = computed(() => {
   const [y, m, d] = (scheduleDate.value || "").split("-");
-  return y && m && d ? `${scheduleTime.value} ngày ${d}/${m}/${y}` : "Chọn thời gian đăng";
+  return y && m && d ? `${scheduleTime.value} on ${d}/${m}/${y}` : "Select publish time";
 });
 
 const onCalendarConfirm = (val: { date: string; time: string }) => {
@@ -151,7 +151,7 @@ watch(
 const submitUpdate = async () => {
   if (!props.task) return;
   if (!isScheduleSlotAllowed(scheduleDate.value, scheduleTime.value)) {
-    toast.warning("Thời gian đăng phải sau thời điểm hiện tại ít nhất 5 phút. Vui lòng chọn lại.");
+    toast.warning("Publish time must be at least 5 minutes from now. Please pick another time.");
     isCalendarOpen.value = true;
     return;
   }
@@ -163,11 +163,11 @@ const submitUpdate = async () => {
       schedule_time: scheduleTime.value.trim(),
       comment_text: commentText.value.trim() || undefined
     });
-    toast.success("Đã cập nhật thông tin bài đăng!");
+    toast.success("Post updated.");
     emit("updated");
     emit("close");
   } catch (err: any) {
-    toast.error(err?.message || "Cập nhật bài đăng thất bại.");
+    toast.error(err?.message || "Failed to update post.");
   } finally {
     isSubmitting.value = false;
   }

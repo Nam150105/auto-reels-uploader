@@ -12,19 +12,19 @@
 
       <span class="text-slate-300">/</span>
 
-      <!-- Breadcrumbs & Mode Switcher for Viết bài -->
+      <!-- Breadcrumbs & Mode Switcher for Compose -->
       <div v-if="activeTab === 'compose'" class="flex items-center gap-2">
-        <span class="text-slate-500 text-xs sm:text-sm font-medium">{{ t('compose') }}</span>
+        <span class="text-slate-500 text-xs sm:text-sm font-medium">Compose</span>
         <span class="text-slate-300">/</span>
         
-        <!-- Mode Switcher Dropdown (Đăng thường vs Đăng hàng loạt) -->
+        <!-- Mode Switcher Dropdown (Single post vs Bulk posts) -->
         <div class="relative">
           <button
             type="button"
             @click="isModeDropdownOpen = !isModeDropdownOpen"
             class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs sm:text-sm font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 transition"
           >
-            <span>{{ composeMode === 'bulk' ? t('compose_bulk') : t('compose_single') }}</span>
+            <span>{{ composeMode === 'bulk' ? 'Bulk posts' : 'Single post' }}</span>
             <svg class="w-3.5 h-3.5 transition-transform" :class="{ 'rotate-180': isModeDropdownOpen }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
             </svg>
@@ -36,7 +36,7 @@
             class="absolute left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-50 text-xs"
           >
             <div class="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-              Chọn chế độ viết
+              Compose mode
             </div>
             <button
               type="button"
@@ -48,7 +48,7 @@
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
-                <span>{{ t('compose_single') }}</span>
+                <span>Single post</span>
               </div>
               <svg v-if="composeMode === 'single'" class="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
@@ -64,7 +64,7 @@
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
                 </svg>
-                <span>{{ t('compose_bulk') }}</span>
+                <span>Bulk posts</span>
               </div>
               <svg v-if="composeMode === 'bulk'" class="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
@@ -75,11 +75,11 @@
       </div>
 
       <div v-else-if="activeTab === 'schedule'" class="flex items-center gap-2">
-        <span class="text-slate-700 text-xs sm:text-sm font-semibold">{{ t('schedule') }}</span>
+        <span class="text-slate-700 text-xs sm:text-sm font-semibold">Schedule</span>
       </div>
 
       <div v-else-if="activeTab === 'analytics'" class="flex items-center gap-2">
-        <span class="text-slate-700 text-xs sm:text-sm font-semibold">{{ t('analytics') }}</span>
+        <span class="text-slate-700 text-xs sm:text-sm font-semibold">Analytics</span>
       </div>
     </div>
 
@@ -90,17 +90,17 @@
         type="button"
         @click="$emit('open-accounts')"
         class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs text-slate-700 font-semibold transition"
-        title="Quản lý tài khoản Facebook Admin"
+        title="Manage Facebook admin accounts"
       >
         <svg class="w-3.5 h-3.5 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
           <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
         </svg>
-        <span>{{ accounts.length }} Tài khoản FB</span>
+        <span>{{ accounts.length }} FB accounts</span>
       </button>
 
-      <!-- Fanpage Stats Pill -->
+      <!-- Page Stats Pill -->
       <div class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 font-medium">
-        <span>{{ pages.length }} {{ t('fanpage') }}</span>
+        <span>{{ pages.length }} Pages</span>
       </div>
 
       <!-- Connect Page Button -->
@@ -112,7 +112,7 @@
         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
         </svg>
-        <span class="hidden sm:inline">Thêm Token / Page</span>
+        <span class="hidden sm:inline">Add token / Page</span>
       </button>
 
       <!-- User Avatar / Info -->
@@ -120,7 +120,7 @@
         <div class="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold overflow-hidden border border-blue-200">
           {{ ((user?.display_name || user?.username || 'U').substring(0, 2)).toUpperCase() }}
         </div>
-        <span class="text-xs font-bold text-slate-800 hidden md:inline">{{ user?.display_name || user?.username || 'Tài khoản' }}</span>
+        <span class="text-xs font-bold text-slate-800 hidden md:inline">{{ user?.display_name || user?.username || 'Account' }}</span>
       </div>
     </div>
   </header>
@@ -128,7 +128,6 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
-import { useI18n } from "../../utils/i18n";
 import { usePages } from "../../composables/usePages";
 import { useAuth } from "../../composables/useAuth";
 
@@ -143,7 +142,6 @@ const emit = defineEmits<{
   (e: "open-accounts"): void;
 }>();
 
-const { t } = useI18n();
 const { pages, accounts } = usePages();
 const { user } = useAuth();
 

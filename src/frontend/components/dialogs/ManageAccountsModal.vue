@@ -8,8 +8,8 @@
             👥
           </div>
           <div>
-            <h3 class="text-base font-bold text-slate-800">Quản Lý Tài Khoản Facebook</h3>
-            <p class="text-[11px] text-slate-400">Danh sách các tài khoản Facebook và Fanpage đang được quản lý</p>
+            <h3 class="text-base font-bold text-slate-800">Manage Facebook accounts</h3>
+            <p class="text-[11px] text-slate-400">Facebook accounts and Pages you manage</p>
           </div>
         </div>
         <button type="button" @click="$emit('close')" class="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg transition text-lg font-bold">
@@ -20,10 +20,10 @@
       <!-- Action Sub-header -->
       <div class="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200 mb-4 shrink-0 flex-wrap gap-2">
         <div class="text-xs">
-          <span class="text-slate-500">Tổng tài khoản:</span>
+          <span class="text-slate-500">Total accounts:</span>
           <b class="text-slate-800 ml-1 font-bold">{{ accounts.length }}</b>
           <span class="text-slate-300 mx-2">•</span>
-          <span class="text-emerald-600 font-semibold">{{ validAccountsCount }} Đang hoạt động</span>
+          <span class="text-emerald-600 font-semibold">{{ validAccountsCount }} active</span>
         </div>
 
         <div class="flex items-center gap-2">
@@ -36,7 +36,7 @@
             <svg class="w-3.5 h-3.5" :class="{ 'animate-spin': isLoading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            <span>Đồng Bộ Tất Cả</span>
+            <span>Sync all</span>
           </button>
 
           <button
@@ -44,7 +44,7 @@
             @click="openAddAdmin"
             class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs"
           >
-            <span>+ Thêm Admin Mới</span>
+            <span>+ Add admin</span>
           </button>
         </div>
       </div>
@@ -64,7 +64,7 @@
               </div>
               <div class="min-w-0">
                 <div class="font-bold text-slate-800 text-xs truncate">
-                  {{ acc.facebook_user_name || 'Tài khoản Facebook' }}
+                  {{ acc.facebook_user_name || 'Facebook account' }}
                 </div>
                 <div class="text-[11px] text-slate-400 font-mono truncate">
                   ID: {{ acc.facebook_user_id }}
@@ -74,7 +74,7 @@
                     class="font-semibold"
                     :class="isExpired(acc) ? 'text-amber-700' : 'text-emerald-600'"
                   >
-                    {{ isExpired(acc) ? '⚠️ Token hết hạn' : '✓ Token hợp lệ' }}
+                    {{ isExpired(acc) ? '⚠️ Token expired' : '✓ Token valid' }}
                   </span>
                 </div>
               </div>
@@ -86,21 +86,21 @@
                 @click="openUpdateToken(acc.id)"
                 class="px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition"
               >
-                Cập nhật Token
+                Update token
               </button>
               <button
                 type="button"
                 @click="promptDelete(acc)"
                 class="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-xs font-bold transition"
               >
-                Xóa
+                Remove
               </button>
             </div>
           </div>
         </div>
 
         <div v-if="accounts.length === 0" class="text-center py-10 text-slate-400 text-xs">
-          Chưa có tài khoản Facebook Admin nào được liên kết.
+          No Facebook admin accounts connected yet.
         </div>
       </div>
 
@@ -111,23 +111,23 @@
           @click="$emit('close')"
           class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition"
         >
-          Đóng
+          Close
         </button>
       </div>
     </div>
 
-    <!-- Modal Xác Nhận Xóa Tài Khoản Facebook -->
+    <!-- Confirm Facebook account removal -->
     <div
       v-if="accountToDelete"
       class="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
       @click.self="accountToDelete = null"
     >
       <div class="bg-white rounded-2xl border border-slate-200 p-6 max-w-sm w-full shadow-2xl space-y-4">
-        <h4 class="font-bold text-base text-slate-800">Xóa tài khoản Facebook?</h4>
+        <h4 class="font-bold text-base text-slate-800">Remove Facebook account?</h4>
         <p class="text-xs text-slate-600 leading-relaxed">
-          Bạn có chắc chắn muốn ngắt kết nối tài khoản
+          Are you sure you want to disconnect
           <strong class="text-slate-900">{{ accountToDelete.facebook_user_name }}</strong>?
-          Các Fanpage độc quyền của tài khoản này sẽ được gỡ khỏi danh sách quản lý.
+          Pages managed only by this account will be removed from your list.
         </p>
         <div class="flex items-center justify-end gap-2 pt-2">
           <button
@@ -135,14 +135,14 @@
             @click="accountToDelete = null"
             class="px-3.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium"
           >
-            Hủy
+            Cancel
           </button>
           <button
             type="button"
             @click="confirmDelete"
             class="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs"
           >
-            Xác nhận xóa
+            Remove
           </button>
         </div>
       </div>
