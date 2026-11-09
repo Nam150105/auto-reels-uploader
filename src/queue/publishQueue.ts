@@ -30,6 +30,7 @@ import {
   scheduleTaskCommentsAfterPublish,
   claimDueTaskCommentRows,
   finishTaskCommentRow,
+  rescheduleTaskCommentRow,
   refreshTaskCommentSummary
 } from "../db.ts";
 import type { TaskCommentRow } from "../db.ts";
@@ -48,6 +49,60 @@ export function calculateBackoffSeconds(attemptCount: number): number {
   const base = 15;
   const exp = Math.max(0, attemptCount - 1);
   return Math.min(300, base * Math.pow(2, exp));
+}
+
+/**
+ * Cloudflare Free allows ~50 outgoing requests per invocation and one Reel needs 4-8,
+ * so each invocation publishes only a few videos. The rest wait for the next cron minute.
+ */
+export const MAX_PUBLISH_PER_INVOCATION = 3;
+
+/** Facebook needs a few minutes to finish processing a new Reel before it accepts comments. */
+export const MIN_COMMENT_DELAY_MINUTES = 3;
+
+/** Automatic comment retries: wait 2, 5, then 10 minutes. */
+const COMMENT_RETRY_DELAYS_MIN = [2, 5, 10];
+const MAX_COMMENT_ATTEMPTS = COMMENT_RETRY_DELAYS_MIN.length + 1;
+
+/** Errors a later attempt cannot fix (token / permission problems). */
+const PERMANENT_COMMENT_ERRORS = new Set([
+  "TOKEN_EXPIRED",
+  "INVALID_PAGE_TOKEN",
+  "PAGE_TOKEN_MISMATCH",
+  "MISSING_APP_PERMISSION",
+  "COMMENT_PERMISSION_DENIED"
+]);
+
+/**
+ * Publishes the first few messages in this invocation; the rest are handed to the cron
+ * (status 'queued', next_retry_at = now), which picks them up over the next minutes.
+ */
+export async function runOrDeferQueuedTasks(
+  db: D1Database,
+  env: Env,
+  ctx: ExecutionContext,
+  messages: QueueTaskMessage[]
+): Promise<void> {
+  if (messages.length === 0) return;
+  if (env.REELS_QUEUE) {
+    await env.REELS_QUEUE.sendBatch(messages.map((m) => ({ body: m })));
+    return;
+  }
+  const inline = messages.slice(0, MAX_PUBLISH_PER_INVOCATION);
+  const deferred = messages.slice(MAX_PUBLISH_PER_INVOCATION);
+  const now = nowUtcSeconds();
+  for (const m of deferred) {
+    try {
+      await db
+        .prepare(
+          `UPDATE tasks SET next_retry_at = ?, log = 'Queued - publishing within a few minutes...', updated_at = ?
+           WHERE id = ? AND status = 'queued'`
+        )
+        .bind(now, new Date().toISOString(), m.task_id)
+        .run();
+    } catch {}
+  }
+  ctx.waitUntil(processTaskQueueMessages(db, env, inline));
 }
 
 /**
@@ -177,15 +232,7 @@ export async function enqueueUserPendingTasks(
     };
   }
 
-  // Nếu tài khoản Cloudflare có gắn REELS_QUEUE native thì gửi vào Cloudflare Queues
-  if (env.REELS_QUEUE) {
-    await env.REELS_QUEUE.sendBatch(
-      messagesToEnqueue.map((m) => ({ body: m }))
-    );
-  } else {
-    // Trên Cloudflare Free Plan: thực thi bất đồng bộ qua ctx.waitUntil kết hợp D1 Lease Lock
-    ctx.waitUntil(processTaskQueueMessages(db, env, messagesToEnqueue));
-  }
+  await runOrDeferQueuedTasks(db, env, ctx, messagesToEnqueue);
 
   return {
     success: true,
@@ -483,10 +530,11 @@ export async function consumeSingleTaskMessage(
     );
     if (!cleanComment) {
       await updateTaskCommentState(db, claimedTask.id, "none", "");
-    } else if (commentDelayMin > 0) {
-      // Bình luận hẹn giờ: Cron sẽ đăng khi đến hạn (comment_due_at)
-      const dueAt = nowUtcSeconds() + commentDelayMin * 60;
-      const delayText = formatCommentDelay(commentDelayMin);
+    } else {
+      // Never comment right away: the cron posts it once the Reel is ready on Facebook
+      const effectiveDelayMin = Math.max(commentDelayMin, MIN_COMMENT_DELAY_MINUTES);
+      const dueAt = nowUtcSeconds() + effectiveDelayMin * 60;
+      const delayText = formatCommentDelay(effectiveDelayMin);
       await scheduleTaskComment(db, claimedTask.id, dueAt, `Comment will be posted in ${delayText}.`);
       await updateTaskExecutionState(
         db,
@@ -503,78 +551,6 @@ export async function consumeSingleTaskMessage(
         "comment_scheduled",
         `Auto comment scheduled in ${delayText}.`
       );
-    } else {
-      await updateTaskCommentState(db, claimedTask.id, "processing", "Posting auto comment...");
-      await appendTaskStageLog(
-        db,
-        claimedTask.id,
-        msg.owner_user_id,
-        "INFO",
-        "commenting",
-        "Posting comment on the Reel..."
-      );
-
-      const cmtRes = await postReelCommentViaGraphApi(db, env, {
-        facebookPageId: page.facebook_page_id || claimedTask.facebook_page_id,
-        pageAccessToken: page.page_access_token,
-        postId: rawPostId,
-        videoId: pubRes.video_id || claimedTask.video_id,
-        commentText: cleanComment,
-        ownerUserId: msg.owner_user_id,
-        taskId: claimedTask.id,
-        skipInitialDuplicateCheck: attemptNum <= 1
-      });
-
-      if (cmtRes.success) {
-        await updateTaskCommentState(db, claimedTask.id, "success", cmtRes.message, {
-          commentId: cmtRes.comment_id,
-          commentPostedAt: new Date().toISOString()
-        });
-        if (
-          cmtRes.post_id &&
-          cmtRes.post_id !== (pubRes.video_id || claimedTask.video_id) &&
-          cmtRes.post_id !== rawPostId
-        ) {
-          try {
-            await db
-              .prepare("UPDATE tasks SET post_id = ? WHERE id = ?")
-              .bind(cmtRes.post_id, claimedTask.id)
-              .run();
-          } catch {}
-        }
-        await updateTaskExecutionState(
-          db,
-          claimedTask.id,
-          "success",
-          "Reel published! (Auto comment posted)",
-          { clearLease: true }
-        );
-        await appendTaskStageLog(
-          db,
-          claimedTask.id,
-          msg.owner_user_id,
-          "INFO",
-          "comment_success",
-          cmtRes.message
-        );
-      } else {
-        await updateTaskCommentState(db, claimedTask.id, "failed", cmtRes.message);
-        await updateTaskExecutionState(
-          db,
-          claimedTask.id,
-          "success",
-          `Reel published! (Comment failed: ${cmtRes.message})`,
-          { clearLease: true }
-        );
-        await appendTaskStageLog(
-          db,
-          claimedTask.id,
-          msg.owner_user_id,
-          "WARN",
-          "comment_failed",
-          cmtRes.message
-        );
-      }
     }
 
     // Multi-comment pipeline: each comment is due at publish time + its own delay
@@ -823,13 +799,7 @@ export async function publishSelectedTasksNow(
     });
   }
 
-  if (messagesToEnqueue.length > 0) {
-    if (env.REELS_QUEUE) {
-      await env.REELS_QUEUE.sendBatch(messagesToEnqueue.map((m) => ({ body: m })));
-    } else {
-      ctx.waitUntil(processTaskQueueMessages(db, env, messagesToEnqueue));
-    }
-  }
+  await runOrDeferQueuedTasks(db, env, ctx, messagesToEnqueue);
 
   const msgText =
     messagesToEnqueue.length > 0
@@ -898,11 +868,15 @@ export async function handleNativeQueueBatch(
   env: Env
 ): Promise<void> {
   for (const message of batch.messages) {
-    const res = await consumeSingleTaskMessage(db, env, message.body);
-    if (res.status === "retry") {
-      message.retry({ delaySeconds: res.delaySeconds || 30 });
-    } else {
+    try {
+      // A "retry" result already put the task back in D1 (status 'queued' + next_retry_at),
+      // and the cron re-sends it when due. Retrying here as well would run it twice.
+      await consumeSingleTaskMessage(db, env, message.body);
       message.ack();
+    } catch {
+      // Unexpected crash before the task state was saved: let the Queue deliver it again.
+      // The D1 lease prevents two workers from publishing the same task.
+      message.retry({ delaySeconds: 60 });
     }
   }
 }
@@ -976,7 +950,7 @@ export async function postScheduledTaskComment(
 // MULTI-COMMENT PIPELINE (task_comments)
 // ============================================================================
 
-/** Comments posted inline right after publishing; the rest are picked up by the cron within a minute. */
+/** Max comments of one post handled per call; the rest are picked up by the cron within a minute. */
 const INLINE_COMMENT_LIMIT = 3;
 
 /**
@@ -1039,6 +1013,7 @@ export async function postClaimedTaskComments(
       let ok = false;
       let resultMsg = "";
       let commentId: string | null = null;
+      let permanentError = false;
       try {
         const cmtRes = await postReelCommentViaGraphApi(db, env, {
           facebookPageId: page.facebook_page_id || task.facebook_page_id!,
@@ -1054,9 +1029,26 @@ export async function postClaimedTaskComments(
         ok = cmtRes.success;
         resultMsg = cmtRes.message;
         commentId = cmtRes.comment_id || null;
+        permanentError = !ok && PERMANENT_COMMENT_ERRORS.has(String(cmtRes.error_type || ""));
       } catch (err) {
         ok = false;
-        resultMsg = "Could not reach Facebook. The comment will need a retry.";
+        resultMsg = "Could not reach Facebook.";
+      }
+
+      // Temporary failures (Reel still processing, network, request limits) are retried automatically
+      const attemptsSoFar = Number(row.attempts || 0) + 1;
+      if (!ok && !permanentError && attemptsSoFar < MAX_COMMENT_ATTEMPTS) {
+        const waitMin = COMMENT_RETRY_DELAYS_MIN[attemptsSoFar - 1] ?? COMMENT_RETRY_DELAYS_MIN[COMMENT_RETRY_DELAYS_MIN.length - 1];
+        await rescheduleTaskCommentRow(db, row.id, nowUtcSeconds() + waitMin * 60, resultMsg);
+        await appendTaskStageLog(
+          db,
+          taskId,
+          owner,
+          "WARN",
+          "comment_retry_scheduled",
+          `${label}: ${resultMsg} Retrying automatically in ${waitMin} min.`
+        );
+        continue;
       }
 
       await finishTaskCommentRow(db, row.id, { success: ok, commentId, error: resultMsg });
@@ -1085,7 +1077,7 @@ export async function processTaskComments(
   options: { publishedAtUtc?: number; maxToPost?: number } = {}
 ): Promise<{ posted: number; failed: number }> {
   if (options.publishedAtUtc) {
-    await scheduleTaskCommentsAfterPublish(db, taskId, options.publishedAtUtc);
+    await scheduleTaskCommentsAfterPublish(db, taskId, options.publishedAtUtc, MIN_COMMENT_DELAY_MINUTES * 60);
   }
   const due = await claimDueTaskCommentRows(
     db,

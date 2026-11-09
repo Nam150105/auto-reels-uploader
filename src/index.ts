@@ -2337,7 +2337,7 @@ export async function handleScheduledCron(
   const encryptionKey = getEncryptionKeyMaterial(env);
   const db = getD1Database(env);
   await ensureDatabaseInitialized(db, encryptionKey);
-  return dispatchDueScheduledTasks(db, env, ctx, 15);
+  return dispatchDueScheduledTasks(db, env, ctx);
 }
 
 export async function handleQueueConsumer(

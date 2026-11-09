@@ -9,8 +9,19 @@
 import type { D1Database, Env, ExecutionContext, QueueTaskMessage } from "../types.ts";
 import { nowUtcSeconds } from "../utils/timezone.ts";
 import { randomHex } from "../utils/crypto.ts";
-import { appendTaskStageLog, recordTaskAuditLog, claimDueScheduledComments } from "../db.ts";
-import { processTaskQueueMessages, postScheduledTaskComment, dispatchDueTaskComments } from "../queue/publishQueue.ts";
+import {
+  appendTaskStageLog,
+  recordTaskAuditLog,
+  claimDueScheduledComments,
+  requeueStuckTaskComments,
+  refreshTaskCommentSummary
+} from "../db.ts";
+import {
+  processTaskQueueMessages,
+  postScheduledTaskComment,
+  dispatchDueTaskComments,
+  MAX_PUBLISH_PER_INVOCATION
+} from "../queue/publishQueue.ts";
 import { cleanupExpiredR2Media } from "../services/r2MediaService.ts";
 import { syncDueReelsInsightsBatch } from "../services/reelsInsightsService.ts";
 
@@ -18,7 +29,8 @@ export async function dispatchDueScheduledTasks(
   db: D1Database,
   env: Env,
   ctx: ExecutionContext,
-  batchLimit = 15
+  // With Cloudflare Queues every video runs in its own invocation, so the cron can hand out more per minute
+  batchLimit = env.REELS_QUEUE ? 30 : MAX_PUBLISH_PER_INVOCATION
 ): Promise<{
   checked_at_utc: number;
   claimed_count: number;
@@ -27,13 +39,24 @@ export async function dispatchDueScheduledTasks(
   const now = nowUtcSeconds();
   const isoNow = new Date().toISOString();
 
-  // 0. Đăng các bình luận hẹn giờ đã đến hạn (tối đa 3 mỗi phút)
-  const commentWork = dispatchDueScheduledComments(db, env, now, 3).catch(() => {});
-  if (ctx && typeof ctx.waitUntil === "function") {
-    ctx.waitUntil(commentWork);
-  } else {
-    await commentWork;
-  }
+  // 0. Comments left half-done by a stopped worker go back to the queue
+  try {
+    const stuckTaskIds = await requeueStuckTaskComments(db, now);
+    for (const id of stuckTaskIds) {
+      await refreshTaskCommentSummary(db, id).catch(() => {});
+    }
+  } catch {}
+
+  // Due comments share this run's request budget with publishing:
+  // a few per minute while videos are publishing, more when the minute is free.
+  const startCommentWork = async (limit: number) => {
+    const work = dispatchDueScheduledComments(db, env, now, limit).catch(() => 0);
+    if (ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(work);
+    } else {
+      await work;
+    }
+  };
 
   // 1. Tìm các task đến hạn lịch đăng (status = 'pending' AND scheduled_at IS NOT NULL AND scheduled_at <= now)
   //    HOẶC các task đang chờ retry đến hạn (status = 'queued' AND next_retry_at IS NOT NULL AND next_retry_at <= now)
@@ -60,6 +83,8 @@ export async function dispatchDueScheduledTasks(
       scheduled_at: number | null;
       next_retry_at: number | null;
     }>();
+
+  await startCommentWork(candidateRows && candidateRows.length > 0 ? 4 : 10);
 
   if (!candidateRows || candidateRows.length === 0) {
     // Khi không có task đến hạn cần đăng ngay, chạy đồng bộ Insights định kỳ cho tối đa 2 Reels
@@ -159,10 +184,10 @@ export async function dispatchDueScheduledComments(
   // Multi-comment rows (new composer) first, then legacy single comments
   let multiCount = 0;
   try {
-    multiCount = await dispatchDueTaskComments(db, env, nowUtc, 5);
+    multiCount = await dispatchDueTaskComments(db, env, nowUtc, limit);
   } catch {}
 
-  const due = await claimDueScheduledComments(db, nowUtc, limit);
+  const due = await claimDueScheduledComments(db, nowUtc, Math.min(3, Math.max(0, limit - multiCount)));
   for (const row of due) {
     try {
       await postScheduledTaskComment(db, env, row.id, row.owner_user_id);

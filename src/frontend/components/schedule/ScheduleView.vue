@@ -353,6 +353,7 @@ import type { TaskRecord, TaskStatus } from "@shared/types";
 import EditTaskModal from "../dialogs/EditTaskModal.vue";
 
 const {
+  tasks,
   isLoading,
   activeFilter,
   searchQuery,
@@ -373,19 +374,46 @@ const {
 const isEditModalOpen = ref(false);
 const editingTask = ref<TaskRecord | null>(null);
 let pollInterval: any = null;
+let lastLoadAt = Date.now();
+
+/**
+ * How often to refresh (ms):
+ * - 5s while posts are publishing
+ * - 15s while a post is due soon or comments are waiting / being posted
+ * - 60s otherwise, so the list never goes stale
+ */
+const desiredPollMs = () => {
+  if (taskStats.value.running > 0) return 5000;
+  const nowSec = Date.now() / 1000;
+  const busy = tasks.value.some((t) => {
+    if ((t.status === "pending" || t.status === "scheduled") && t.scheduled_at && t.scheduled_at <= nowSec + 120) return true;
+    if (t.comment_status === "scheduled" || t.comment_status === "processing") return true;
+    return (t.comments || []).some((c) => c.status === "scheduled" || c.status === "processing" || c.status === "pending");
+  });
+  return busy ? 15000 : 60000;
+};
+
+const refreshSilently = async () => {
+  lastLoadAt = Date.now();
+  await loadTasks(true);
+};
+
+const onVisibilityChange = () => {
+  if (document.visibilityState === "visible") refreshSilently();
+};
 
 onMounted(() => {
   loadTasks();
-  // Poll periodically if there are tasks running
   pollInterval = setInterval(() => {
-    if (taskStats.value.running > 0) {
-      loadTasks(true);
-    }
+    if (document.visibilityState !== "visible") return;
+    if (Date.now() - lastLoadAt >= desiredPollMs()) refreshSilently();
   }, 5000);
+  document.addEventListener("visibilitychange", onVisibilityChange);
 });
 
 onUnmounted(() => {
   if (pollInterval) clearInterval(pollInterval);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
 });
 
 const setFilter = (f: string) => {

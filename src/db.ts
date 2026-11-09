@@ -4795,16 +4795,18 @@ export async function insertTaskCommentsBulk(
 export async function scheduleTaskCommentsAfterPublish(
   db: D1Database,
   taskId: number,
-  publishedAtUtc: number
+  publishedAtUtc: number,
+  minDelaySeconds = 0
 ): Promise<number> {
   await ensureTaskCommentsTable(db);
+  // Facebook needs a few minutes to finish processing a new Reel; earlier comments are often rejected.
   const res = await db
     .prepare(
       `UPDATE task_comments
-       SET status = 'scheduled', due_at = ? + delay_minutes * 60, updated_at = ?
+       SET status = 'scheduled', due_at = ? + MAX(delay_minutes * 60, ?), updated_at = ?
        WHERE task_id = ? AND status = 'pending'`
     )
-    .bind(publishedAtUtc, new Date().toISOString(), taskId)
+    .bind(publishedAtUtc, Math.max(0, minDelaySeconds), new Date().toISOString(), taskId)
     .run();
   return Number(res.meta?.changes || 0);
 }
@@ -4877,6 +4879,52 @@ export async function finishTaskCommentRow(
       id
     )
     .run();
+}
+
+/** A comment failed for a temporary reason: put it back in the queue for a later attempt. */
+export async function rescheduleTaskCommentRow(
+  db: D1Database,
+  id: number,
+  dueAtUtc: number,
+  error: string
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE task_comments SET status = 'scheduled', due_at = ?, error_message = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(dueAtUtc, sanitizeSensitiveText(error), new Date().toISOString(), id)
+    .run();
+}
+
+/**
+ * Comments left in 'processing' (the worker stopped mid-way) go back to the queue.
+ * The retry checks Facebook first, so a comment that did get posted is not posted twice.
+ */
+export async function requeueStuckTaskComments(
+  db: D1Database,
+  nowUtc: number,
+  staleSeconds = 600
+): Promise<number[]> {
+  await ensureTaskCommentsTable(db);
+  const cutoffIso = new Date((nowUtc - staleSeconds) * 1000).toISOString();
+  const { results } = await db
+    .prepare(`SELECT id, task_id FROM task_comments WHERE status = 'processing' AND updated_at < ? LIMIT 20`)
+    .bind(cutoffIso)
+    .all<{ id: number; task_id: number }>();
+  const rows = results || [];
+  if (rows.length === 0) return [];
+  const nowIso = new Date().toISOString();
+  for (const row of rows) {
+    await db
+      .prepare(
+        `UPDATE task_comments SET status = 'scheduled', due_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing'`
+      )
+      .bind(nowUtc, nowIso, row.id)
+      .run();
+  }
+  return Array.from(new Set(rows.map((r) => Number(r.task_id))));
 }
 
 /** Put failed comments of a task back in the queue so they are retried right away. */

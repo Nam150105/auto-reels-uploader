@@ -25,7 +25,7 @@ import {
 } from "../src/utils/timezone.ts";
 import { sanitizeSensitiveText } from "../src/utils/sanitize.ts";
 import { consumeSingleTaskMessage } from "../src/queue/publishQueue.ts";
-import { addTask } from "../src/db.ts";
+import { addTask, requeueStuckTaskComments } from "../src/db.ts";
 import { dispatchDueScheduledComments } from "../src/scheduler/cronDispatcher.ts";
 import { processTaskComments } from "../src/queue/publishQueue.ts";
 
@@ -1665,7 +1665,8 @@ async function runAll30Tests() {
   assert.equal(multiTask.comment_text, "");
   assert.equal(multiTask.comment_status, "pending");
 
-  // Giả lập Reels đã đăng xong -> 2 bình luận độ trễ 0 được đăng ngay, bình luận 30 phút chờ Cron
+  // Giả lập Reels đã đăng xong -> không bình luận ngay (Reels cần vài phút để Facebook xử lý):
+  // bình luận độ trễ 0 được hẹn sau 3 phút, bình luận 30 phút chờ Cron
   await d1
     .prepare("UPDATE tasks SET status = 'success', publish_status = 'success', video_id = 'vid_multi', post_id = 'page_101_vid_multi' WHERE id = ?")
     .bind(multiTaskId)
@@ -1673,7 +1674,11 @@ async function runAll30Tests() {
   const fbCommentsBefore = commentsCreatedOnFacebook.length;
   const publishedAt = Math.floor(Date.now() / 1000);
   const inline = await processTaskComments(d1, env, multiTaskId, { publishedAtUtc: publishedAt });
-  assert.equal(inline.posted, 2, `posted=${inline.posted} failed=${inline.failed}`);
+  assert.equal(inline.posted, 0, "Không được bình luận ngay khi Reels vừa đăng");
+  mRows = await multiRows();
+  assert.deepEqual(mRows.map((r) => r.status), ["scheduled", "scheduled", "scheduled"]);
+  assert.equal(Number(mRows[0].due_at), publishedAt + 3 * 60, "Độ trễ tối thiểu 3 phút");
+  await dispatchDueScheduledComments(d1, env, publishedAt + 3 * 60 + 5, 5);
   const postedNow = commentsCreatedOnFacebook.slice(fbCommentsBefore);
   assert.equal(postedNow.length, 2);
   assert.equal(postedNow[0].message, "First comment");
@@ -1703,7 +1708,47 @@ async function runAll30Tests() {
   assert.equal(listedMulti.comments.length, 3);
   assert.equal(listedMulti.comments[1].has_image, true);
   await d1.prepare("DELETE FROM task_comments WHERE task_id = ?").bind(multiTaskId).run();
-  console.log("  ✓ [Test 15d] Nhiều bình luận / bài, bình luận kèm ảnh, độ trễ riêng từng bình luận");
+
+  // Bình luận lỗi tạm thời (mạng) được tự động thử lại sau 2 phút, không đánh dấu thất bại ngay
+  const retryCmtResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_101"],
+    media_id: composerMediaId,
+    publish_mode: "schedule",
+    ...slotOk,
+    caption: "Comment retry test",
+    comments: [{ text: "Retry me", delay_minutes: 0 }]
+  });
+  const retryCmtTaskId = (await retryCmtResp.json()).task_ids[0];
+  composerTaskIds.push(retryCmtTaskId);
+  await d1
+    .prepare("UPDATE tasks SET status = 'success', publish_status = 'success', video_id = 'vid_retry_cmt', post_id = 'page_101_vid_retry_cmt' WHERE id = ?")
+    .bind(retryCmtTaskId)
+    .run();
+  const retryPublishedAt = Math.floor(Date.now() / 1000);
+  await processTaskComments(d1, env, retryCmtTaskId, { publishedAtUtc: retryPublishedAt });
+  const retryRow = () =>
+    d1.prepare("SELECT status, attempts, due_at, error_message FROM task_comments WHERE task_id = ?").bind(retryCmtTaskId).first();
+  simulateCommentNetworkError = true;
+  await dispatchDueScheduledComments(d1, env, retryPublishedAt + 3 * 60 + 5, 5);
+  simulateCommentNetworkError = false;
+  let rRow = await retryRow();
+  assert.equal(rRow.status, "scheduled", "Lỗi tạm thời phải được hẹn thử lại");
+  assert.equal(Number(rRow.attempts), 1);
+  assert.ok(Number(rRow.due_at) >= Math.floor(Date.now() / 1000) + 2 * 60 - 5, "Thử lại sau ~2 phút");
+  await dispatchDueScheduledComments(d1, env, Number(rRow.due_at) + 5, 5);
+  rRow = await retryRow();
+  assert.equal(rRow.status, "success");
+
+  // Bình luận kẹt ở 'processing' (worker bị dừng giữa chừng) được đưa lại hàng đợi
+  await d1
+    .prepare("UPDATE task_comments SET status = 'processing', updated_at = ? WHERE task_id = ?")
+    .bind(new Date(Date.now() - 20 * 60 * 1000).toISOString(), retryCmtTaskId)
+    .run();
+  const stuckIds = await requeueStuckTaskComments(d1, Math.floor(Date.now() / 1000));
+  assert.ok(stuckIds.includes(retryCmtTaskId));
+  assert.equal((await retryRow()).status, "scheduled");
+  await d1.prepare("DELETE FROM task_comments WHERE task_id = ?").bind(retryCmtTaskId).run();
+  console.log("  ✓ [Test 15d] Nhiều bình luận / bài, bình luận kèm ảnh, độ trễ riêng, tự thử lại & gỡ kẹt");
 
   // --------------------------------------------------------------------------
   // [TEST 15e] Thống kê lấy trực tiếp từ Meta: 5 số / Page, tổng = cộng các Page
@@ -1937,8 +1982,18 @@ async function runAll30Tests() {
   const finishedTask1 = tasksAfterPublish.find((t) => t.id === createdTask1.id);
   assert.equal(finishedTask1.status, "success");
   assert.equal(finishedTask1.video_url, "https://www.facebook.com/reel/vid_reel_1");
-  assert.ok(finishedTask1.log.includes("Auto comment posted"));
-  console.log("  ✓ [Test 20] Queue Publishing xuất bản Reels từ R2 + Auto-Comment thành công");
+  // Bình luận không đăng ngay mà được hẹn tối thiểu 3 phút sau khi Reels lên
+  assert.ok(finishedTask1.log.includes("Comment will be posted in 3 min"), finishedTask1.log);
+  assert.equal(finishedTask1.comment_status, "scheduled");
+  await dispatchDueScheduledComments(d1, env, Math.floor(Date.now() / 1000) + 3 * 60 + 5, 5);
+  const task1AfterComment = await d1
+    .prepare("SELECT comment_status, comment_id, log FROM tasks WHERE id = ?")
+    .bind(createdTask1.id)
+    .first();
+  assert.equal(task1AfterComment.comment_status, "success");
+  assert.ok(task1AfterComment.comment_id);
+  assert.ok(task1AfterComment.log.includes("Auto comment posted"));
+  console.log("  ✓ [Test 20] Queue Publishing xuất bản Reels từ R2 + Auto-Comment (sau 3 phút) thành công");
 
   // Kiểm tra Idempotency: Gửi lại đúng Queue Message của finishedTask1 lần nữa -> Không được gọi Graph API lần 2!
   const callsBeforeDup = graphApiReelsCalled;
@@ -2303,6 +2358,10 @@ async function runAll30Tests() {
     })
   });
 
+  // Bình luận được hẹn tối thiểu 3 phút sau khi Reels lên: chạy Cron "3 phút sau" để đăng
+  const flushDueComments = () =>
+    dispatchDueScheduledComments(d1, env, Math.floor(Date.now() / 1000) + 3 * 60 + 5, 10);
+
   // [Kịch bản 1] Đăng Reels không có comment:
   // Bỏ qua hoàn toàn bước comment, Reels thành công, comment_status = 'none'
   const taskNoCmtResp = await callWorker("/api/tasks", {
@@ -2357,6 +2416,7 @@ async function runAll30Tests() {
     attempt: 1,
     enqueued_at: Math.floor(Date.now() / 1000)
   });
+  await flushDueComments();
   assert.equal(resWithCmt.status, "ack");
   const taskWithCmtDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
   const finishedWithCmt = taskWithCmtDb.find(t => t.id === taskWithCmt.id);
@@ -2393,6 +2453,7 @@ async function runAll30Tests() {
     attempt: 1,
     enqueued_at: Math.floor(Date.now() / 1000)
   });
+  await flushDueComments();
   const taskPermDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
   const finishedPerm = taskPermDb.find(t => t.id === taskPerm.id);
   assert.equal(finishedPerm.status, "success", "Reels vẫn phải thành công khi comment thiếu quyền");
@@ -2425,6 +2486,7 @@ async function runAll30Tests() {
     attempt: 1,
     enqueued_at: Math.floor(Date.now() / 1000)
   });
+  await flushDueComments();
   const taskNetDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
   const finishedNet = taskNetDb.find(t => t.id === taskNet.id);
   assert.equal(finishedNet.status, "success", "Reels vẫn phải thành công khi comment lỗi mạng");
@@ -2455,6 +2517,7 @@ async function runAll30Tests() {
     attempt: 1,
     enqueued_at: Math.floor(Date.now() / 1000)
   });
+  await flushDueComments();
   const taskTimeoutDb = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
   const finishedTimeout = taskTimeoutDb.find(t => t.id === taskTimeout.id);
   assert.equal(finishedTimeout.status, "success");
@@ -3331,6 +3394,8 @@ async function runAll30Tests() {
     attempt: 1,
     enqueued_at: Math.floor(Date.now() / 1000)
   });
+  // Bình luận được hẹn 3 phút sau khi Reels lên
+  await dispatchDueScheduledComments(d1, env, Math.floor(Date.now() / 1000) + 3 * 60 + 5, 10);
 
   const taskAfterPubNow = await (
     await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })

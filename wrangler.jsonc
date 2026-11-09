@@ -50,20 +50,21 @@
 			"binding": "auto_reels_media",
 			"bucket_name": "auto-reels-media"
 		}
-	]
-	// (Tùy chọn khi nâng cấp Workers Paid) Cloudflare Queues cho Background Publishing:
-	// Trên gói Cloudflare Free, Worker tự động sử dụng D1 Queue Engine + Cron + ctx.waitUntil.
-	// "queues": {
-	//   "producers": [
-	//     { "binding": "REELS_QUEUE", "queue": "reels-publish-queue" }
-	//   ],
-	//   "consumers": [
-	//     {
-	//       "queue": "reels-publish-queue",
-	//       "max_batch_size": 5,
-	//       "max_batch_timeout": 5,
-	//       "max_retries": 3
-	//     }
-	//   ]
-	// }
+	],
+	// Cloudflare Queues: mỗi video được đăng trong một lần chạy riêng (quota request riêng).
+	// Retry do Cron + D1 (next_retry_at) đảm nhiệm, Queue chỉ giao việc.
+	"queues": {
+		"producers": [
+			{ "binding": "REELS_QUEUE", "queue": "reels-publish-queue" }
+		],
+		"consumers": [
+			{
+				"queue": "reels-publish-queue",
+				"max_batch_size": 1,
+				"max_batch_timeout": 1,
+				"max_retries": 2,
+				"max_concurrency": 3
+			}
+		]
+	}
 }

@@ -1820,6 +1820,8 @@ export async function publishReelViaGraphApi(
     }
   }
 
+  // Until "finish" is sent nothing can be live on Facebook, so any failure before it is safe to retry
+  let finishAttempted = false;
   try {
     // GIAI ĐOẠN 1: Khởi tạo phiên upload Reels (upload_phase=start)
     if (onStageLog) {
@@ -1860,7 +1862,7 @@ export async function publishReelViaGraphApi(
         success: false,
         error_code: code || startResp.status,
         error_subcode: subcode || null,
-        retryable: !isTokenErr && startResp.status >= 500,
+        retryable: !isTokenErr && (startResp.status >= 500 || isTransientMetaCode(code)),
         stage: "start_session",
         message: sanitizeSensitiveText(
           `Could not start the Reel upload: ${err.message || startResp.statusText}`
@@ -1936,7 +1938,7 @@ export async function publishReelViaGraphApi(
         video_id: videoId,
         error_code: code,
         error_subcode: subcode || null,
-        retryable: uploadResp.status >= 500 || code === 1 || code === 2,
+        retryable: uploadResp.status >= 500 || isTransientMetaCode(code),
         stage: "upload_binary",
         message: sanitizeSensitiveText(
           `Could not upload the video to Facebook: ${err.message || uploadResp.statusText}`
@@ -1958,6 +1960,7 @@ export async function publishReelViaGraphApi(
     });
 
     let finishResp: Response;
+    finishAttempted = true;
     try {
       finishResp = await fetch(
         `${cfg.graphBase}/${facebookPageId}/video_reels?${finishParams.toString()}`,
@@ -2024,15 +2027,22 @@ export async function publishReelViaGraphApi(
       message: "Reel published!"
     };
   } catch (err) {
+    // Typically a network error or the per-run request limit. Before "finish" a retry cannot duplicate the Reel.
     return {
       success: false,
-      retryable: false,
-      stage: "exception",
+      retryable: !finishAttempted,
+      ambiguous_publish: finishAttempted,
+      stage: finishAttempted ? "finish_publish" : "exception",
       message: sanitizeSensitiveText(
         `Unexpected error while publishing the Reel: ${(err as Error).message}`
       )
     };
   }
+}
+
+/** Meta error codes that mean "try again later" (temporary / rate limit). */
+function isTransientMetaCode(code: number): boolean {
+  return code === 1 || code === 2 || code === 4 || code === 17 || code === 32 || code === 341 || code === 613;
 }
 
 /**
