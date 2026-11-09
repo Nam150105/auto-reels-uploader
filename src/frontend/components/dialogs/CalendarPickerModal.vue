@@ -102,26 +102,26 @@
         </div>
       </div>
 
-      <p class="mt-3 text-[11px] text-slate-500 bg-slate-50 rounded-lg px-2.5 py-1.5">
-        Earliest available: <strong class="text-slate-700">{{ earliestDisplay }}</strong> (at least {{ leadMinutes }} minutes from now).
+      <p class="mt-3 text-[11px] text-slate-500 bg-slate-50/80 rounded-xl px-2.5 py-1.5 border border-slate-200/60">
+        Thời điểm sớm nhất có thể: <strong class="text-blue-700 font-bold">{{ earliestDisplay }}</strong> (cách hiện tại ít nhất {{ leadMinutes }} phút).
       </p>
 
       <div class="flex items-center justify-between pt-3 mt-2 border-t border-slate-100 text-xs">
         <button
           type="button"
           @click="selectEarliest"
-          class="text-blue-600 hover:text-blue-800 font-semibold px-2 py-1 rounded hover:bg-blue-50 transition"
+          class="text-blue-600 hover:text-blue-800 font-bold px-2 py-1 rounded-lg hover:bg-blue-50 transition"
         >
-          Earliest
+          Sớm nhất
         </button>
         <div class="flex items-center gap-2">
-          <span class="text-slate-600 font-mono text-[11px]">{{ selectionDisplay }}</span>
+          <span class="text-slate-700 font-bold font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded-md">{{ selectionDisplay }}</span>
           <button
             type="button"
             @click="confirmSelection"
-            class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-sm transition"
+            class="px-3.5 py-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-lg shadow-2xs transition"
           >
-            OK
+            Xác nhận
           </button>
         </div>
       </div>
@@ -154,20 +154,20 @@ const emit = defineEmits<{
 }>();
 
 const leadMinutes = computed(() => props.minLeadMinutes);
-const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const weekdays = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 const monthNames = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December"
+  "Tháng 1",
+  "Tháng 2",
+  "Tháng 3",
+  "Tháng 4",
+  "Tháng 5",
+  "Tháng 6",
+  "Tháng 7",
+  "Tháng 8",
+  "Tháng 9",
+  "Tháng 10",
+  "Tháng 11",
+  "Tháng 12"
 ];
 const hoursList = Array.from({ length: 24 }, (_, i) => padZero(i));
 const minutesList = Array.from({ length: 60 }, (_, i) => padZero(i));

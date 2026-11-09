@@ -12,14 +12,14 @@
         <textarea
           v-model="item.text"
           rows="2"
-          :placeholder="idx === 0 ? 'Write a comment (e.g. a product link or contact info)...' : 'Write another comment...'"
-          class="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-none"
+          :placeholder="idx === 0 ? 'Nhập nội dung bình luận (link sản phẩm, thông tin liên hệ)...' : 'Nhập bình luận tiếp theo...'"
+          class="flex-1 px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/40 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 resize-none transition"
         ></textarea>
         <button
           type="button"
           @click="removeAt(idx)"
-          class="mt-1 p-1 text-slate-400 hover:text-rose-500 rounded transition"
-          title="Remove comment"
+          class="mt-1 p-1 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-rose-50 transition"
+          title="Xóa bình luận này"
         >
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -47,20 +47,20 @@
             v-if="!item.isUploading"
             type="button"
             @click="clearImage(item)"
-            class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-slate-700 text-white text-[10px] leading-none flex items-center justify-center"
-            title="Remove image"
+            class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-slate-700 text-white text-[10px] leading-none flex items-center justify-center shadow-xs"
+            title="Xóa ảnh"
           >
             ×
           </button>
         </div>
         <label
           v-else
-          class="flex items-center gap-1 px-2 py-1 rounded-lg border border-dashed border-slate-300 text-[11px] text-slate-500 hover:border-blue-500 hover:text-blue-600 cursor-pointer transition"
+          class="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-dashed border-slate-300 bg-white text-[11px] font-bold text-slate-500 hover:border-blue-400 hover:text-blue-600 cursor-pointer transition shadow-2xs"
         >
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          <span>Add photo</span>
+          <span>Thêm ảnh</span>
           <input
             type="file"
             accept="image/jpeg,image/png,image/gif,image/webp"
@@ -72,7 +72,7 @@
         <!-- Timing -->
         <select
           v-model.number="item.delayMinutes"
-          class="px-2 py-1 text-[11px] rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
+          class="px-2.5 py-1 text-[11px] rounded-lg border border-slate-200 bg-white font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700 shadow-2xs"
         >
           <option v-for="opt in COMMENT_DELAY_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
@@ -85,14 +85,14 @@
       v-if="modelValue.length < MAX_COMMENTS"
       type="button"
       @click="addComment"
-      class="flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-700 transition px-1 py-1"
+      class="flex items-center gap-1.5 text-xs font-bold text-purple-600 hover:text-purple-700 transition px-2 py-1 rounded-lg hover:bg-purple-50/50"
     >
-      <span class="text-base leading-none">+</span>
-      <span>{{ modelValue.length === 0 ? "Add a comment" : "Add another comment" }}</span>
+      <span class="text-base leading-none font-bold">+</span>
+      <span>{{ modelValue.length === 0 ? "Thêm một bình luận" : "Thêm một bình luận khác" }}</span>
     </button>
-    <p v-else class="text-[11px] text-slate-400">Maximum {{ MAX_COMMENTS }} comments per post.</p>
+    <p v-else class="text-[11px] text-slate-400">Tối đa {{ MAX_COMMENTS }} bình luận cho mỗi bài viết.</p>
     <p class="text-[11px] text-slate-400">
-      Photos: JPG, PNG, GIF or WEBP up to 8 MB. Facebook does not allow videos in comments.
+      Hỗ trợ ảnh: JPG, PNG, GIF hoặc WEBP tối đa 8 MB. Facebook không hỗ trợ video trong bình luận.
     </p>
   </div>
 </template>

@@ -1,8 +1,8 @@
 <template>
   <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm select-none">
     <div class="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
-      <span class="text-xs font-semibold text-slate-500">Facebook preview</span>
-      <span class="inline-flex items-center gap-1 text-[10px] font-bold bg-slate-900 text-white px-2 py-0.5 rounded-full">
+      <span class="text-xs font-bold text-slate-700">Xem trước Facebook</span>
+      <span class="inline-flex items-center gap-1 text-[10px] font-bold bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-2 py-0.5 rounded-full shadow-2xs">
         <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
         Reels
       </span>
@@ -28,10 +28,10 @@
         v-else
         class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gradient-to-b from-slate-800 to-slate-950 text-slate-400"
       >
-        <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg class="w-10 h-10 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
         </svg>
-        <span class="text-[11px]">Choose a video to preview</span>
+        <span class="text-[11px] text-slate-300">Chọn video để xem trước</span>
       </div>
 
       <!-- Top bar -->
@@ -79,7 +79,7 @@
           <svg class="w-6 h-6 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
             <path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z" />
           </svg>
-          <span class="text-[10px] font-semibold drop-shadow">Like</span>
+          <span class="text-[10px] font-semibold drop-shadow">Thích</span>
         </div>
         <div class="flex flex-col items-center gap-0.5">
           <svg class="w-6 h-6 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
@@ -91,7 +91,7 @@
           <svg class="w-6 h-6 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
             <path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11z" />
           </svg>
-          <span class="text-[10px] font-semibold drop-shadow">Share</span>
+          <span class="text-[10px] font-semibold drop-shadow">Chia sẻ</span>
         </div>
         <svg class="w-5 h-5 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
           <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
@@ -110,7 +110,7 @@
           </div>
           <span class="text-[13px] font-semibold truncate drop-shadow">{{ pageName }}</span>
           <span class="text-[11px] text-white/80">·</span>
-          <span class="text-[11px] font-semibold border border-white/80 rounded-md px-1.5 py-px flex-shrink-0">Follow</span>
+          <span class="text-[11px] font-semibold border border-white/80 rounded-md px-1.5 py-px flex-shrink-0">Theo dõi</span>
         </div>
 
         <p
@@ -128,14 +128,14 @@
           @click="captionExpanded = !captionExpanded"
           class="text-[11px] font-semibold text-white/80"
         >
-          {{ captionExpanded ? 'See less' : 'See more' }}
+          {{ captionExpanded ? 'Thu gọn' : 'Xem thêm' }}
         </button>
 
         <div class="flex items-center gap-1.5 text-[11px] text-white/90 min-w-0">
           <svg class="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 3v10.55A4 4 0 1014 17V7h4V3h-6z" />
           </svg>
-          <span class="truncate">{{ pageName }} · Original audio</span>
+          <span class="truncate">{{ pageName }} · Âm thanh gốc</span>
         </div>
       </div>
 
@@ -147,7 +147,7 @@
 
     <!-- Auto-comments -->
     <div v-if="visibleComments.length" class="mt-3 max-w-[270px] mx-auto space-y-2">
-      <p class="text-[10px] font-bold uppercase tracking-wide text-slate-400">Comments</p>
+      <p class="text-[10px] font-bold uppercase tracking-wide text-slate-400">Bình luận tự động</p>
       <div v-for="c in visibleComments" :key="c.id" class="flex items-start gap-2">
         <div class="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 bg-slate-200">
           <img v-if="pageAvatar" :src="pageAvatar" alt="" class="w-full h-full object-cover" />
@@ -156,7 +156,7 @@
           <div class="bg-slate-100 rounded-2xl px-3 py-2">
             <div class="flex items-center gap-1.5">
               <span class="text-[12px] font-semibold text-slate-900 truncate">{{ pageName }}</span>
-              <span class="text-[9px] font-semibold text-blue-700 bg-blue-50 px-1.5 rounded">Author</span>
+              <span class="text-[9px] font-semibold text-blue-700 bg-blue-50 px-1.5 rounded">Tác giả</span>
             </div>
             <p v-if="c.text.trim()" class="text-[12px] text-slate-800 whitespace-pre-line break-words">{{ c.text }}</p>
           </div>

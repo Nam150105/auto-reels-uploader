@@ -503,7 +503,7 @@ async function runAll30Tests() {
   });
   assert.equal(authedPageResp1.status, 200, "Đã đăng nhập truy cập /page phải trả về 200 OK");
   const authedPageHtml = await authedPageResp1.text();
-  assert.ok(authedPageHtml.includes("FB Reels Auto Scheduler"), "Trang /page phải hiển thị giao diện chính");
+  assert.ok(authedPageHtml.includes("NNN REELS FB") || authedPageHtml.includes("FB Reels Auto Scheduler"), "Trang /page phải hiển thị giao diện chính");
 
   const authedPageReloadResp = await callWorker("/page", {
     headers: { Cookie: `session_token=${tokenA}`, "If-None-Match": '"cached-etag-123"' }

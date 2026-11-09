@@ -4,10 +4,10 @@
       <!-- Header -->
       <div class="flex items-center justify-between pb-3 border-b border-slate-100">
         <div class="flex items-center gap-2">
-          <svg class="w-5 h-5 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg class="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
           </svg>
-          <h3 class="text-base font-bold text-slate-800">Auto-comments</h3>
+          <h3 class="text-base font-bold text-slate-800">Cấu hình tự động bình luận</h3>
         </div>
         <button type="button" @click="close" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -17,7 +17,7 @@
       </div>
 
       <p class="text-xs text-slate-500 py-3 leading-relaxed">
-        After the Reel is published, each comment below is posted by the Page at its own time.
+        Sau khi video xuất bản thành công, từng bình luận bên dưới sẽ tự động được đăng theo thời gian đã định.
       </p>
 
       <div class="flex-1 overflow-y-auto pr-1 scrollbar-thin">
@@ -28,17 +28,17 @@
         <button
           type="button"
           @click="close"
-          class="px-4 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium transition"
+          class="px-4 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-bold transition"
         >
-          Cancel
+          Hủy
         </button>
         <button
           type="button"
           :disabled="isBusy"
           @click="save"
-          class="px-5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold shadow-sm transition"
+          class="px-5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold shadow-xs transition"
         >
-          {{ isBusy ? "Uploading..." : "Save" }}
+          {{ isBusy ? "Đang tải ảnh..." : "Lưu bình luận" }}
         </button>
       </div>
     </div>
@@ -70,7 +70,6 @@ watch(
   () => props.isOpen,
   (open) => {
     if (open) {
-      // Edit a copy so "Cancel" keeps the row unchanged
       items.value = props.initialComments.length
         ? props.initialComments.map((c) => ({ ...c }))
         : [createEmptyComment()];

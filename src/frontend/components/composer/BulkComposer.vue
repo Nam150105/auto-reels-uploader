@@ -1,53 +1,67 @@
 <template>
   <div class="h-full flex flex-col p-4 lg:p-6 overflow-y-auto select-none">
     <!-- Top bar: post count & submit -->
-    <div class="flex flex-wrap items-center justify-end gap-3 mb-4 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs">
-      <span class="text-xs text-slate-500 font-medium">
-        Posts: <strong class="text-slate-800">{{ rows.length }}</strong>
-      </span>
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
+        <span class="text-xs font-bold text-slate-800">
+          Tổng số bài đăng hàng loạt: <strong class="text-indigo-600 font-extrabold">{{ rows.length }}</strong> bài
+        </span>
+      </div>
 
-      <button
-        type="button"
-        :disabled="isSubmitting || rows.length === 0"
-        @click="handleSubmitAll"
-        class="flex items-center gap-2 px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition"
-      >
-        <svg v-if="isSubmitting" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-        </svg>
-        <span>{{ isSubmitting ? "Scheduling..." : "Schedule posts" }}</span>
-      </button>
+      <div class="flex items-center gap-2.5">
+        <button
+          type="button"
+          @click="addNewRow"
+          class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs border border-blue-200/80 shadow-2xs transition"
+        >
+          <span class="text-base font-normal leading-none">+</span>
+          <span>Tạo 1 bài đăng mới</span>
+        </button>
+
+        <button
+          type="button"
+          :disabled="isSubmitting || rows.length === 0"
+          @click="handleSubmitAll"
+          class="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition"
+        >
+          <svg v-if="isSubmitting" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          <span>{{ isSubmitting ? "Đang lên lịch..." : "Lên lịch tất cả bài viết" }}</span>
+        </button>
+      </div>
     </div>
 
     <!-- Bulk posts table -->
-    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs flex-1 flex flex-col min-h-[350px]">
+    <div class="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs flex-1 flex flex-col min-h-[350px]">
       <div class="overflow-x-auto flex-1 scrollbar-thin">
         <table class="w-full text-xs text-left">
-          <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+          <thead class="bg-slate-50/80 text-slate-600 font-bold border-b border-slate-200/80">
             <tr>
               <th class="py-3 px-4 w-10 text-center">#</th>
-              <th class="py-3 px-4 w-64">Pages</th>
-              <th class="py-3 px-4 min-w-[240px]">Caption</th>
-              <th class="py-3 px-4 w-28 text-center">Video</th>
-              <th class="py-3 px-4 w-48">Publish time (GMT+7)</th>
-              <th class="py-3 px-4 w-28 text-center">Comments</th>
+              <th class="py-3 px-4 w-64">Kênh đăng</th>
+              <th class="py-3 px-4 min-w-[240px]">Nội dung (Caption)</th>
+              <th class="py-3 px-4 w-28 text-center">Video Reels</th>
+              <th class="py-3 px-4 w-48">Thời gian đăng (GMT+7)</th>
+              <th class="py-3 px-4 w-28 text-center">Bình luận</th>
               <th class="py-3 px-4 w-12 text-center"></th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
-            <tr v-for="(row, idx) in rows" :key="row.id" class="hover:bg-slate-50/60 transition group align-top">
-              <td class="py-3 px-4 text-center text-slate-400 font-semibold">{{ idx + 1 }}</td>
+            <tr v-for="(row, idx) in rows" :key="row.id" class="hover:bg-blue-50/20 transition group align-top">
+              <td class="py-3.5 px-4 text-center text-slate-400 font-bold">{{ idx + 1 }}</td>
 
               <!-- Pages -->
-              <td class="py-3 px-4">
+              <td class="py-3.5 px-4">
                 <div class="relative">
                   <div
                     @click="togglePagePicker(row, $event)"
-                    class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:border-blue-400 text-xs cursor-pointer flex items-center justify-between transition"
+                    class="px-2.5 py-1.5 rounded-xl border border-slate-200/90 bg-white hover:border-blue-400 text-xs cursor-pointer flex items-center justify-between transition shadow-2xs"
                   >
-                    <span v-if="row.selectedPageIds.length === 0" class="text-slate-400">Select Pages</span>
-                    <span v-else class="text-slate-800 font-medium truncate">
+                    <span v-if="row.selectedPageIds.length === 0" class="text-slate-400 font-medium">Chọn Fanpage...</span>
+                    <span v-else class="text-slate-800 font-semibold truncate">
                       {{ getSelectedPagesSummary(row.selectedPageIds) }}
                     </span>
                     <svg class="w-3.5 h-3.5 text-slate-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -59,22 +73,22 @@
               </td>
 
               <!-- Caption -->
-              <td class="py-3 px-4">
+              <td class="py-3.5 px-4">
                 <textarea
                   v-model="row.caption"
                   rows="2"
-                  placeholder="Write a caption..."
-                  class="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-none transition"
+                  placeholder="Nhập caption..."
+                  class="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200/90 bg-slate-50/30 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 resize-none transition"
                 ></textarea>
                 <p v-if="row.errorMessage" class="mt-1 text-[11px] text-rose-600 font-medium">{{ row.errorMessage }}</p>
               </td>
 
               <!-- Video -->
-              <td class="py-3 px-4 text-center">
+              <td class="py-3.5 px-4 text-center">
                 <div class="flex items-center justify-center">
                   <label
-                    class="cursor-pointer p-1.5 rounded-lg border border-dashed border-slate-300 hover:border-blue-500 hover:bg-blue-50 transition relative"
-                    :title="row.mediaFileName || 'Choose a video'"
+                    class="cursor-pointer p-2 rounded-xl border border-dashed border-blue-200 hover:border-blue-500 hover:bg-blue-50/40 transition relative shadow-2xs bg-white"
+                    :title="row.mediaFileName || 'Bấm để chọn video'"
                   >
                     <input
                       type="file"
@@ -90,7 +104,7 @@
                     </div>
                     <div v-else-if="!row.mediaId" class="text-[10px] font-bold text-rose-600 flex items-center gap-1">
                       <span>✕</span>
-                      <span class="max-w-[60px] truncate">Retry</span>
+                      <span class="max-w-[60px] truncate">Thử lại</span>
                     </div>
                     <div v-else class="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
                       <span>✓</span>
@@ -104,15 +118,15 @@
               </td>
 
               <!-- Publish time -->
-              <td class="py-3 px-4">
+              <td class="py-3.5 px-4">
                 <button
                   type="button"
                   @click="openRowCalendar(row)"
-                  class="w-full px-2.5 py-1.5 rounded-lg border bg-white hover:border-blue-400 text-xs flex items-center justify-between transition"
-                  :class="isScheduleSlotAllowed(row.scheduleDate, row.scheduleTime) ? 'border-slate-200 text-slate-700' : 'border-rose-300 text-rose-600'"
-                  :title="isScheduleSlotAllowed(row.scheduleDate, row.scheduleTime) ? '' : 'This time has passed. Please pick a new one.'"
+                  class="w-full px-2.5 py-1.5 rounded-xl border bg-white hover:border-blue-400 text-xs flex items-center justify-between transition shadow-2xs"
+                  :class="isScheduleSlotAllowed(row.scheduleDate, row.scheduleTime) ? 'border-slate-200/90 text-slate-700' : 'border-rose-300 text-rose-600'"
+                  :title="isScheduleSlotAllowed(row.scheduleDate, row.scheduleTime) ? '' : 'Thời gian này đã qua. Vui lòng chọn giờ mới.'"
                 >
-                  <span class="flex items-center gap-1.5 truncate">
+                  <span class="flex items-center gap-1.5 truncate font-medium">
                     <svg class="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
@@ -125,28 +139,28 @@
               </td>
 
               <!-- Comments -->
-              <td class="py-3 px-4 text-center">
+              <td class="py-3.5 px-4 text-center">
                 <button
                   type="button"
                   @click="openRowCommentModal(row)"
-                  class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold transition"
-                  :class="filledComments(row.comments).length ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-500 hover:border-blue-400 hover:text-blue-600'"
+                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-[11px] font-bold transition shadow-2xs"
+                  :class="filledComments(row.comments).length ? 'border-purple-200 bg-purple-50 text-purple-700' : 'border-slate-200 text-slate-500 hover:border-blue-400 hover:text-blue-600 bg-white'"
                   :title="commentSummary(row)"
                 >
                   <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                   </svg>
-                  <span>{{ filledComments(row.comments).length ? filledComments(row.comments).length : "Add" }}</span>
+                  <span>{{ filledComments(row.comments).length ? filledComments(row.comments).length : "+ Thêm" }}</span>
                 </button>
               </td>
 
               <!-- Delete row -->
-              <td class="py-3 px-4 text-center">
+              <td class="py-3.5 px-4 text-center">
                 <button
                   type="button"
                   @click="deleteRow(idx)"
-                  class="p-1 text-slate-400 hover:text-rose-500 rounded transition"
-                  title="Remove this post"
+                  class="p-1 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition"
+                  title="Xóa bài đăng này"
                 >
                   <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -162,10 +176,10 @@
         <button
           type="button"
           @click="addNewRow"
-          class="flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:text-blue-700 transition px-2 py-1"
+          class="flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:text-blue-700 transition px-2.5 py-1.5 rounded-lg hover:bg-blue-50/60"
         >
-          <span class="text-base font-normal">+</span>
-          <span>Add a post</span>
+          <span class="text-base font-bold leading-none">+</span>
+          <span>Tạo 1 bài đăng mới</span>
         </button>
       </div>
     </div>
@@ -176,7 +190,7 @@
         <div class="fixed inset-0 z-[60]" @click="closePagePicker"></div>
         <div
           ref="pickerPanelRef"
-          class="fixed w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-3 z-[61]"
+          class="fixed w-80 bg-white rounded-2xl shadow-xl border border-slate-200 p-3 z-[61]"
           :style="{ top: `${pickerPos.top}px`, left: `${pickerPos.left}px` }"
         >
           <PagePicker v-model="pickerRow.selectedPageIds" :pages="pages" list-class="max-h-64" />
@@ -185,17 +199,17 @@
               v-if="rows.length > 1"
               type="button"
               @click="applyPagesToAllRows(pickerRow)"
-              class="text-[11px] font-semibold text-blue-600 hover:text-blue-700"
+              class="text-[11px] font-bold text-blue-600 hover:text-blue-700"
             >
-              Use these Pages for all posts
+              Áp dụng cho tất cả bài viết
             </button>
             <span v-else></span>
             <button
               type="button"
               @click="closePagePicker"
-              class="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold"
+              class="px-3.5 py-1 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-[11px] font-bold shadow-2xs"
             >
-              Done
+              Xong
             </button>
           </div>
         </div>

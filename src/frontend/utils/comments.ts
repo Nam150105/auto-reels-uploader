@@ -4,21 +4,21 @@ import type { CommentPayload } from "../services/api";
 export const MAX_COMMENTS = 10;
 
 export const COMMENT_DELAY_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 0, label: "Right after publishing" },
-  { value: 5, label: "5 minutes later" },
-  { value: 10, label: "10 minutes later" },
-  { value: 30, label: "30 minutes later" },
-  { value: 60, label: "1 hour later" },
-  { value: 120, label: "2 hours later" },
-  { value: 360, label: "6 hours later" },
-  { value: 720, label: "12 hours later" },
-  { value: 1440, label: "24 hours later" },
-  { value: 2880, label: "48 hours later" },
-  { value: 4320, label: "72 hours later" }
+  { value: 0, label: "Đăng ngay khi xuất bản" },
+  { value: 5, label: "Sau 5 phút" },
+  { value: 10, label: "Sau 10 phút" },
+  { value: 30, label: "Sau 30 phút" },
+  { value: 60, label: "Sau 1 giờ" },
+  { value: 120, label: "Sau 2 giờ" },
+  { value: 360, label: "Sau 6 giờ" },
+  { value: 720, label: "Sau 12 giờ" },
+  { value: 1440, label: "Sau 24 giờ" },
+  { value: 2880, label: "Sau 48 giờ" },
+  { value: 4320, label: "Sau 72 giờ" }
 ];
 
 export function delayLabel(minutes: number): string {
-  return COMMENT_DELAY_OPTIONS.find((o) => o.value === minutes)?.label || `${minutes} minutes later`;
+  return COMMENT_DELAY_OPTIONS.find((o) => o.value === minutes)?.label || `Sau ${minutes} phút`;
 }
 
 export function createEmptyComment(delayMinutes = 0): ComposerComment {

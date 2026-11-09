@@ -1,68 +1,68 @@
 <template>
   <div class="h-full flex flex-col p-4 lg:p-6 overflow-y-auto select-none">
     <!-- Top Filter & Action Bar -->
-    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs">
+    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
       <!-- Status Filter Tabs -->
-      <div class="flex items-center gap-1 overflow-x-auto scrollbar-none pb-1 sm:pb-0">
+      <div class="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1 sm:pb-0">
         <button
           type="button"
           @click="setFilter('all')"
-          class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
-          :class="activeFilter === 'all' ? 'bg-blue-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+          class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 flex-shrink-0"
+          :class="activeFilter === 'all' ? 'bg-blue-50 text-blue-700 border border-blue-300 shadow-2xs' : 'bg-slate-100/80 text-slate-600 hover:bg-slate-200/80 border border-slate-200/60'"
         >
-          <span>All</span>
-          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'all' ? 'bg-blue-700 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.total }}</span>
+          <span>Tất cả</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'all' ? 'bg-blue-600 text-white font-black' : 'bg-slate-200 text-slate-700 font-bold'">{{ taskStats.total }}</span>
         </button>
 
         <button
           type="button"
           @click="setFilter('pending')"
-          class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
-          :class="activeFilter === 'pending' ? 'bg-amber-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+          class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 flex-shrink-0"
+          :class="activeFilter === 'pending' ? 'bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs' : 'bg-slate-100/80 text-slate-600 hover:bg-slate-200/80 border border-slate-200/60'"
         >
-          <span>Scheduled</span>
-          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'pending' ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.pending }}</span>
+          <span>Chờ đăng</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'pending' ? 'bg-amber-600 text-white font-black' : 'bg-slate-200 text-slate-700 font-bold'">{{ taskStats.pending }}</span>
         </button>
 
         <button
           type="button"
           @click="setFilter('running')"
-          class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
-          :class="activeFilter === 'running' ? 'bg-blue-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+          class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 flex-shrink-0"
+          :class="activeFilter === 'running' ? 'bg-sky-50 text-sky-800 border border-sky-300 shadow-2xs' : 'bg-slate-100/80 text-slate-600 hover:bg-slate-200/80 border border-slate-200/60'"
         >
-          <span>Publishing</span>
-          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'running' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.running }}</span>
+          <span>Đang đăng</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'running' ? 'bg-sky-600 text-white font-black' : 'bg-slate-200 text-slate-700 font-bold'">{{ taskStats.running }}</span>
         </button>
 
         <button
           type="button"
           @click="setFilter('success')"
-          class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
-          :class="activeFilter === 'success' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+          class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 flex-shrink-0"
+          :class="activeFilter === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 shadow-2xs' : 'bg-slate-100/80 text-slate-600 hover:bg-slate-200/80 border border-slate-200/60'"
         >
-          <span>Published</span>
-          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'success' ? 'bg-emerald-700 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.success }}</span>
+          <span>Đã đăng</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'success' ? 'bg-emerald-600 text-white font-black' : 'bg-slate-200 text-slate-700 font-bold'">{{ taskStats.success }}</span>
         </button>
 
         <button
           type="button"
           @click="setFilter('failed')"
-          class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0"
-          :class="activeFilter === 'failed' ? 'bg-rose-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+          class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 flex-shrink-0"
+          :class="activeFilter === 'failed' ? 'bg-rose-50 text-rose-800 border border-rose-300 shadow-2xs' : 'bg-slate-100/80 text-slate-600 hover:bg-slate-200/80 border border-slate-200/60'"
         >
-          <span>Failed</span>
-          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'failed' ? 'bg-rose-700 text-white' : 'bg-slate-200 text-slate-700'">{{ taskStats.failed }}</span>
+          <span>Thất bại</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded-full" :class="activeFilter === 'failed' ? 'bg-rose-600 text-white font-black' : 'bg-slate-200 text-slate-700 font-bold'">{{ taskStats.failed }}</span>
         </button>
       </div>
 
       <!-- Search & Refresh -->
       <div class="flex items-center gap-2">
-        <div class="relative flex-1 sm:w-60">
+        <div class="relative flex-1 sm:w-64">
           <input
             v-model="searchQuery"
             type="text"
-            placeholder="Search scheduled posts..."
-            class="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            placeholder="Tìm kiếm bài viết hoặc Page..."
+            class="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200/90 bg-slate-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition"
           />
           <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -72,8 +72,8 @@
         <button
           type="button"
           @click="() => loadTasks()"
-          class="p-2 text-slate-500 hover:text-blue-600 rounded-xl border border-slate-200 hover:bg-slate-50 transition"
-          title="Refresh"
+          class="p-2 text-slate-500 hover:text-blue-600 rounded-xl border border-slate-200/90 bg-white hover:bg-blue-50/50 shadow-2xs transition"
+          title="Tải lại danh sách"
         >
           <svg class="w-4 h-4" :class="{ 'animate-spin': isLoading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -85,34 +85,34 @@
     <!-- Batch Selection Bar (When rows selected) -->
     <div
       v-if="selectedTaskIds.length > 0"
-      class="mb-4 bg-blue-50 border border-blue-200 rounded-2xl p-3 flex items-center justify-between animate-in fade-in duration-150"
+      class="mb-4 bg-blue-50/90 border border-blue-200 rounded-2xl p-3 flex items-center justify-between shadow-2xs animate-in fade-in duration-150"
     >
-      <div class="flex items-center gap-2 text-xs font-semibold text-blue-900">
-        <span class="w-2 h-2 rounded-full bg-blue-600"></span>
-        <span>{{ selectedTaskIds.length }} selected</span>
+      <div class="flex items-center gap-2 text-xs font-bold text-blue-900">
+        <span class="w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
+        <span>Đã chọn {{ selectedTaskIds.length }} bài viết</span>
       </div>
 
       <div class="flex items-center gap-2">
         <button
           type="button"
           @click="publishBulkNow"
-          class="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition flex items-center gap-1.5"
+          class="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-xs transition flex items-center gap-1.5"
         >
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-          <span>Publish now</span>
+          <span>Đăng ngay các bài đã chọn</span>
         </button>
 
         <button
           type="button"
           @click="bulkDelete"
-          class="px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold shadow-xs transition flex items-center gap-1.5"
+          class="px-3.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/80 text-xs font-bold shadow-2xs transition flex items-center gap-1.5"
         >
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
-          <span>Delete</span>
+          <span>Xóa các bài đã chọn</span>
         </button>
       </div>
     </div>
@@ -121,7 +121,7 @@
     <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs flex-1 flex flex-col min-h-[350px]">
       <div class="overflow-x-auto flex-1 scrollbar-thin">
         <table class="w-full text-xs text-left">
-          <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+          <thead class="bg-slate-50/80 text-slate-600 font-bold border-b border-slate-200/80">
             <tr>
               <th class="py-3 px-4 w-10 text-center">
                 <input
@@ -132,12 +132,12 @@
                 />
               </th>
               <th class="py-3 px-4 w-16 text-center">ID</th>
-              <th class="py-3 px-4 w-56">Page</th>
-              <th class="py-3 px-4 min-w-[200px]">Content</th>
-              <th class="py-3 px-4 w-40">Scheduled time</th>
-              <th class="py-3 px-4 w-32 text-center">Status</th>
-              <th class="py-3 px-4 w-44">Result</th>
-              <th class="py-3 px-4 w-32 text-center">Actions</th>
+              <th class="py-3 px-4 w-56">Fanpage</th>
+              <th class="py-3 px-4 min-w-[200px]">Nội dung & Media</th>
+              <th class="py-3 px-4 w-40">Lịch đăng (GMT+7)</th>
+              <th class="py-3 px-4 w-32 text-center">Trạng thái</th>
+              <th class="py-3 px-4 w-44">Kết quả đăng</th>
+              <th class="py-3 px-4 w-32 text-center">Thao tác</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -328,7 +328,7 @@
             <!-- Empty Row -->
             <tr v-if="filteredTasks.length === 0">
               <td colspan="8" class="text-center py-12 text-slate-400 text-xs">
-                No posts match the current filter.
+                Không có bài viết nào phù hợp với bộ lọc hiện tại.
               </td>
             </tr>
           </tbody>
@@ -397,15 +397,15 @@ const formatStatus = (s: TaskStatus): string => {
   switch (s) {
     case "pending":
     case "scheduled":
-      return "Scheduled";
+      return "Chờ đăng";
     case "queued":
     case "running":
-      return "Publishing...";
+      return "Đang đăng...";
     case "success":
-      return "Published";
+      return "Đã đăng";
     case "failed":
     case "canceled":
-      return "Failed";
+      return "Thất bại";
     default:
       return s;
   }

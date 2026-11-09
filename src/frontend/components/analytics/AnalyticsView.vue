@@ -1,44 +1,47 @@
 <template>
   <div class="h-full p-4 lg:p-6 overflow-y-auto select-none">
     <!-- Top bar -->
-    <div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+    <div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
       <div>
-        <h2 class="text-base font-bold text-slate-800">Analytics</h2>
+        <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+          <span>Thống kê hiệu quả Fanpage & Reels</span>
+        </h2>
         <p class="text-xs text-slate-500 mt-0.5">
-          Live from Facebook.
-          <span v-if="dashboard">{{ formatDay(dashboard.range_start) }} – {{ formatDay(dashboard.range_end) }} (complete days).</span>
-          <span v-if="dashboard?.fetched_at" class="text-slate-400 ml-1">Updated {{ formatTime(dashboard.fetched_at) }}</span>
+          Dữ liệu thời gian thực từ Meta Graph API.
+          <span v-if="dashboard" class="font-medium text-slate-700 ml-1">{{ formatDay(dashboard.range_start) }} – {{ formatDay(dashboard.range_end) }}</span>
+          <span v-if="dashboard?.fetched_at" class="text-slate-400 ml-1">· Cập nhật {{ formatTime(dashboard.fetched_at) }}</span>
         </p>
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
         <select
           v-model="selectedPageId"
-          class="px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[220px]"
+          class="px-3 py-2 text-xs rounded-xl border border-slate-200/90 bg-white font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 max-w-[220px] shadow-2xs"
         >
-          <option value="">All Pages</option>
+          <option value="">Tất cả Fanpage</option>
           <option v-for="p in dashboard?.pages || []" :key="p.page_id" :value="p.page_id">{{ p.page_name }}</option>
         </select>
         <select
           v-model.number="rangeDays"
           @change="loadAnalytics()"
-          class="px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          class="px-3 py-2 text-xs rounded-xl border border-slate-200/90 bg-white font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 shadow-2xs"
         >
-          <option :value="7">Last 7 days</option>
-          <option :value="28">Last 28 days</option>
-          <option :value="30">Last 30 days</option>
-          <option :value="90">Last 90 days</option>
+          <option :value="7">7 ngày gần nhất</option>
+          <option :value="28">28 ngày gần nhất</option>
+          <option :value="30">30 ngày gần nhất</option>
+          <option :value="90">90 ngày gần nhất</option>
         </select>
         <button
           type="button"
           :disabled="isSyncing || isLoading"
           @click="syncInsights"
-          class="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-xs shadow-sm transition"
+          class="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold text-xs shadow-xs shadow-blue-500/20 transition"
         >
           <svg class="w-4 h-4" :class="{ 'animate-spin': isSyncing || isLoading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          <span>{{ isSyncing ? "Refreshing..." : "Refresh" }}</span>
+          <span>{{ isSyncing ? "Đang đồng bộ..." : "Làm mới dữ liệu" }}</span>
         </button>
       </div>
     </div>
@@ -82,10 +85,22 @@
 
       <!-- The five numbers -->
       <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-        <div v-for="card in cards" :key="card.label" class="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs" :title="card.help">
+        <div
+          v-for="(card, cIdx) in cards"
+          :key="card.label"
+          class="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs transition hover:shadow-sm"
+          :class="[
+            cIdx === 0 ? 'border-t-[3px] border-t-blue-500 bg-gradient-to-b from-blue-50/20 to-white' :
+            cIdx === 1 ? 'border-t-[3px] border-t-indigo-500 bg-gradient-to-b from-indigo-50/20 to-white' :
+            cIdx === 2 ? 'border-t-[3px] border-t-purple-500 bg-gradient-to-b from-purple-50/20 to-white' :
+            cIdx === 3 ? 'border-t-[3px] border-t-emerald-500 bg-gradient-to-b from-emerald-50/20 to-white' :
+            'border-t-[3px] border-t-rose-500 bg-gradient-to-b from-rose-50/20 to-white'
+          ]"
+          :title="card.help"
+        >
           <span class="text-[11px] font-bold tracking-wider uppercase text-slate-500">{{ card.label }}</span>
           <p class="text-2xl font-black text-slate-900 tracking-tight mt-2">{{ formatNumber(card.value) }}</p>
-          <span class="text-[10px] font-semibold mt-1 block" :class="card.tone">{{ card.hint }}</span>
+          <span class="text-[10px] font-bold mt-1 block" :class="card.tone">{{ card.hint }}</span>
         </div>
       </div>
 
@@ -299,36 +314,36 @@ const formatDay = (date: string) => {
 const cards = computed(() => {
   const days = dashboard.value?.range_days || rangeDays.value;
   const src = selectedPage.value || dashboard.value?.totals;
-  const scope = selectedPage.value ? "This Page" : `Across ${dashboard.value?.pages.length || 0} Page(s)`;
+  const scope = selectedPage.value ? "Fanpage này" : `Tổng ${dashboard.value?.pages.length || 0} Fanpage`;
   return [
-    { label: "Followers", value: src?.followers ?? null, hint: scope, tone: "text-slate-500", help: "Current Page followers." },
+    { label: "Người theo dõi", value: src?.followers ?? null, hint: scope, tone: "text-slate-500", help: "Tổng số người theo dõi hiện tại." },
     {
-      label: "Views",
+      label: "Lượt xem video",
       value: src?.views ?? null,
-      hint: `Last ${days} days`,
+      hint: `${days} ngày qua`,
       tone: "text-blue-600",
-      help: "Content views on the Page (Facebook Page insights: page_media_view), summed per day."
+      help: "Tổng lượt xem video/media trên Fanpage."
     },
     {
-      label: "Views (7 days)",
+      label: "Lượt xem 7 ngày",
       value: src?.views_7d ?? null,
-      hint: "Last 7 complete days",
+      hint: "7 ngày gần nhất",
       tone: "text-indigo-600",
-      help: "Page views of the last 7 complete days."
+      help: "Lượt xem trong 7 ngày gần nhất."
     },
     {
-      label: "Engagement",
+      label: "Lượt tương tác",
       value: src?.engagement ?? null,
-      hint: `Last ${days} days`,
+      hint: `${days} ngày qua`,
       tone: "text-emerald-600",
-      help: "Reactions, comments, shares and clicks on the Page's posts (page_post_engagements), summed per day."
+      help: "Tổng lượt cảm xúc, bình luận, chia sẻ và tương tác trên Fanpage."
     },
     {
-      label: "Reels",
+      label: "Số bài Reels",
       value: src?.reels_count ?? null,
-      hint: `Posted in the last ${days} days`,
+      hint: `Đã xuất bản (${days} ngày)`,
       tone: "text-purple-600",
-      help: "Reels created on the Page in the period."
+      help: "Tổng số bài Reels đã đăng thành công."
     }
   ];
 });

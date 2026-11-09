@@ -3,7 +3,7 @@
     <div class="bg-white rounded-2xl shadow-2xl border border-slate-100 max-w-lg w-full p-6 animate-in fade-in zoom-in duration-150 select-none">
       <div class="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
         <h3 class="text-base font-bold text-slate-800">
-          Edit post #{{ task.id }}
+          Chỉnh sửa bài đăng #{{ task.id }}
         </h3>
         <button type="button" @click="$emit('close')" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -27,17 +27,17 @@
 
         <!-- Caption -->
         <div>
-          <label class="block font-semibold text-slate-700 mb-1">Caption:</label>
+          <label class="block font-semibold text-slate-700 mb-1">Nội dung (Caption):</label>
           <textarea
             v-model="caption"
             rows="3"
-            class="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+            class="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 resize-none"
           ></textarea>
         </div>
 
         <!-- Schedule Date & Time -->
         <div>
-          <label class="block font-semibold text-slate-700 mb-1">Publish time (Vietnam time, GMT+7):</label>
+          <label class="block font-semibold text-slate-700 mb-1">Thời gian đăng (Giờ Việt Nam GMT+7):</label>
           <button
             type="button"
             @click="isCalendarOpen = true"
@@ -50,18 +50,18 @@
             </svg>
           </button>
           <p v-if="!isScheduleSlotAllowed(scheduleDate, scheduleTime)" class="mt-1 text-[11px] text-rose-600">
-            This time has passed. Please pick a time at least 5 minutes from now.
+            Thời gian này đã qua. Vui lòng chọn thời gian cách hiện tại ít nhất 5 phút.
           </p>
         </div>
 
         <!-- First Comment -->
         <div>
-          <label class="block font-semibold text-slate-700 mb-1">First comment:</label>
+          <label class="block font-semibold text-slate-700 mb-1">Bình luận đầu tiên:</label>
           <input
             v-model="commentText"
             type="text"
-            placeholder="Auto-comment text..."
-            class="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            placeholder="Nội dung tự động bình luận..."
+            class="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400"
           />
         </div>
       </div>
@@ -70,25 +70,26 @@
         <button
           type="button"
           @click="$emit('close')"
-          class="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium text-xs transition"
+          class="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-bold text-xs transition"
         >
-          Cancel
+          Hủy
         </button>
         <button
           type="button"
           :disabled="isSubmitting"
           @click="submitUpdate"
-          class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-xs shadow-sm transition flex items-center gap-1.5"
+          class="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-xs transition disabled:opacity-50 flex items-center gap-1.5"
         >
           <svg v-if="isSubmitting" class="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
           </svg>
-          <span>{{ isSubmitting ? 'Saving...' : 'Save changes' }}</span>
+          <span>Lưu thay đổi</span>
         </button>
       </div>
     </div>
 
+    <!-- Calendar Popover Modal -->
     <CalendarPickerModal
       :isOpen="isCalendarOpen"
       :initialDate="scheduleDate"
@@ -100,12 +101,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from "vue";
-import CalendarPickerModal from "./CalendarPickerModal.vue";
-import { isScheduleSlotAllowed } from "../../utils/date";
-import type { TaskRecord } from "@shared/types";
+import { ref, computed, watch } from "vue";
 import { api } from "../../services/api";
 import { useToast } from "../../composables/useToast";
+import { isScheduleSlotAllowed, getDefaultScheduleTime } from "../../utils/date";
+import type { TaskRecord } from "@shared/types";
+import CalendarPickerModal from "./CalendarPickerModal.vue";
 
 const props = defineProps<{
   isOpen: boolean;
@@ -118,22 +119,13 @@ const emit = defineEmits<{
 }>();
 
 const toast = useToast();
+
 const caption = ref("");
 const scheduleDate = ref("");
 const scheduleTime = ref("");
 const commentText = ref("");
-const isSubmitting = ref(false);
 const isCalendarOpen = ref(false);
-
-const scheduleDisplay = computed(() => {
-  const [y, m, d] = (scheduleDate.value || "").split("-");
-  return y && m && d ? `${scheduleTime.value} on ${d}/${m}/${y}` : "Select publish time";
-});
-
-const onCalendarConfirm = (val: { date: string; time: string }) => {
-  scheduleDate.value = val.date;
-  scheduleTime.value = val.time;
-};
+const isSubmitting = ref(false);
 
 watch(
   () => props.task,
@@ -148,26 +140,44 @@ watch(
   { immediate: true }
 );
 
+const scheduleDisplay = computed(() => {
+  if (!scheduleDate.value || !scheduleTime.value) return "Chọn ngày & giờ đăng...";
+  return `${scheduleDate.value} lúc ${scheduleTime.value}`;
+});
+
+const onCalendarConfirm = (val: { date: string; time: string }) => {
+  scheduleDate.value = val.date;
+  scheduleTime.value = val.time;
+};
+
 const submitUpdate = async () => {
   if (!props.task) return;
+
+  if (!scheduleDate.value || !scheduleTime.value) {
+    toast.warning("Vui lòng chọn ngày và giờ đăng.");
+    return;
+  }
+
   if (!isScheduleSlotAllowed(scheduleDate.value, scheduleTime.value)) {
-    toast.warning("Publish time must be at least 5 minutes from now. Please pick another time.");
+    toast.warning("Thời gian hẹn giờ phải cách thời điểm hiện tại ít nhất 5 phút.");
     isCalendarOpen.value = true;
     return;
   }
+
   isSubmitting.value = true;
   try {
     await api.updateTask(props.task.id, {
       caption: caption.value.trim(),
-      schedule_date: scheduleDate.value.trim(),
-      schedule_time: scheduleTime.value.trim(),
-      comment_text: commentText.value.trim() || undefined
+      schedule_date: scheduleDate.value,
+      schedule_time: scheduleTime.value,
+      comment_text: commentText.value.trim()
     });
-    toast.success("Post updated.");
+
+    toast.success("Cập nhật bài viết thành công!");
     emit("updated");
     emit("close");
   } catch (err: any) {
-    toast.error(err?.message || "Failed to update post.");
+    toast.error(err?.message || "Cập nhật bài viết thất bại.");
   } finally {
     isSubmitting.value = false;
   }

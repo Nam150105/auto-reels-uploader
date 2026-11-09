@@ -1,6 +1,6 @@
 <template>
-  <div class="h-screen w-screen flex overflow-hidden bg-slate-50 font-sans text-slate-900">
-    <!-- Dark Sidebar: Exactly 3 Main Menus (Compose, Schedule, Analytics) -->
+  <div class="h-screen w-screen flex overflow-hidden bg-[#f8fafc] font-sans text-slate-800">
+    <!-- Modern Soft Sidebar: Exactly 3 Main Menus (Viết bài, Lịch đăng, Thống kê) -->
     <Sidebar
       :activeTab="activeTab"
       @switch-tab="switchTab"
@@ -9,7 +9,7 @@
     />
 
     <!-- Main Content Area -->
-    <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
+    <div class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#f8fafc]">
       <!-- Top Header with Breadcrumbs & Mode Dropdown -->
       <Header
         :activeTab="activeTab"
@@ -21,39 +21,43 @@
       <!-- Expired Token Warning Banner -->
       <div
         v-if="expiredAccounts.length > 0"
-        class="mx-4 sm:mx-6 mt-3 px-4 py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-between gap-3 shrink-0 animate-in fade-in"
+        class="mx-4 sm:mx-6 mt-3 px-4 py-2.5 rounded-2xl bg-amber-50/80 border border-amber-200/80 flex items-center justify-between gap-3 shrink-0 animate-in fade-in shadow-2xs"
       >
-        <div class="flex items-center gap-2 text-xs text-amber-900 font-medium">
-          <span>⚠️</span>
-          <span>Access token expired ({{ expiredAccountNames }}). Please update the token in Graph API Explorer.</span>
+        <div class="flex items-center gap-2 text-xs text-amber-800 font-semibold">
+          <span class="text-amber-600">⚠️</span>
+          <span>Access Token đã hết hạn ({{ expiredAccountNames }}). Vui lòng cập nhật lại token từ Graph API Explorer.</span>
         </div>
         <button
           type="button"
           @click="openConnectModal(expiredAccounts[0]?.id)"
-          class="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition shrink-0 shadow-xs"
+          class="px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition shrink-0 shadow-xs"
         >
-          🔑 Update token
+          🔑 Cập nhật Token
         </button>
       </div>
 
       <!-- Main Dynamic View Area -->
       <main class="flex-1 overflow-hidden relative">
-        <!-- Tab 1: Compose -->
+        <!-- Tab 1: Viết bài (Compose) -->
         <template v-if="activeTab === 'compose'">
           <SingleComposer
             v-if="composeMode === 'single'"
             @task-created="handleTaskCreated"
           />
           <BulkComposer
+            v-else-if="composeMode === 'bulk'"
+            @tasks-created="handleTaskCreated"
+          />
+          <MultiPageComposer
             v-else
             @tasks-created="handleTaskCreated"
           />
         </template>
 
-        <!-- Tab 2: Schedule -->
+        <!-- Tab 2: Lịch đăng (Schedule) -->
         <ScheduleView v-else-if="activeTab === 'schedule'" />
 
-        <!-- Tab 3: Analytics -->
+        <!-- Tab 3: Thống kê (Analytics) -->
         <AnalyticsView v-else-if="activeTab === 'analytics'" />
       </main>
     </div>
@@ -86,6 +90,7 @@ import Header from "./components/common/Header.vue";
 import Toast from "./components/common/Toast.vue";
 import SingleComposer from "./components/composer/SingleComposer.vue";
 import BulkComposer from "./components/composer/BulkComposer.vue";
+import MultiPageComposer from "./components/composer/MultiPageComposer.vue";
 import ScheduleView from "./components/schedule/ScheduleView.vue";
 import AnalyticsView from "./components/analytics/AnalyticsView.vue";
 import ConnectFacebookModal from "./components/dialogs/ConnectFacebookModal.vue";
@@ -104,7 +109,7 @@ const {
 } = usePages();
 
 const activeTab = ref<"compose" | "schedule" | "analytics">("compose");
-const composeMode = ref<"single" | "bulk">("single");
+const composeMode = ref<"single" | "bulk" | "multipage">("single");
 
 onMounted(async () => {
   await checkAuth();

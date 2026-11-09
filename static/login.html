@@ -1,76 +1,80 @@
 <!DOCTYPE html>
-<html lang="vi" class="h-full bg-slate-950 text-slate-100">
+<html lang="vi" class="h-full bg-[#f8fafc] text-slate-800">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Đăng Nhập - Hệ Thống Quản Lý Fanpage & Reels Scheduler</title>
+  <title>NNN REELS FB - Quản Lý Fanpage &amp; Reels Scheduler</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <meta property="fb:app_id" content="1469615908436980" />
   <meta property="og:url" content="https://pagefb.namnangno.click/" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Quản lý fanpage" />
-  <meta property="og:title" content="Quản lý fanpage - Hệ Thống Quản Lý Fanpage & Reels Scheduler" />
+  <meta property="og:title" content="NNN REELS FB - Hệ Thống Quản Lý Fanpage & Reels Scheduler" />
   <meta property="og:description" content="Hệ thống quản lý Fanpage đa tài khoản và hẹn lịch đăng Facebook Reels tự động qua Meta Graph API." />
   <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
   <!-- Vue 3 Production CDN (jsDelivr chuẩn, fallback sang unpkg qua DOM script) -->
   <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" onerror="(function(){var s=document.createElement('script');s.src='https://unpkg.com/vue@3/dist/vue.global.prod.js';document.head.appendChild(s);})()"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    body { font-family: 'Be Vietnam Pro', 'Plus Jakarta Sans', system-ui, sans-serif; }
     .font-mono { font-family: 'JetBrains Mono', monospace; }
     [v-cloak] { display: none !important; }
   </style>
 </head>
-<body class="h-full flex items-center justify-center p-4 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 select-none">
+<body class="h-full flex items-center justify-center p-4 bg-gradient-to-br from-slate-50 via-blue-50/25 to-indigo-50/35 select-none text-slate-800">
 
   <div id="app" v-cloak class="w-full max-w-md">
     
     <!-- Brand Header -->
-    <div class="text-center mb-8">
-      <div class="inline-flex h-14 w-14 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-pink-500 items-center justify-center shadow-xl shadow-indigo-500/25 text-white font-extrabold text-2xl mb-3">
-        R
+    <div class="text-center mb-7">
+      <div class="inline-flex h-16 w-16 rounded-2xl bg-gradient-to-tr from-blue-500 via-indigo-500 to-pink-500 items-center justify-center shadow-lg shadow-indigo-500/20 text-white font-black text-xl mb-3 tracking-tighter">
+        NNN
       </div>
-      <h1 class="text-2xl font-extrabold text-white tracking-tight">Quản Lý Fanpage &amp; Reels</h1>
-      <p class="text-xs text-slate-400 mt-1">Đăng nhập tài khoản hệ thống để bắt đầu kết nối Facebook</p>
+      <div class="flex items-center justify-center gap-2 mb-1">
+        <h1 class="text-2xl font-black text-slate-800 tracking-tight">NNN REELS FB</h1>
+        <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200/80">PRO</span>
+      </div>
+      <p class="text-xs text-slate-500 font-medium">Quản lý Fanpage &amp; Lên Lịch Đăng Bài Tự Động</p>
     </div>
 
     <!-- Auth Card -->
-    <div v-if="authState === 'checking'" class="bg-slate-900/95 border border-slate-800 rounded-2xl shadow-2xl backdrop-blur-xl p-8 text-center">
-      <div class="w-10 h-10 rounded-full bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center mx-auto mb-3">
-        <svg class="animate-spin h-5 w-5 text-indigo-400" viewBox="0 0 24 24" fill="none">
+    <div v-if="authState === 'checking'" class="bg-white/95 border border-slate-200/90 rounded-3xl shadow-xl shadow-slate-200/50 backdrop-blur-xl p-8 text-center">
+      <div class="w-10 h-10 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center mx-auto mb-3">
+        <svg class="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
         </svg>
       </div>
-      <p class="text-xs text-slate-300 font-semibold">Đang kiểm tra phiên đăng nhập...</p>
+      <p class="text-xs text-slate-600 font-semibold">Đang kiểm tra phiên đăng nhập...</p>
     </div>
 
-    <div v-else class="bg-slate-900/95 border border-slate-800 rounded-2xl shadow-2xl backdrop-blur-xl p-7 sm:p-8">
+    <div v-else class="bg-white/95 border border-slate-200/90 rounded-3xl shadow-xl shadow-slate-200/50 backdrop-blur-xl p-7 sm:p-8">
       
       <!-- Tab Switcher -->
-      <div class="flex p-1 bg-slate-950 rounded-xl mb-6 border border-slate-800/80">
+      <div class="flex p-1 bg-slate-100/90 rounded-2xl mb-6 border border-slate-200/70">
         <button 
           @click="activeTab = 'login'; errorMsg = ''; successMsg = ''"
-          :class="activeTab === 'login' ? 'bg-indigo-600 text-white font-bold shadow-md' : 'text-slate-400 hover:text-white'"
-          class="flex-1 py-2 text-xs rounded-lg transition-all text-center">
+          :class="activeTab === 'login' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900 font-medium'"
+          class="flex-1 py-2 text-xs rounded-xl transition-all text-center">
           Đăng Nhập
         </button>
         <button 
           @click="activeTab = 'register'; errorMsg = ''; successMsg = ''"
-          :class="activeTab === 'register' ? 'bg-indigo-600 text-white font-bold shadow-md' : 'text-slate-400 hover:text-white'"
-          class="flex-1 py-2 text-xs rounded-lg transition-all text-center">
+          :class="activeTab === 'register' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900 font-medium'"
+          class="flex-1 py-2 text-xs rounded-xl transition-all text-center">
           Đăng Ký Tài Khoản
         </button>
       </div>
 
       <!-- Alerts -->
-      <div v-if="errorMsg" class="mb-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-start gap-2">
+      <div v-if="errorMsg" class="mb-5 p-3 rounded-xl bg-rose-50 border border-rose-200/90 text-rose-700 text-xs flex items-start gap-2 shadow-2xs">
         <span class="font-bold shrink-0">✕</span>
         <span>{{ errorMsg }}</span>
       </div>
 
-      <div v-if="successMsg" class="mb-5 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-start gap-2">
+      <div v-if="successMsg" class="mb-5 p-3 rounded-xl bg-emerald-50 border border-emerald-200/90 text-emerald-700 text-xs flex items-start gap-2 shadow-2xs">
         <span class="font-bold shrink-0">✓</span>
         <span>{{ successMsg }}</span>
       </div>
@@ -78,31 +82,31 @@
       <!-- FORM 1: LOGIN -->
       <form v-if="activeTab === 'login'" @submit.prevent="handleLogin" class="space-y-4">
         <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1.5">Tên đăng nhập</label>
+          <label class="block text-xs font-bold text-slate-700 mb-1.5">Tên đăng nhập</label>
           <input 
             v-model="loginForm.username" 
             type="text" 
             required 
             placeholder="username" 
             autocomplete="username"
-            class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition">
+            class="w-full px-3.5 py-2.5 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
         </div>
 
         <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1.5">Mật khẩu</label>
+          <label class="block text-xs font-bold text-slate-700 mb-1.5">Mật khẩu</label>
           <input 
             v-model="loginForm.password" 
             type="password" 
             required 
             placeholder="••••••••" 
             autocomplete="current-password"
-            class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition">
+            class="w-full px-3.5 py-2.5 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
         </div>
 
         <button 
           type="submit" 
           :disabled="loading" 
-          class="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-indigo-500/25 transition disabled:opacity-50">
+          class="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-md shadow-blue-500/20 transition disabled:opacity-50">
           <span v-if="loading">Đang xác thực...</span>
           <span v-else>Đăng Nhập Vào Hệ Thống</span>
         </button>
@@ -111,60 +115,60 @@
       <!-- FORM 2: REGISTER -->
       <form v-if="activeTab === 'register'" @submit.prevent="handleRegister" class="space-y-3.5">
         <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Họ và tên</label>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Họ và tên</label>
           <input 
             v-model="regForm.full_name" 
             type="text" 
             placeholder="Ví dụ: Nguyễn Văn A" 
-            class="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition">
+            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
         </div>
 
         <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Email liên hệ</label>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Email liên hệ</label>
           <input 
             v-model="regForm.email" 
             type="email" 
             placeholder="email@vidu.com" 
-            class="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition">
+            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
         </div>
 
         <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Tên đăng nhập <span class="text-rose-400">*</span></label>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Tên đăng nhập <span class="text-rose-500">*</span></label>
           <input 
             v-model="regForm.username" 
             type="text" 
             required 
             placeholder="Tối thiểu 3 ký tự (chữ hoặc số)" 
             autocomplete="username"
-            class="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition">
+            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
         </div>
 
         <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Mật khẩu <span class="text-rose-400">*</span></label>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Mật khẩu <span class="text-rose-500">*</span></label>
           <input 
             v-model="regForm.password" 
             type="password" 
             required 
             placeholder="Tối thiểu 4 ký tự" 
             autocomplete="new-password"
-            class="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition">
+            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
         </div>
 
         <div>
-          <label class="block text-xs font-semibold text-slate-300 mb-1">Xác nhận mật khẩu <span class="text-rose-400">*</span></label>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Xác nhận mật khẩu <span class="text-rose-500">*</span></label>
           <input 
             v-model="regForm.confirm_password" 
             type="password" 
             required 
             placeholder="Nhập lại mật khẩu" 
             autocomplete="new-password"
-            class="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition">
+            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
         </div>
 
         <button 
           type="submit" 
           :disabled="loading" 
-          class="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-teal-500/25 transition disabled:opacity-50 mt-2">
+          class="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-500/20 transition disabled:opacity-50 mt-2">
           <span v-if="loading">Đang đăng ký...</span>
           <span v-else>Tạo Tài Khoản Mới</span>
         </button>
@@ -173,12 +177,12 @@
     </div>
 
     <!-- Public Links Footer -->
-    <div class="mt-8 text-center text-xs text-slate-500 flex justify-center gap-4 flex-wrap">
-      <a href="/privacy" target="_blank" class="hover:text-slate-300 transition">Chính sách quyền riêng tư</a>
+    <div class="mt-7 text-center text-xs text-slate-500 flex justify-center gap-4 flex-wrap font-medium">
+      <a href="/privacy" target="_blank" class="hover:text-slate-700 transition">Chính sách quyền riêng tư</a>
       <span>•</span>
-      <a href="/terms" target="_blank" class="hover:text-slate-300 transition">Điều khoản dịch vụ</a>
+      <a href="/terms" target="_blank" class="hover:text-slate-700 transition">Điều khoản dịch vụ</a>
       <span>•</span>
-      <a href="/data-deletion" target="_blank" class="hover:text-slate-300 transition">Xóa dữ liệu</a>
+      <a href="/data-deletion" target="_blank" class="hover:text-slate-700 transition">Xóa dữ liệu</a>
     </div>
 
   </div>
@@ -415,4 +419,3 @@
   </script>
 </body>
 </html>
-
