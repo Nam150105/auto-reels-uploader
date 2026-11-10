@@ -5,7 +5,7 @@
       :activeTab="activeTab"
       @switch-tab="switchTab"
       @open-connect="() => openConnectModal(null)"
-      @open-accounts="isAccountsModalOpen = true"
+      @open-accounts="openAccountsTab"
     />
 
     <!-- Main Content Area -->
@@ -15,7 +15,7 @@
         :activeTab="activeTab"
         v-model:composeMode="composeMode"
         @open-connect="() => openConnectModal(null)"
-        @open-accounts="isAccountsModalOpen = true"
+        @open-accounts="openAccountsTab"
       />
 
       <!-- Expired Token Warning Banner -->
@@ -59,6 +59,9 @@
 
         <!-- Tab 3: Thống kê (Analytics) -->
         <AnalyticsView v-else-if="activeTab === 'analytics'" />
+
+        <!-- Tab 4: Fanpage & Admin accounts -->
+        <FanpageView v-else-if="activeTab === 'pages'" @open-connect="(accId) => openConnectModal(accId)" />
       </main>
     </div>
 
@@ -69,12 +72,6 @@
       @close="isConnectModalOpen = false"
     />
 
-    <!-- Manage Facebook Accounts Modal -->
-    <ManageAccountsModal
-      :isOpen="isAccountsModalOpen"
-      @close="isAccountsModalOpen = false"
-      @open-connect="(accId) => openConnectModal(accId)"
-    />
 
     <!-- Global Toast Notifications -->
     <Toast />
@@ -83,6 +80,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import type { AppTab } from "@shared/types";
 import { useAuth } from "./composables/useAuth";
 import { usePages } from "./composables/usePages";
 import Sidebar from "./components/common/Sidebar.vue";
@@ -94,13 +92,13 @@ import MultiPageComposer from "./components/composer/MultiPageComposer.vue";
 import ScheduleView from "./components/schedule/ScheduleView.vue";
 import AnalyticsView from "./components/analytics/AnalyticsView.vue";
 import ConnectFacebookModal from "./components/dialogs/ConnectFacebookModal.vue";
-import ManageAccountsModal from "./components/dialogs/ManageAccountsModal.vue";
+import FanpageView from "./components/pages/FanpageView.vue";
 
 const { checkAuth } = useAuth();
 const {
   loadPages,
   isConnectModalOpen,
-  isAccountsModalOpen,
+  pagesViewTab,
   connectTargetAccountId,
   expiredAccounts,
   expiredAccountNames,
@@ -108,7 +106,7 @@ const {
   handleOAuthResult
 } = usePages();
 
-const activeTab = ref<"compose" | "schedule" | "analytics">("compose");
+const activeTab = ref<AppTab>("compose");
 const composeMode = ref<"single" | "bulk" | "multipage">("single");
 
 onMounted(async () => {
@@ -128,8 +126,14 @@ onMounted(async () => {
   }
 });
 
-const switchTab = (tab: "compose" | "schedule" | "analytics") => {
+const switchTab = (tab: AppTab) => {
   activeTab.value = tab;
+};
+
+/** Admin accounts now live on the Fanpage screen */
+const openAccountsTab = () => {
+  pagesViewTab.value = "accounts";
+  activeTab.value = "pages";
 };
 
 // When user creates a single or bulk task, automatically switch to the Schedule tab!

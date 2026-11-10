@@ -273,6 +273,9 @@ export interface FacebookPageRecord {
   success_count?: number;
   admin_accounts: AdminAccountLink[];
   admin_names: string[];
+  has_token?: boolean;
+  followers_count?: number;
+  fan_count?: number;
   page_access_token?: string;
 }
 

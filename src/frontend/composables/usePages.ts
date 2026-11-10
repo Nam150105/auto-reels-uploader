@@ -8,8 +8,11 @@ const accounts = ref<FacebookAccount[]>([]);
 const isLoading = ref<boolean>(false);
 const searchQuery = ref<string>("");
 const isConnectModalOpen = ref<boolean>(false);
-const isAccountsModalOpen = ref<boolean>(false);
 const connectTargetAccountId = ref<string | null>(null);
+/** Which tab the Fanpage screen shows ("pages" or "accounts") */
+const pagesViewTab = ref<"pages" | "accounts">("pages");
+/** Pages dropped by the last token update (shown on the Fanpage screen until dismissed) */
+const missingPagesNotice = ref<{ accountName: string; pageNames: string[] } | null>(null);
 
 export function usePages() {
   const toast = useToast();
@@ -135,6 +138,8 @@ export function usePages() {
 
   const connectWithToken = async (token: string, targetAccountId: string | null = null) => {
     isLoading.value = true;
+    // Remember names now: a Page dropped by the new token may lose its details after the update
+    const namesBefore = new Map(pages.value.map((p) => [p.facebook_page_id, p.page_name || p.facebook_page_id]));
     try {
       let res: any;
       if (targetAccountId) {
@@ -150,6 +155,19 @@ export function usePages() {
       }
       await loadPages();
       toast.success(res?.message || "Account and Pages updated.");
+      const missingIds: string[] = Array.isArray(res?.missing_permission_page_ids) ? res.missing_permission_page_ids : [];
+      if (missingIds.length > 0) {
+        const pageNames = missingIds.map(
+          (id) => namesBefore.get(id) || pages.value.find((p) => p.facebook_page_id === id)?.page_name || id
+        );
+        missingPagesNotice.value = { accountName: res?.user_name || res?.facebook_user_name || "", pageNames };
+        toast.show(
+          `${pageNames.join(", ")}: not included in the new token. Create the token again with these Pages selected, or check that this account is still an admin.`,
+          "warning",
+          `${pageNames.length} Page(s) lost their connection`,
+          12000
+        );
+      }
       isConnectModalOpen.value = false;
       connectTargetAccountId.value = null;
       return true;
@@ -176,16 +194,41 @@ export function usePages() {
     }
   };
 
+  /** Removes Pages from this app only (their scheduled posts here are deleted too). Nothing changes on Facebook. */
+  const deletePages = async (facebookPageIds: string[]) => {
+    isLoading.value = true;
+    let removed = 0;
+    const failed: string[] = [];
+    try {
+      for (const id of facebookPageIds) {
+        try {
+          await api.deletePage(id);
+          removed++;
+        } catch {
+          failed.push(pages.value.find((p) => p.facebook_page_id === id)?.page_name || id);
+        }
+      }
+      await loadPages();
+      if (removed > 0) toast.success(`Removed ${removed} Page(s).`);
+      if (failed.length > 0) toast.error(`Could not remove: ${failed.join(", ")}`);
+      return failed.length === 0;
+    } finally {
+      isLoading.value = false;
+    }
+  };
+
   return {
     pages,
     accounts,
+    pagesViewTab,
+    missingPagesNotice,
+    deletePages,
     expiredAccounts,
     expiredAccountNames,
     isLoading,
     searchQuery,
     filteredPages,
     isConnectModalOpen,
-    isAccountsModalOpen,
     connectTargetAccountId,
     loadPages,
     syncPages,

@@ -112,6 +112,10 @@ export const api = {
     });
   },
 
+  async deletePage(facebookPageId: string): Promise<any> {
+    return request(`/api/pages/${encodeURIComponent(facebookPageId)}`, { method: "DELETE" });
+  },
+
   async syncPages(): Promise<any> {
     return request("/api/meta/sync-pages", { method: "POST" });
   },

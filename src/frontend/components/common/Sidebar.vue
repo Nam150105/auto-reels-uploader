@@ -51,6 +51,20 @@
         </svg>
         <span class="text-[10px] font-bold leading-none">Thống kê</span>
       </button>
+
+      <!-- 4. Fanpage & Admin accounts -->
+      <button
+        type="button"
+        @click="$emit('switch-tab', 'pages')"
+        class="w-full aspect-square rounded-2xl flex flex-col items-center justify-center gap-1.5 transition-all relative group"
+        :class="activeTab === 'pages' ? 'bg-gradient-to-b from-sky-50 to-cyan-50/70 text-sky-600 border border-sky-200/90 shadow-xs' : 'hover:bg-slate-100/70 text-slate-500 hover:text-slate-800 border border-transparent'"
+        title="Quản lý Fanpage & tài khoản Admin"
+      >
+        <svg class="w-5 h-5 transition-transform group-hover:scale-110" :class="activeTab === 'pages' ? 'text-sky-600' : 'text-slate-400 group-hover:text-sky-600'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+        </svg>
+        <span class="text-[10px] font-bold leading-none">Fanpage</span>
+      </button>
     </nav>
 
     <!-- Bottom Actions -->
@@ -95,14 +109,15 @@
 </template>
 
 <script setup lang="ts">
+import type { AppTab } from "@shared/types";
 import { useAuth } from "../../composables/useAuth";
 
 defineProps<{
-  activeTab: "compose" | "schedule" | "analytics";
+  activeTab: AppTab;
 }>();
 
 defineEmits<{
-  (e: "switch-tab", tab: "compose" | "schedule" | "analytics"): void;
+  (e: "switch-tab", tab: AppTab): void;
   (e: "open-connect"): void;
   (e: "open-accounts"): void;
 }>();

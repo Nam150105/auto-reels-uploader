@@ -233,8 +233,20 @@ export async function getLiveAnalyticsDashboard(
     return true;
   });
   const warnings: string[] = [];
-  const missingToken = new Set(allPages.map((p) => p.facebook_page_id)).size - pages.length;
-  if (missingToken > 0) warnings.push(`${missingToken} Page(s) need to be reconnected before their data can be read.`);
+  const missingNames = Array.from(
+    new Map(
+      allPages
+        .filter((p) => !seen.has(p.facebook_page_id))
+        .map((p) => [p.facebook_page_id, p.page_name || p.name || p.facebook_page_id] as const)
+    ).values()
+  );
+  if (missingNames.length > 0) {
+    warnings.push(
+      `${missingNames.length} Page(s) have no valid token and were skipped: ${missingNames.join(", ")}. ` +
+        "The admin token no longer includes them (not selected when the token was created, or admin access was lost). " +
+        "Update the token with these Pages selected, or remove them in the Fanpage tab."
+    );
+  }
 
   const nowSec = Math.floor(nowMs / 1000);
   const rangeStartSec = nowSec - days * DAY_SEC;
@@ -456,7 +468,7 @@ export async function getLiveAnalyticsDashboard(
     range_end: timeSeries[timeSeries.length - 1]?.date || new Date(nowMs).toISOString().slice(0, 10),
     fetched_at: new Date(nowMs).toISOString(),
     cached: false,
-    total_pages: seen.size + missingToken,
+    total_pages: seen.size + missingNames.length,
     totals,
     pages: pageStats,
     time_series: timeSeries,

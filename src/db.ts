@@ -2138,7 +2138,11 @@ export async function getFacebookPages(
       admin_accounts: adminAccounts,
       admin_names: adminAccounts
         .map((a) => a.facebook_user_name)
-        .filter((n): n is string => Boolean(n))
+        .filter((n): n is string => Boolean(n)),
+      // No stored token = no connected admin account can manage this Page any more
+      has_token: candidateEncryptedTokens.length > 0,
+      followers_count: r.followers_count !== undefined && r.followers_count !== null ? Number(r.followers_count) : undefined,
+      fan_count: r.fan_count !== undefined && r.fan_count !== null ? Number(r.fan_count) : undefined
     };
 
     if (includeToken) {

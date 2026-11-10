@@ -20,7 +20,7 @@
           class="px-3 py-2 text-xs rounded-xl border border-slate-200/90 bg-white font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 max-w-[220px] shadow-2xs"
         >
           <option value="">Tất cả Fanpage</option>
-          <option v-for="p in dashboard?.pages || []" :key="p.page_id" :value="p.page_id">{{ p.page_name }}</option>
+          <option v-for="(p, i) in dashboard?.pages || []" :key="p.page_id" :value="p.page_id">{{ pageNumber(p.page_id, i) }}. {{ p.page_name }}</option>
         </select>
         <select
           v-model.number="rangeDays"
@@ -154,6 +154,7 @@
           <table class="w-full text-xs text-left">
             <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
               <tr>
+                <th class="py-3 pl-4 pr-1 w-10 text-center">#</th>
                 <th class="py-3 px-4">Page</th>
                 <th class="py-3 px-4 text-right">Followers</th>
                 <th class="py-3 px-4 text-right">Views</th>
@@ -165,11 +166,12 @@
             </thead>
             <tbody class="divide-y divide-slate-100">
               <tr
-                v-for="page in dashboard.pages"
+                v-for="(page, idx) in dashboard.pages"
                 :key="page.page_id"
                 @click="selectedPageId = page.page_id"
                 class="hover:bg-blue-50/50 cursor-pointer transition"
               >
+                <td class="py-3 pl-4 pr-1 text-center text-slate-400 font-bold">{{ pageNumber(page.page_id, idx) }}</td>
                 <td class="py-3 px-4">
                   <div class="flex items-center gap-2.5 min-w-0">
                     <div class="w-8 h-8 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border border-slate-200">
@@ -195,13 +197,14 @@
                 </td>
               </tr>
               <tr v-if="!dashboard.pages.length">
-                <td colspan="7" class="text-center py-10 text-slate-400 text-xs">
+                <td colspan="8" class="text-center py-10 text-slate-400 text-xs">
                   No Pages yet. Connect a Facebook Page to see its numbers.
                 </td>
               </tr>
             </tbody>
             <tfoot v-if="dashboard.pages.length > 1" class="bg-slate-50 border-t-2 border-slate-200 font-bold text-slate-900">
               <tr>
+                <td></td>
                 <td class="py-3 px-4">Total ({{ dashboard.pages.length }} Pages)</td>
                 <td class="py-3 px-4 text-right">{{ formatNumber(dashboard.totals.followers) }}</td>
                 <td class="py-3 px-4 text-right">{{ formatNumber(dashboard.totals.views) }}</td>
@@ -273,9 +276,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useAnalytics } from "../../composables/useAnalytics";
+import { usePages } from "../../composables/usePages";
 
 const { dashboard, isLoading, isSyncing, rangeDays, loadAnalytics, syncInsights } = useAnalytics();
 const selectedPageId = ref("");
+
+/** Same number for a Page on every screen: its position in the full Page list */
+const { pages: allPages } = usePages();
+const pageNumbers = computed(() => new Map(allPages.value.map((p, i) => [p.facebook_page_id, i + 1])));
+const pageNumber = (id: string, fallbackIdx: number) => pageNumbers.value.get(id) ?? fallbackIdx + 1;
 
 onMounted(() => {
   loadAnalytics();

@@ -31,6 +31,9 @@ export interface FacebookAccount {
   created_at?: string;
 }
 
+/** Main screens in the left menu */
+export type AppTab = "compose" | "schedule" | "analytics" | "pages";
+
 export interface FacebookPageRecord {
   id: string;
   facebook_page_id: string;
@@ -59,6 +62,8 @@ export interface FacebookPageRecord {
     facebook_user_name: string;
   }>;
   admin_names?: string[];
+  /** false when no connected admin account holds a token for this Page (it must be reconnected) */
+  has_token?: boolean;
   followers_count?: number;
   fan_count?: number;
 }

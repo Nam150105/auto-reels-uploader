@@ -100,6 +100,10 @@
       <div v-else-if="activeTab === 'analytics'" class="flex items-center gap-2">
         <span class="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200/60 text-xs sm:text-sm font-bold">Thống kê</span>
       </div>
+
+      <div v-else-if="activeTab === 'pages'" class="flex items-center gap-2">
+        <span class="text-sky-700 bg-sky-50 px-2.5 py-1 rounded-xl border border-sky-200/60 text-xs sm:text-sm font-bold">Fanpage</span>
+      </div>
     </div>
 
     <!-- Right: Page Count & Connect & Profile -->
@@ -149,12 +153,13 @@
 </template>
 
 <script setup lang="ts">
+import type { AppTab } from "@shared/types";
 import { ref } from "vue";
 import { usePages } from "../../composables/usePages";
 import { useAuth } from "../../composables/useAuth";
 
 defineProps<{
-  activeTab: "compose" | "schedule" | "analytics";
+  activeTab: AppTab;
   composeMode: "single" | "bulk" | "multipage";
 }>();
 

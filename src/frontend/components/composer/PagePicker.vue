@@ -97,6 +97,7 @@
         :class="isSelected(page.facebook_page_id) ? 'border-blue-300 bg-gradient-to-r from-blue-50/90 to-indigo-50/40 text-blue-900 shadow-2xs' : 'border-slate-100 bg-white hover:border-blue-200 hover:bg-blue-50/20'"
       >
         <div class="flex items-center gap-2.5 min-w-0">
+          <span class="w-5 text-right text-[10px] font-bold text-slate-400 flex-shrink-0">{{ indexOf(page.facebook_page_id) }}</span>
           <div class="w-8 h-8 rounded-full bg-slate-100 overflow-hidden flex-shrink-0 border border-slate-200 relative">
             <img v-if="page.avatar_url" :src="page.avatar_url" :alt="page.page_name" class="w-full h-full object-cover" />
             <span v-else class="w-full h-full flex items-center justify-center font-bold text-slate-500 text-[10px]">FB</span>
@@ -158,6 +159,9 @@ const normalize = (s: string) =>
     .toLowerCase();
 
 const selectedSet = computed(() => new Set(props.modelValue));
+/** Fixed number of each Page (its position in the full list), so it stays the same while searching */
+const pageNumbers = computed(() => new Map(props.pages.map((p, i) => [p.facebook_page_id, i + 1])));
+const indexOf = (id: string) => pageNumbers.value.get(id) ?? "";
 const isSelected = (id: string) => selectedSet.value.has(id);
 
 const visiblePages = computed(() => {
