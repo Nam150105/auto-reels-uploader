@@ -358,13 +358,17 @@ export const api = {
     return { media_id: String(data.media_id), filename: String(data.filename || file.name) };
   },
 
-  // Analytics (read live from Facebook)
+  // Analytics: stored numbers (synced from Facebook every 3 hours)
   async getAnalytics(days = 28): Promise<AnalyticsDashboard> {
-    return request<AnalyticsDashboard>(`/api/insights/live?days=${days}`);
+    return request<AnalyticsDashboard>(`/api/insights?days=${days}`);
   },
 
+  // Sync from Facebook now; the next automatic sync is 3 hours later
   async syncAnalytics(days = 28): Promise<AnalyticsDashboard> {
-    return request<AnalyticsDashboard>(`/api/insights/live?days=${days}&refresh=1`);
+    return request<AnalyticsDashboard>("/api/insights/refresh", {
+      method: "POST",
+      body: JSON.stringify({ days })
+    });
   }
 };
 

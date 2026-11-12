@@ -1845,6 +1845,47 @@ async function runAll30Tests() {
     ).json();
     assert.equal(cachedResp.cached, true);
     assert.equal(liveBatchCalls, callsBefore, "Lần tải lại trong 10 phút dùng bộ nhớ đệm");
+
+    // ---- Snapshot D1: CMS chỉ đọc DB, "Làm mới" sync ngay, cron sync lại sau 3 tiếng ----
+    const authHeaders = { Cookie: `session_token=${tokenA}` };
+    const stored = await (await callWorker("/api/insights?days=28", { headers: authHeaders })).json();
+    assert.equal(stored.cached, true, "Đọc từ DB");
+    assert.ok(stored.synced_at && stored.next_sync_at, "Có thời điểm sync và lần sync tới");
+    assert.equal(Date.parse(stored.next_sync_at) - Date.parse(stored.synced_at), 3 * 3600 * 1000);
+    const callsBeforeRead = liveBatchCalls;
+    await callWorker("/api/insights?days=28", { headers: authHeaders });
+    assert.equal(liveBatchCalls, callsBeforeRead, "Mở CMS không gọi Facebook khi đã có dữ liệu trong DB");
+
+    const ownerA = (await d1.prepare("SELECT owner_user_id FROM analytics_snapshots WHERE range_days = 28 LIMIT 1").first()).owner_user_id;
+    const cronAnalytics = () =>
+      workerDefault.scheduled(
+        { cron: "*/10 * * * *", type: "scheduled", scheduledTime: Date.now() },
+        env,
+        { waitUntil: () => {}, passThroughOnException: () => {} }
+      );
+    // Chưa đủ 3 tiếng -> cron không sync snapshot của A
+    const syncedAtBefore = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
+    await cronAnalytics();
+    const syncedAtAfterEarlyCron = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
+    assert.equal(syncedAtAfterEarlyCron, syncedAtBefore, "Chưa đủ 3 tiếng thì cron bỏ qua");
+    // Đẩy lùi 3 tiếng -> cron sync lại
+    await d1.prepare("UPDATE analytics_snapshots SET synced_at = ? WHERE owner_user_id = ?").bind(Date.now() - 3 * 3600 * 1000 - 1000, ownerA).run();
+    const cronRes = await cronAnalytics();
+    assert.ok(cronRes.synced >= 1, "Cron sync snapshot đã đủ 3 tiếng");
+    const syncedAtAfterCron = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
+    assert.ok(syncedAtAfterCron > Date.now() - 60 * 1000, "Snapshot được cập nhật");
+
+    // Nút "Làm mới dữ liệu" (POST) -> sync ngay, đặt lại mốc 3 tiếng
+    await d1.prepare("UPDATE analytics_snapshots SET synced_at = ? WHERE owner_user_id = ?").bind(Date.now() - 3600 * 1000, ownerA).run();
+    const refreshed = await (
+      await callWorker("/api/insights/refresh", {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 28 })
+      })
+    ).json();
+    assert.equal(refreshed.cached, false);
+    assert.ok(Date.parse(refreshed.next_sync_at) > Date.now() + 2.9 * 3600 * 1000, "Lần sync tự động tiếp theo là 3 tiếng sau khi làm mới");
   } finally {
     globalThis.fetch = fetchBeforeLive;
   }

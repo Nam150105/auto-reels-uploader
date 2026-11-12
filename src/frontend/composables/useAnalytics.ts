@@ -8,7 +8,7 @@ const isLoading = ref<boolean>(false);
 const isSyncing = ref<boolean>(false);
 const rangeDays = ref<number>(28);
 let lastFetchedTime = 0;
-const CACHE_TTL_MS = 5 * 60 * 1000; // the server also caches Facebook data for 10 minutes
+const CACHE_TTL_MS = 60 * 1000; // numbers come from the database (synced every 3 hours), so a short reuse is enough
 
 export function useAnalytics() {
   const toast = useToast();
@@ -40,7 +40,7 @@ export function useAnalytics() {
       const data = await api.syncAnalytics(rangeDays.value);
       dashboard.value = data;
       lastFetchedTime = Date.now();
-      toast.success(data?.cached ? "Data is already up to date." : "Loaded the latest numbers from Facebook.");
+      toast.success("Loaded the latest numbers from Facebook.");
     } catch (err: any) {
       toast.error(err?.message || "Failed to sync Facebook analytics.");
     } finally {

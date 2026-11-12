@@ -14,7 +14,12 @@ import type {
   QueueTaskMessage
 } from "./types.ts";
 import { getEncryptionKeyMaterial } from "./utils/crypto.ts";
-import { getLiveAnalyticsDashboard } from "./services/liveInsightsService.ts";
+import {
+  getStoredAnalytics,
+  normalizeRangeDays,
+  syncAndStoreAnalytics,
+  syncDueAnalytics
+} from "./services/analyticsSnapshotService.ts";
 import { parseVnScheduleToUtc, formatUtcToVn, nowUtcSeconds } from "./utils/timezone.ts";
 import {
   ensureDatabaseInitialized,
@@ -143,6 +148,25 @@ function sanitizeInternalRedirect(raw: string | null): string {
   return trimmed;
 }
 
+/** Screens handled by the Vue web router (src/frontend/router.ts): the Worker returns index.html for them */
+const SPA_ROUTE_ROOTS = [
+  "/page",
+  "/pages",
+  "/compose",
+  "/schedule",
+  "/schedules",
+  "/analytics",
+  "/insights",
+  "/posts",
+  "/comments",
+  "/reels"
+];
+
+function isSpaRoute(pathname: string): boolean {
+  const clean = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  return SPA_ROUTE_ROOTS.some((root) => clean === root || clean.startsWith(`${root}/`));
+}
+
 export async function handleWorkerRequest(
   request: Request,
   env: Env,
@@ -267,18 +291,7 @@ export async function handleWorkerRequest(
     return redirectResponse(`${url.origin}/login`, 302);
   }
 
-  if (
-    (pathname === "/page" ||
-      pathname === "/pages" ||
-      pathname === "/schedule" ||
-      pathname === "/schedules" ||
-      pathname === "/analytics" ||
-      pathname === "/insights" ||
-      pathname === "/posts" ||
-      pathname === "/comments" ||
-      pathname === "/reels") &&
-    (method === "GET" || method === "HEAD")
-  ) {
+  if (isSpaRoute(pathname) && (method === "GET" || method === "HEAD")) {
     const ua = request.headers.get("User-Agent") || "";
     const isFbCrawler = /facebookexternalhit|Facebot|meta-externalagent/i.test(ua);
     if (!currentUser) {
@@ -287,13 +300,9 @@ export async function handleWorkerRequest(
         if (staticResp) return staticResp;
       }
       const loginRedirect =
-        pathname === "/schedules" ||
-        pathname === "/schedule" ||
-        pathname === "/reels" ||
-        pathname === "/insights" ||
-        pathname === "/analytics"
-          ? `/login?redirect=${encodeURIComponent(pathname + url.search)}`
-          : "/login";
+        pathname === "/page" || pathname === "/pages"
+          ? "/login"
+          : `/login?redirect=${encodeURIComponent(pathname + url.search)}`;
       return redirectResponse(`${url.origin}${loginRedirect}`, 302);
     }
     const staticResp = await serveStaticHtmlAsset(request, env, "/index.html");
@@ -2027,12 +2036,23 @@ export async function handleWorkerRequest(
     // ------------------------------------------
     // 6.4D. THỐNG KÊ REELS INSIGHTS (/api/insights*)
     // ------------------------------------------
-    // Live analytics straight from the Meta Graph API (Pages, Page insights, Reels and Reel insights)
-    if (pathname === "/api/insights/live" && method === "GET") {
-      const days = parseInt(url.searchParams.get("days") || "28", 10) || 28;
-      const refresh = url.searchParams.get("refresh") === "1";
-      const data = await getLiveAnalyticsDashboard(db, env, ownerUserId, { days, refresh, encryptionKey });
-      return jsonResponse(data);
+    // Analytics read from D1 (synced from Facebook by the cron worker every 3 hours).
+    // Only the very first view of a range (nothing stored yet) reads Facebook directly.
+    if ((pathname === "/api/insights" || pathname === "/api/insights/live") && method === "GET") {
+      const days = normalizeRangeDays(url.searchParams.get("days"));
+      if (url.searchParams.get("refresh") === "1") {
+        return jsonResponse(await syncAndStoreAnalytics(db, env, ownerUserId, days, encryptionKey));
+      }
+      const stored = await getStoredAnalytics(db, ownerUserId, days);
+      if (stored) return jsonResponse(stored);
+      return jsonResponse(await syncAndStoreAnalytics(db, env, ownerUserId, days, encryptionKey));
+    }
+
+    // "Làm mới dữ liệu": sync now; the next automatic sync comes 3 hours after this one
+    if (pathname === "/api/insights/refresh" && method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as { days?: number };
+      const days = normalizeRangeDays(body.days ?? url.searchParams.get("days"));
+      return jsonResponse(await syncAndStoreAnalytics(db, env, ownerUserId, days, encryptionKey));
     }
 
     if (pathname === "/api/insights/reels" && method === "GET") {
@@ -2329,14 +2349,21 @@ export async function handleWorkerRequest(
   return jsonResponse({ detail: "Not Found" }, 404);
 }
 
+/** Cron expression (wrangler.jsonc) that runs the analytics sync worker */
+export const ANALYTICS_SYNC_CRON = "*/10 * * * *";
+
 export async function handleScheduledCron(
-  _event: ScheduledEvent,
+  event: ScheduledEvent,
   env: Env,
   ctx: ExecutionContext
-): Promise<{ checked_at_utc: number; claimed_count: number; task_ids: number[] }> {
+): Promise<unknown> {
   const encryptionKey = getEncryptionKeyMaterial(env);
   const db = getD1Database(env);
   await ensureDatabaseInitialized(db, encryptionKey);
+  // Separate trigger = separate invocation, so the analytics sync never eats the publisher's request budget
+  if (event?.cron === ANALYTICS_SYNC_CRON) {
+    return syncDueAnalytics(db, env, encryptionKey);
+  }
   return dispatchDueScheduledTasks(db, env, ctx);
 }
 

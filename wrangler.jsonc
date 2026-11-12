@@ -19,7 +19,9 @@
 	// Cloudflare Cron Trigger: Kiểm tra và kích hoạt các tác vụ hẹn lịch đến hạn (UTC)
 	"triggers": {
 		"crons": [
-			"*/1 * * * *"
+			"*/1 * * * *",
+			// Đồng bộ thống kê: mỗi 10 phút kiểm tra, snapshot nào đủ 3 tiếng thì sync lại
+			"*/10 * * * *"
 		]
 	},
 	// Biến môi trường Public cho Production (Tuyệt đối KHÔNG đặt META_APP_SECRET hay khóa mã hóa ở đây)

@@ -8,9 +8,10 @@
           <span>Thống kê hiệu quả Fanpage & Reels</span>
         </h2>
         <p class="text-xs text-slate-500 mt-0.5">
-          Dữ liệu thời gian thực từ Meta Graph API.
+          Tự động đồng bộ từ Facebook 3 tiếng/lần.
           <span v-if="dashboard" class="font-medium text-slate-700 ml-1">{{ formatDay(dashboard.range_start) }} – {{ formatDay(dashboard.range_end) }}</span>
-          <span v-if="dashboard?.fetched_at" class="text-slate-400 ml-1">· Cập nhật {{ formatTime(dashboard.fetched_at) }}</span>
+          <span v-if="dashboard?.synced_at || dashboard?.fetched_at" class="text-slate-400 ml-1">· Cập nhật {{ formatTime(dashboard.synced_at || dashboard.fetched_at) }}</span>
+          <span v-if="dashboard?.next_sync_at" class="text-slate-400 ml-1">· Lần tới {{ formatTime(dashboard.next_sync_at) }}</span>
         </p>
       </div>
 

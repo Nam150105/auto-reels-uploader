@@ -186,4 +186,8 @@ export interface AnalyticsDashboard {
   pages: LivePageStats[];
   time_series: LiveDailyPoint[];
   warnings: string[];
+  /** When these numbers were last synced from Facebook (ISO) */
+  synced_at?: string;
+  /** When the next automatic sync is due (ISO) */
+  next_sync_at?: string;
 }

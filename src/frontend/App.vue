@@ -13,7 +13,8 @@
       <!-- Top Header with Breadcrumbs & Mode Dropdown -->
       <Header
         :activeTab="activeTab"
-        v-model:composeMode="composeMode"
+        :composeMode="composeMode"
+        @update:composeMode="setComposeMode"
         @open-connect="() => openConnectModal(null)"
         @open-accounts="openAccountsTab"
       />
@@ -37,31 +38,11 @@
       </div>
 
       <!-- Main Dynamic View Area -->
+      <!-- Screens come from the web router (src/frontend/router.ts) -->
       <main class="flex-1 overflow-hidden relative">
-        <!-- Tab 1: Viết bài (Compose) -->
-        <template v-if="activeTab === 'compose'">
-          <SingleComposer
-            v-if="composeMode === 'single'"
-            @task-created="handleTaskCreated"
-          />
-          <BulkComposer
-            v-else-if="composeMode === 'bulk'"
-            @tasks-created="handleTaskCreated"
-          />
-          <MultiPageComposer
-            v-else
-            @tasks-created="handleTaskCreated"
-          />
-        </template>
-
-        <!-- Tab 2: Lịch đăng (Schedule) -->
-        <ScheduleView v-else-if="activeTab === 'schedule'" />
-
-        <!-- Tab 3: Thống kê (Analytics) -->
-        <AnalyticsView v-else-if="activeTab === 'analytics'" />
-
-        <!-- Tab 4: Fanpage & Admin accounts -->
-        <FanpageView v-else-if="activeTab === 'pages'" @open-connect="(accId) => openConnectModal(accId)" />
+        <RouterView v-slot="{ Component }">
+          <component :is="Component" @open-connect="(accId?: string | null) => openConnectModal(accId ?? null)" />
+        </RouterView>
       </main>
     </div>
 
@@ -79,20 +60,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import type { AppTab } from "@shared/types";
 import { useAuth } from "./composables/useAuth";
 import { usePages } from "./composables/usePages";
+import { TAB_PATHS, type ComposeMode } from "./router";
 import Sidebar from "./components/common/Sidebar.vue";
 import Header from "./components/common/Header.vue";
 import Toast from "./components/common/Toast.vue";
-import SingleComposer from "./components/composer/SingleComposer.vue";
-import BulkComposer from "./components/composer/BulkComposer.vue";
-import MultiPageComposer from "./components/composer/MultiPageComposer.vue";
-import ScheduleView from "./components/schedule/ScheduleView.vue";
-import AnalyticsView from "./components/analytics/AnalyticsView.vue";
 import ConnectFacebookModal from "./components/dialogs/ConnectFacebookModal.vue";
-import FanpageView from "./components/pages/FanpageView.vue";
 
 const { checkAuth } = useAuth();
 const {
@@ -106,38 +83,53 @@ const {
   handleOAuthResult
 } = usePages();
 
-const activeTab = ref<AppTab>("compose");
-const composeMode = ref<"single" | "bulk" | "multipage">("single");
+const route = useRoute();
+const router = useRouter();
+
+// The URL is the source of truth for the current screen
+const activeTab = computed<AppTab>(() => (route.meta.tab as AppTab) || "compose");
+const composeMode = computed<ComposeMode>(() =>
+  activeTab.value === "compose" ? ((route.params.mode as ComposeMode) || "single") : "single"
+);
 
 onMounted(async () => {
   await checkAuth();
   await loadPages();
 
   // Back from a full-page Facebook login (used when the popup was blocked)
-  const params = new URLSearchParams(window.location.search);
-  const oauthStatus = params.get("oauth_status");
+  const oauthStatus = typeof route.query.oauth_status === "string" ? route.query.oauth_status : "";
   if (oauthStatus) {
-    const oauthMsg = params.get("oauth_msg") || "";
-    params.delete("oauth_status");
-    params.delete("oauth_msg");
-    const qs = params.toString();
-    window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`);
+    const oauthMsg = typeof route.query.oauth_msg === "string" ? route.query.oauth_msg : "";
+    const { oauth_status: _s, oauth_msg: _m, ...rest } = route.query;
+    await router.replace({ query: rest });
     await handleOAuthResult(oauthStatus, oauthMsg);
   }
 });
 
+// Fanpage screen: /pages = Page list, /pages/accounts = admin accounts
+watch(
+  () => [route.name, route.params.section] as const,
+  ([name, section]) => {
+    if (name === "pages") pagesViewTab.value = section === "accounts" ? "accounts" : "pages";
+  },
+  { immediate: true }
+);
+watch(pagesViewTab, (tab) => {
+  if (route.name !== "pages") return;
+  const target = tab === "accounts" ? "/pages/accounts" : "/pages";
+  if (route.path !== target) router.replace(target);
+});
+
 const switchTab = (tab: AppTab) => {
-  activeTab.value = tab;
+  router.push(TAB_PATHS[tab]);
+};
+
+const setComposeMode = (mode: ComposeMode) => {
+  router.push(`/compose/${mode}`);
 };
 
 /** Admin accounts now live on the Fanpage screen */
 const openAccountsTab = () => {
-  pagesViewTab.value = "accounts";
-  activeTab.value = "pages";
-};
-
-// When user creates a single or bulk task, automatically switch to the Schedule tab!
-const handleTaskCreated = () => {
-  activeTab.value = "schedule";
+  router.push("/pages/accounts");
 };
 </script>
