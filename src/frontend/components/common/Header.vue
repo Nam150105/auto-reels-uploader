@@ -101,6 +101,10 @@
         <span class="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200/60 text-xs sm:text-sm font-bold">Thống kê</span>
       </div>
 
+      <div v-else-if="activeTab === 'admin'" class="flex items-center gap-2">
+        <span class="text-rose-700 bg-rose-50 px-2.5 py-1 rounded-xl border border-rose-200/60 text-xs sm:text-sm font-bold">Quản trị</span>
+      </div>
+
       <div v-else-if="activeTab === 'pages'" class="flex items-center gap-2">
         <span class="text-sky-700 bg-sky-50 px-2.5 py-1 rounded-xl border border-sky-200/60 text-xs sm:text-sm font-bold">Fanpage</span>
       </div>

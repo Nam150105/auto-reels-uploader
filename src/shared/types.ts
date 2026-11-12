@@ -32,7 +32,7 @@ export interface FacebookAccount {
 }
 
 /** Main screens in the left menu */
-export type AppTab = "compose" | "schedule" | "analytics" | "pages";
+export type AppTab = "compose" | "schedule" | "analytics" | "pages" | "admin";
 
 export interface FacebookPageRecord {
   id: string;

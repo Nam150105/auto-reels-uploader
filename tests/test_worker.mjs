@@ -418,15 +418,42 @@ async function runAll30Tests() {
   assert.equal(await verifyPassword("MyStrongPass#2026", pwdHash), true);
   assert.equal(await verifyPassword("WrongPassword", pwdHash), false);
 
-  const regAResp = await callWorker("/api/auth/register", {
+  // Đăng ký công khai đã tắt: người ngoài không tự tạo được tài khoản
+  const publicRegResp = await callWorker("/api/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      username: "alice_admin",
-      password: "PasswordA123",
-      full_name: "Alice Admin",
-      email: "alice@example.com"
-    })
+    body: JSON.stringify({ username: "outsider", password: "Outsider123" })
+  });
+  assert.equal(publicRegResp.status, 403, "Đăng ký công khai phải bị chặn");
+  assert.equal(await d1.prepare("SELECT COUNT(*) AS n FROM users WHERE username = 'outsider'").first().then((r) => r.n), 0);
+
+  // Tài khoản do admin cấp
+  const bootstrapAdminLogin = await callWorker("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "admin123" })
+  });
+  assert.equal(bootstrapAdminLogin.status, 200);
+  const bootstrapAdminToken = /session_token=([^;]+)/.exec(bootstrapAdminLogin.headers.get("Set-Cookie") || "")?.[1] || "";
+  async function adminCreateAndLogin(input) {
+    const createResp = await callWorker("/api/admin/users", {
+      method: "POST",
+      headers: { Cookie: `session_token=${bootstrapAdminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    });
+    assert.equal(createResp.status, 201, `Admin tạo được tài khoản ${input.username}`);
+    return callWorker("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: input.username, password: input.password })
+    });
+  }
+
+  const regAResp = await adminCreateAndLogin({
+    username: "alice_admin",
+    password: "PasswordA123",
+    full_name: "Alice Admin",
+    email: "alice@example.com"
   });
   assert.equal(regAResp.status, 200);
   const cookieHeaderA1 = regAResp.headers.get("Set-Cookie") || "";
@@ -435,7 +462,7 @@ async function runAll30Tests() {
   assert.ok(cookieHeaderA1.includes("Secure"));
   const tokenA1 = /session_token=([^;]+)/.exec(cookieHeaderA1)?.[1] || "";
   assert.ok(tokenA1.length > 20);
-  console.log("  ✓ [Test 04] Register tài khoản mới & tạo HttpOnly Secure Session");
+  console.log("  ✓ [Test 04] Chặn đăng ký công khai; admin cấp tài khoản & tạo HttpOnly Secure Session");
 
   // Kiểm tra /api/auth/me với tokenA1
   const meResp1 = await callWorker("/api/auth/me", {
@@ -469,14 +496,10 @@ async function runAll30Tests() {
   assert.equal(loginAResp.status, 200);
   const tokenA = /session_token=([^;]+)/.exec(loginAResp.headers.get("Set-Cookie") || "")?.[1] || "";
 
-  const regBResp = await callWorker("/api/auth/register", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      username: "bob_user",
-      password: "PasswordB123",
-      full_name: "Bob User"
-    })
+  const regBResp = await adminCreateAndLogin({
+    username: "bob_user",
+    password: "PasswordB123",
+    full_name: "Bob User"
   });
   assert.equal(regBResp.status, 200);
   const tokenB = /session_token=([^;]+)/.exec(regBResp.headers.get("Set-Cookie") || "")?.[1] || "";
@@ -4337,8 +4360,110 @@ async function runAll30Tests() {
 
   console.log("  ✓ [Test 47] Hệ thống 3 Tab (/schedule, /analytics, /pages) và Bộ lọc tự động ẩn bài đã đăng đạt 100%");
 
+  // --------------------------------------------------------------------------
+  // [TEST 48] KHU VỰC QUẢN TRỊ: chỉ admin, ai đang online, CRUD người dùng, mật khẩu, phiên, danh sách API
+  // --------------------------------------------------------------------------
+  {
+    const jsonPost = (path, token, body, method = "POST") =>
+      callWorker(path, {
+        method,
+        headers: { Cookie: `session_token=${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body || {})
+      });
+    const login = (username, password) =>
+      callWorker("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+    const tokenOf = (resp) => /session_token=([^;]+)/.exec(resp.headers.get("Set-Cookie") || "")?.[1] || "";
+
+    // Thành viên thường bị chặn
+    const memberResp = await callWorker("/api/admin/users", { headers: { Cookie: `session_token=${tokenA}` } });
+    assert.equal(memberResp.status, 403, "Thành viên không vào được API quản trị");
+
+    const adminLogin = await login("admin", "admin123");
+    assert.equal(adminLogin.status, 200);
+    const tokenAdmin = tokenOf(adminLogin);
+    const adminGet = async (path) => {
+      const r = await callWorker(path, { headers: { Cookie: `session_token=${tokenAdmin}` } });
+      assert.equal(r.status, 200, `${path} phải trả 200`);
+      return r.json();
+    };
+
+    // Ai đang online (Alice vừa gọi API ở trên)
+    const overview = await adminGet("/api/admin/overview");
+    assert.ok(overview.counts.users >= 3);
+    assert.ok(overview.counts.online_users >= 1, "Có người dùng đang online");
+    assert.ok(overview.online_sessions.some((s) => s.username === "alice_admin"), "Alice hiện trong danh sách online");
+
+    const list = await adminGet("/api/admin/users");
+    const alice = list.users.find((u) => u.username === "alice_admin");
+    assert.ok(alice && alice.online, "Alice có trạng thái online");
+    assert.ok(alice.pages >= 1 && alice.facebook_accounts >= 1, "Đếm Fanpage và tài khoản Facebook");
+    assert.ok(list.users.every((u) => !("password_hash" in u)), "Không bao giờ trả mật khẩu");
+
+    const aliceDetail = await adminGet(`/api/admin/users/${alice.id}`);
+    assert.ok(aliceDetail.facebook_accounts.length >= 1 && aliceDetail.pages.length >= 1);
+    assert.ok(!JSON.stringify(aliceDetail).includes("access_token"), "Không lộ token Facebook");
+
+    // Thêm người dùng (mật khẩu ngẫu nhiên trả về 1 lần)
+    const created = await (await jsonPost("/api/admin/users", tokenAdmin, { username: "carol_new", full_name: "Carol" })).json();
+    assert.equal(created.success, true);
+    assert.ok(created.password && created.password.length >= 12);
+    assert.equal((await login("carol_new", created.password)).status, 200, "Đăng nhập bằng mật khẩu được tạo");
+    const carolId = (await adminGet("/api/admin/users")).users.find((u) => u.username === "carol_new").id;
+
+    // Đặt mật khẩu mới -> mật khẩu cũ hết tác dụng, phiên cũ bị đăng xuất
+    const carolLogin = await login("carol_new", created.password);
+    const carolToken = tokenOf(carolLogin);
+    const setPwd = await (await jsonPost(`/api/admin/users/${carolId}/password`, tokenAdmin, { password: "NewPass456" })).json();
+    assert.ok(setPwd.revoked_sessions >= 1);
+    assert.equal((await login("carol_new", created.password)).status, 401, "Mật khẩu cũ không còn dùng được");
+    assert.equal((await callWorker("/api/auth/me", { headers: { Cookie: `session_token=${carolToken}` } })).status, 401, "Phiên cũ bị đăng xuất");
+    const carolToken2 = tokenOf(await login("carol_new", "NewPass456"));
+    assert.ok(carolToken2);
+
+    // Người dùng tự đổi mật khẩu
+    assert.equal((await jsonPost("/api/auth/change-password", carolToken2, { current_password: "sai", new_password: "Another789" })).status, 400);
+    assert.equal((await jsonPost("/api/auth/change-password", carolToken2, { current_password: "NewPass456", new_password: "Another789" })).status, 200);
+    assert.equal((await login("carol_new", "Another789")).status, 200);
+
+    // Sửa & khoá tài khoản -> không đăng nhập được nữa
+    assert.equal((await jsonPost(`/api/admin/users/${carolId}`, tokenAdmin, { full_name: "Carol B", is_active: false }, "PUT")).status, 200);
+    assert.equal((await login("carol_new", "Another789")).status, 401, "Tài khoản bị khoá không đăng nhập được");
+
+    // Không tự hạ quyền / tự xoá admin cuối cùng
+    const adminId = (await adminGet("/api/admin/users")).users.find((u) => u.username === "admin").id;
+    assert.equal((await jsonPost(`/api/admin/users/${adminId}`, tokenAdmin, { role: "member" }, "PUT")).status, 400);
+    assert.equal((await jsonPost(`/api/admin/users/${adminId}`, tokenAdmin, {}, "DELETE")).status, 400);
+
+    // Phiên đăng nhập: danh sách + đăng xuất từ xa
+    const aliceSessions = (await adminGet("/api/admin/sessions?scope=active")).sessions.filter((s) => s.username === "alice_admin");
+    assert.ok(aliceSessions.length >= 1);
+
+    // Xoá người dùng kèm toàn bộ dữ liệu
+    assert.equal((await jsonPost(`/api/admin/users/${carolId}`, tokenAdmin, {}, "DELETE")).status, 200);
+    assert.equal(await d1.prepare("SELECT COUNT(*) AS n FROM users WHERE id = ?").bind(carolId).first().then((r) => r.n), 0);
+    assert.equal(await d1.prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ?").bind(carolId).first().then((r) => r.n), 0);
+
+    // Danh sách API phủ mọi route "/api/..." trong mã nguồn
+    const catalog = (await adminGet("/api/admin/api-catalog")).endpoints;
+    const catalogPaths = new Set(catalog.map((e) => e.path));
+    const sourceFiles = ["src/index.ts", ...fs.readdirSync("src/routes").map((f) => `src/routes/${f}`)];
+    const missing = [];
+    for (const file of sourceFiles) {
+      const text = fs.readFileSync(file, "utf8");
+      for (const m of text.matchAll(/pathname === "(\/api\/[^"]+)"/g)) {
+        if (!catalogPaths.has(m[1])) missing.push(`${file}: ${m[1]}`);
+      }
+    }
+    assert.deepEqual(missing, [], "Mọi API phải có trong danh sách API (src/shared/apiCatalog.ts)");
+    console.log("  ✓ [Test 48] Quản trị: chỉ admin, online, thêm/sửa/khoá/xoá người dùng, mật khẩu, phiên, danh sách API");
+  }
+
   console.log("\n==================================================================");
-  console.log(" TẤT CẢ 47/47 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
+  console.log(" TẤT CẢ 48/48 BÀI KIỂM THỬ BẮT BUỘC ĐỀU PASS 100% TUYỆT ĐỐI!     ");
   console.log("==================================================================");
 }
 

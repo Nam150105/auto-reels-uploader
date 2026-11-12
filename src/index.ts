@@ -24,7 +24,6 @@ import { parseVnScheduleToUtc, formatUtcToVn, nowUtcSeconds } from "./utils/time
 import {
   ensureDatabaseInitialized,
   verifyUserCredentials,
-  createUser,
   getFacebookAccounts,
   getFacebookAccountById,
   disconnectFacebookAccount,
@@ -127,6 +126,7 @@ import {
   handleComposerBulkCreate
 } from "./routes/composerRoutes.ts";
 import { getD1Database } from "./fallback_d1.ts";
+import { handleAdminRoutes, handleChangeOwnPassword, touchSession } from "./routes/adminRoutes.ts";
 
 function sanitizeInternalRedirect(raw: string | null): string {
   if (!raw || typeof raw !== "string") return "/page";
@@ -153,6 +153,7 @@ const SPA_ROUTE_ROOTS = [
   "/page",
   "/pages",
   "/compose",
+  "/admin",
   "/schedule",
   "/schedules",
   "/analytics",
@@ -259,6 +260,13 @@ export async function handleWorkerRequest(
     env
   );
 
+  // Ghi nhận phiên đang hoạt động (cho trang quản trị "ai đang online"), tối đa 1 lần/phút mỗi phiên
+  if (currentSession?.id) {
+    const touch = touchSession(db, currentSession.id, request.headers.get("CF-Connecting-IP")).catch(() => {});
+    if (ctx?.waitUntil) ctx.waitUntil(touch);
+    else await touch;
+  }
+
   if (pathname.startsWith("/api/")) {
     const csrfCheck = verifyCsrfProtection(request, env);
     if (!csrfCheck.valid) {
@@ -354,51 +362,12 @@ export async function handleWorkerRequest(
     }
   }
 
-  if (pathname === "/api/auth/register" && method === "POST") {
-    const rl = await enforceAuthRateLimit(request, db, "register");
-    if (!rl.allowed) {
-      return jsonResponse(
-        {
-          detail: `Too many sign-up attempts. Please try again in ${rl.retryAfterSeconds} seconds.`
-        },
-        429,
-        { "Retry-After": String(rl.retryAfterSeconds) }
-      );
-    }
-
-    try {
-      const body = (await request.json()) as {
-        username?: string;
-        password?: string;
-        full_name?: string;
-        email?: string;
-      };
-      const res = await createUser(
-        db,
-        body.username || "",
-        body.password || "",
-        body.full_name || null,
-        body.email || null,
-        "member"
-      );
-      if (!res.success || !res.user) {
-        return jsonResponse({ detail: res.message || "Sign-up failed." }, 400);
-      }
-
-      const issued = await issueUserSession(request, db, env, res.user.id);
-      return jsonResponse(
-        {
-          success: true,
-          user: res.user,
-          csrf_token: issued.csrfToken,
-          message: "Account created successfully!"
-        },
-        200,
-        { "Set-Cookie": makeSessionCookie(issued.token, isHttps) }
-      );
-    } catch {
-      return jsonResponse({ detail: "Invalid sign-up details." }, 400);
-    }
+  // Đăng ký công khai đã tắt: tài khoản chỉ do admin cấp (POST /api/admin/users)
+  if (pathname === "/api/auth/register") {
+    return jsonResponse(
+      { detail: "Sign-up is closed. Please ask an administrator for an account." },
+      403
+    );
   }
 
   if (pathname === "/api/auth/logout" && method === "POST") {
@@ -540,6 +509,15 @@ export async function handleWorkerRequest(
     }
 
     const ownerUserId = currentUser.id;
+
+    // ------------------------------------------
+    // 6.0. ĐỔI MẬT KHẨU & KHU VỰC QUẢN TRỊ (/api/admin/*, chỉ role admin)
+    // ------------------------------------------
+    if (pathname === "/api/auth/change-password" && method === "POST") {
+      return handleChangeOwnPassword(request, db, currentUser, currentSession);
+    }
+    const adminResp = await handleAdminRoutes(request, url, db, currentUser, currentSession);
+    if (adminResp) return adminResp;
 
     // ------------------------------------------
     // 6.1. MEDIA R2 UPLOAD & STORAGE ENDPOINTS

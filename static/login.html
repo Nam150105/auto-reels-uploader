@@ -52,21 +52,7 @@
 
     <div v-else class="bg-white/95 border border-slate-200/90 rounded-3xl shadow-xl shadow-slate-200/50 backdrop-blur-xl p-7 sm:p-8">
       
-      <!-- Tab Switcher -->
-      <div class="flex p-1 bg-slate-100/90 rounded-2xl mb-6 border border-slate-200/70">
-        <button 
-          @click="activeTab = 'login'; errorMsg = ''; successMsg = ''"
-          :class="activeTab === 'login' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900 font-medium'"
-          class="flex-1 py-2 text-xs rounded-xl transition-all text-center">
-          Đăng Nhập
-        </button>
-        <button 
-          @click="activeTab = 'register'; errorMsg = ''; successMsg = ''"
-          :class="activeTab === 'register' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900 font-medium'"
-          class="flex-1 py-2 text-xs rounded-xl transition-all text-center">
-          Đăng Ký Tài Khoản
-        </button>
-      </div>
+      <h1 class="text-base font-black text-slate-800 text-center mb-6">Đăng Nhập</h1>
 
       <!-- Alerts -->
       <div v-if="errorMsg" class="mb-5 p-3 rounded-xl bg-rose-50 border border-rose-200/90 text-rose-700 text-xs flex items-start gap-2 shadow-2xs">
@@ -112,67 +98,7 @@
         </button>
       </form>
 
-      <!-- FORM 2: REGISTER -->
-      <form v-if="activeTab === 'register'" @submit.prevent="handleRegister" class="space-y-3.5">
-        <div>
-          <label class="block text-xs font-bold text-slate-700 mb-1">Họ và tên</label>
-          <input 
-            v-model="regForm.full_name" 
-            type="text" 
-            placeholder="Ví dụ: Nguyễn Văn A" 
-            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
-        </div>
-
-        <div>
-          <label class="block text-xs font-bold text-slate-700 mb-1">Email liên hệ</label>
-          <input 
-            v-model="regForm.email" 
-            type="email" 
-            placeholder="email@vidu.com" 
-            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
-        </div>
-
-        <div>
-          <label class="block text-xs font-bold text-slate-700 mb-1">Tên đăng nhập <span class="text-rose-500">*</span></label>
-          <input 
-            v-model="regForm.username" 
-            type="text" 
-            required 
-            placeholder="Tối thiểu 3 ký tự (chữ hoặc số)" 
-            autocomplete="username"
-            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
-        </div>
-
-        <div>
-          <label class="block text-xs font-bold text-slate-700 mb-1">Mật khẩu <span class="text-rose-500">*</span></label>
-          <input 
-            v-model="regForm.password" 
-            type="password" 
-            required 
-            placeholder="Tối thiểu 4 ký tự" 
-            autocomplete="new-password"
-            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
-        </div>
-
-        <div>
-          <label class="block text-xs font-bold text-slate-700 mb-1">Xác nhận mật khẩu <span class="text-rose-500">*</span></label>
-          <input 
-            v-model="regForm.confirm_password" 
-            type="password" 
-            required 
-            placeholder="Nhập lại mật khẩu" 
-            autocomplete="new-password"
-            class="w-full px-3.5 py-2 bg-slate-50/80 border border-slate-200/90 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition placeholder:text-slate-400">
-        </div>
-
-        <button 
-          type="submit" 
-          :disabled="loading" 
-          class="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-500/20 transition disabled:opacity-50 mt-2">
-          <span v-if="loading">Đang đăng ký...</span>
-          <span v-else>Tạo Tài Khoản Mới</span>
-        </button>
-      </form>
+      <p class="mt-5 text-center text-[11px] text-slate-500">Chưa có tài khoản? Liên hệ quản trị viên để được cấp tài khoản.</p>
 
     </div>
 
@@ -246,14 +172,6 @@
         const loginForm = ref({
           username: '',
           password: ''
-        });
-
-        const regForm = ref({
-          full_name: '',
-          email: '',
-          username: '',
-          password: '',
-          confirm_password: ''
         });
 
         async function verifyExistingSession() {
@@ -352,51 +270,6 @@
           }
         };
 
-        const handleRegister = async () => {
-          if (loading.value) return;
-          errorMsg.value = '';
-          successMsg.value = '';
-          if (regForm.value.password !== regForm.value.confirm_password) {
-            errorMsg.value = 'Mật khẩu xác nhận không khớp!';
-            return;
-          }
-          loading.value = true;
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 12000);
-          try {
-            const resp = await fetch('/api/auth/register', {
-              method: 'POST',
-              credentials: 'same-origin',
-              cache: 'no-store',
-              signal: controller.signal,
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                username: regForm.value.username.trim(),
-                password: regForm.value.password,
-                full_name: regForm.value.full_name.trim(),
-                email: regForm.value.email.trim()
-              })
-            });
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok) {
-              throw new Error(data.detail || data.message || 'Đăng ký không thành công.');
-            }
-            authState.value = 'authenticated';
-            saveAuthBootstrap(data.user, data.csrf_token);
-            successMsg.value = 'Tạo tài khoản thành công! Đang chuyển đến trang quản lý...';
-            window.location.replace(getSafeRedirectTarget());
-          } catch (err) {
-            if (err && err.name === 'AbortError') {
-              errorMsg.value = 'Máy chủ phản hồi quá thời gian chờ. Vui lòng thử lại.';
-            } else {
-              errorMsg.value = err.message || 'Lỗi khi đăng ký tài khoản.';
-            }
-          } finally {
-            clearTimeout(timer);
-            loading.value = false;
-          }
-        };
-
         return {
           authState,
           activeTab,
@@ -404,9 +277,7 @@
           errorMsg,
           successMsg,
           loginForm,
-          regForm,
-          handleLogin,
-          handleRegister
+          handleLogin
         };
       }
     }).mount('#app');

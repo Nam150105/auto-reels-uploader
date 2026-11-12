@@ -4,6 +4,7 @@ import ComposeView from "./components/composer/ComposeView.vue";
 import ScheduleView from "./components/schedule/ScheduleView.vue";
 import AnalyticsView from "./components/analytics/AnalyticsView.vue";
 import FanpageView from "./components/pages/FanpageView.vue";
+import AdminView from "./components/admin/AdminView.vue";
 
 export type ComposeMode = "single" | "bulk" | "multipage";
 export const COMPOSE_MODES: ComposeMode[] = ["single", "bulk", "multipage"];
@@ -47,6 +48,12 @@ export const router = createRouter({
       component: FanpageView,
       meta: { tab: "pages" }
     },
+    {
+      path: "/admin/:section(users|sessions|api)?",
+      name: "admin",
+      component: AdminView,
+      meta: { tab: "admin" }
+    },
     { path: "/:pathMatch(.*)*", redirect: "/compose/single" }
   ]
 });
@@ -55,5 +62,6 @@ export const TAB_PATHS: Record<AppTab, string> = {
   compose: "/compose/single",
   schedule: "/schedule",
   analytics: "/analytics",
-  pages: "/pages"
+  pages: "/pages",
+  admin: "/admin"
 };

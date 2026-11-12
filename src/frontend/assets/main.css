@@ -61,3 +61,22 @@
   opacity: 0;
   transform: scale(0.96);
 }
+
+/* Admin screens */
+@layer components {
+  .admin-input {
+    @apply w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-100 focus:border-rose-400;
+  }
+  .admin-btn-primary {
+    @apply px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition;
+  }
+  .admin-btn-ghost {
+    @apply px-3.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition;
+  }
+  .admin-btn-danger {
+    @apply px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold transition;
+  }
+  .admin-link {
+    @apply text-[11px] font-bold text-slate-500 hover:text-rose-600 transition;
+  }
+}

@@ -65,6 +65,21 @@
         </svg>
         <span class="text-[10px] font-bold leading-none">Fanpage</span>
       </button>
+
+      <!-- 5. Quản trị (admin only) -->
+      <button
+        v-if="isAdmin"
+        type="button"
+        @click="$emit('switch-tab', 'admin')"
+        class="w-full aspect-square rounded-2xl flex flex-col items-center justify-center gap-1.5 transition-all relative group"
+        :class="activeTab === 'admin' ? 'bg-gradient-to-b from-rose-50 to-pink-50/70 text-rose-600 border border-rose-200/90 shadow-xs' : 'hover:bg-slate-100/70 text-slate-500 hover:text-slate-800 border border-transparent'"
+        title="Quản trị hệ thống"
+      >
+        <svg class="w-5 h-5 transition-transform group-hover:scale-110" :class="activeTab === 'admin' ? 'text-rose-600' : 'text-slate-400 group-hover:text-rose-600'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+        </svg>
+        <span class="text-[10px] font-bold leading-none">Quản trị</span>
+      </button>
     </nav>
 
     <!-- Bottom Actions -->
@@ -109,6 +124,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import type { AppTab } from "@shared/types";
 import { useAuth } from "../../composables/useAuth";
 
@@ -122,7 +138,8 @@ defineEmits<{
   (e: "open-accounts"): void;
 }>();
 
-const { logout } = useAuth();
+const { logout, user } = useAuth();
+const isAdmin = computed(() => user.value?.role === "admin");
 
 const handleLogout = async () => {
   if (confirm("Bạn có chắc chắn muốn đăng xuất?")) {
