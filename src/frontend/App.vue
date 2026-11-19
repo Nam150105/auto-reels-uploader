@@ -14,6 +14,7 @@
       <Header
         :activeTab="activeTab"
         :composeMode="composeMode"
+        @switch-tab="switchTab"
         @update:composeMode="setComposeMode"
         @open-connect="() => openConnectModal(null)"
         @open-accounts="openAccountsTab"

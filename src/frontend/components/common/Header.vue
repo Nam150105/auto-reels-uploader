@@ -100,14 +100,48 @@
       <div v-else-if="activeTab === 'analytics'" class="flex items-center gap-2">
         <span class="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200/60 text-xs sm:text-sm font-bold">Thống kê</span>
       </div>
+    </div>
 
-      <div v-else-if="activeTab === 'admin'" class="flex items-center gap-2">
-        <span class="text-rose-700 bg-rose-50 px-2.5 py-1 rounded-xl border border-rose-200/60 text-xs sm:text-sm font-bold">Quản trị</span>
-      </div>
+    <!-- Center: 3 Menu chính tập hợp trên 1 màn hình (Viết bài, Lịch đăng, Thống kê) -->
+    <div class="hidden md:flex items-center gap-1 bg-slate-100/90 p-1 rounded-2xl border border-slate-200/80 shadow-2xs">
+      <!-- 1. Viết bài -->
+      <button
+        type="button"
+        @click="$emit('switch-tab', 'compose')"
+        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition select-none"
+        :class="activeTab === 'compose' ? 'bg-white text-blue-600 shadow-xs border border-blue-100' : 'text-slate-600 hover:text-slate-900'"
+      >
+        <svg class="w-3.5 h-3.5" :class="activeTab === 'compose' ? 'text-blue-600' : 'text-slate-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+        </svg>
+        <span>Viết bài</span>
+      </button>
 
-      <div v-else-if="activeTab === 'pages'" class="flex items-center gap-2">
-        <span class="text-sky-700 bg-sky-50 px-2.5 py-1 rounded-xl border border-sky-200/60 text-xs sm:text-sm font-bold">Fanpage</span>
-      </div>
+      <!-- 2. Lịch đăng -->
+      <button
+        type="button"
+        @click="$emit('switch-tab', 'schedule')"
+        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition select-none"
+        :class="activeTab === 'schedule' ? 'bg-white text-violet-600 shadow-xs border border-violet-100' : 'text-slate-600 hover:text-slate-900'"
+      >
+        <svg class="w-3.5 h-3.5" :class="activeTab === 'schedule' ? 'text-violet-600' : 'text-slate-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        <span>Lịch đăng</span>
+      </button>
+
+      <!-- 3. Thống kê -->
+      <button
+        type="button"
+        @click="$emit('switch-tab', 'analytics')"
+        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition select-none"
+        :class="activeTab === 'analytics' ? 'bg-white text-emerald-600 shadow-xs border border-emerald-100' : 'text-slate-600 hover:text-slate-900'"
+      >
+        <svg class="w-3.5 h-3.5" :class="activeTab === 'analytics' ? 'text-emerald-600' : 'text-slate-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>
+        <span>Thống kê</span>
+      </button>
     </div>
 
     <!-- Right: Page Count & Connect & Profile -->
@@ -169,6 +203,7 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: "update:composeMode", mode: "single" | "bulk" | "multipage"): void;
+  (e: "switch-tab", tab: AppTab): void;
   (e: "open-connect"): void;
   (e: "open-accounts"): void;
 }>();
