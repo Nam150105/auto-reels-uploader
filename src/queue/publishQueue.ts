@@ -40,7 +40,8 @@ import {
   validateVideoSource,
   publishReelViaGraphApi,
   postReelCommentViaGraphApi,
-  getCurrentMetaThrottleState
+  getCurrentMetaThrottleState,
+  flushMetaApiTelemetry
 } from "../services/metaGraphService.ts";
 import { randomHex } from "../utils/crypto.ts";
 import { nowUtcSeconds } from "../utils/timezone.ts";
@@ -856,7 +857,11 @@ export async function processTaskQueueMessages(
   for (let i = 0; i < count; i++) {
     workers.push(workerLoop(i));
   }
-  await Promise.all(workers);
+  try {
+    await Promise.all(workers);
+  } finally {
+    await flushMetaApiTelemetry(db).catch(() => {});
+  }
 }
 
 /**
@@ -867,17 +872,21 @@ export async function handleNativeQueueBatch(
   db: D1Database,
   env: Env
 ): Promise<void> {
-  for (const message of batch.messages) {
-    try {
-      // A "retry" result already put the task back in D1 (status 'queued' + next_retry_at),
-      // and the cron re-sends it when due. Retrying here as well would run it twice.
-      await consumeSingleTaskMessage(db, env, message.body);
-      message.ack();
-    } catch {
-      // Unexpected crash before the task state was saved: let the Queue deliver it again.
-      // The D1 lease prevents two workers from publishing the same task.
-      message.retry({ delaySeconds: 60 });
+  try {
+    for (const message of batch.messages) {
+      try {
+        // A "retry" result already put the task back in D1 (status 'queued' + next_retry_at),
+        // and the cron re-sends it when due. Retrying here as well would run it twice.
+        await consumeSingleTaskMessage(db, env, message.body);
+        message.ack();
+      } catch {
+        // Unexpected crash before the task state was saved: let the Queue deliver it again.
+        // The D1 lease prevents two workers from publishing the same task.
+        message.retry({ delaySeconds: 60 });
+      }
     }
+  } finally {
+    await flushMetaApiTelemetry(db).catch(() => {});
   }
 }
 
@@ -1097,13 +1106,17 @@ export async function dispatchDueTaskComments(
   nowUtc: number,
   limit = 5
 ): Promise<number> {
-  const due = await claimDueTaskCommentRows(db, nowUtc, limit);
-  if (due.length === 0) return 0;
-  const res = await postClaimedTaskComments(db, env, due);
-  for (const taskId of res.taskIds) {
-    try {
-      await refreshTaskCommentSummary(db, taskId);
-    } catch {}
+  try {
+    const due = await claimDueTaskCommentRows(db, nowUtc, limit);
+    if (due.length === 0) return 0;
+    const res = await postClaimedTaskComments(db, env, due);
+    for (const taskId of res.taskIds) {
+      try {
+        await refreshTaskCommentSummary(db, taskId);
+      } catch {}
+    }
+    return due.length;
+  } finally {
+    await flushMetaApiTelemetry(db).catch(() => {});
   }
-  return due.length;
 }

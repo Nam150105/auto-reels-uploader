@@ -52,6 +52,7 @@ export const API_CATALOG: ApiEndpoint[] = [
 
   // Bài đăng / lịch đăng
   { group: "Lịch đăng", method: "GET", path: "/api/tasks", access: "user", description: "Danh sách bài đăng / lịch đăng" },
+  { group: "Lịch đăng", method: "GET", path: "/api/tasks/version", access: "user", description: "Số phiên bản dữ liệu bài đăng (để biết khi nào cần tải lại)" },
   { group: "Lịch đăng", method: "POST", path: "/api/tasks", access: "user", description: "Tạo một bài đăng" },
   { group: "Lịch đăng", method: "POST", path: "/api/tasks/bulk", access: "user", description: "Tạo nhiều bài đăng" },
   { group: "Lịch đăng", method: "DELETE", path: "/api/tasks/bulk", access: "user", description: "Xoá nhiều bài đăng" },

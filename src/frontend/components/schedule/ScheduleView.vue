@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col p-4 lg:p-6 overflow-y-auto select-none">
-    <!-- Top Filter & Action Bar -->
-    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
+    <!-- Top Filter & Action Bar (Sticky khi cuộn trang) -->
+    <div class="sticky top-0 z-30 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4 bg-white/95 backdrop-blur-md p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
       <!-- Status Filter Tabs -->
       <div class="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1 sm:pb-0">
         <button
@@ -82,10 +82,10 @@
       </div>
     </div>
 
-    <!-- Batch Selection Bar (When rows selected) -->
+    <!-- Batch Selection Bar (When rows selected - Sticky khi cuộn) -->
     <div
       v-if="selectedTaskIds.length > 0"
-      class="mb-4 bg-blue-50/90 border border-blue-200 rounded-2xl p-3 flex items-center justify-between shadow-2xs animate-in fade-in duration-150"
+      class="sticky top-[68px] z-20 mb-4 bg-blue-50/95 backdrop-blur-md border border-blue-200 rounded-2xl p-3 flex items-center justify-between shadow-2xs animate-in fade-in duration-150"
     >
       <div class="flex items-center gap-2 text-xs font-bold text-blue-900">
         <span class="w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
@@ -121,7 +121,7 @@
     <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs flex-1 flex flex-col min-h-[350px]">
       <div class="overflow-x-auto flex-1 scrollbar-thin">
         <table class="w-full text-xs text-left">
-          <thead class="bg-slate-50/80 text-slate-600 font-bold border-b border-slate-200/80">
+          <thead class="sticky top-0 z-10 bg-slate-50/95 backdrop-blur-md text-slate-600 font-bold border-b border-slate-200/80 shadow-2xs">
             <tr>
               <th class="py-3 px-4 w-10 text-center">
                 <input
@@ -362,6 +362,7 @@ const {
   taskStats,
   isAllSelected,
   loadTasks,
+  startAutoRefresh,
   toggleSelectTask,
   toggleSelectAll,
   publishNow,
@@ -373,47 +374,15 @@ const {
 
 const isEditModalOpen = ref(false);
 const editingTask = ref<TaskRecord | null>(null);
-let pollInterval: any = null;
-let lastLoadAt = Date.now();
-
-/**
- * How often to refresh (ms):
- * - 5s while posts are publishing
- * - 15s while a post is due soon or comments are waiting / being posted
- * - 60s otherwise, so the list never goes stale
- */
-const desiredPollMs = () => {
-  if (taskStats.value.running > 0) return 5000;
-  const nowSec = Date.now() / 1000;
-  const busy = tasks.value.some((t) => {
-    if ((t.status === "pending" || t.status === "scheduled") && t.scheduled_at && t.scheduled_at <= nowSec + 120) return true;
-    if (t.comment_status === "scheduled" || t.comment_status === "processing") return true;
-    return (t.comments || []).some((c) => c.status === "scheduled" || c.status === "processing" || c.status === "pending");
-  });
-  return busy ? 15000 : 60000;
-};
-
-const refreshSilently = async () => {
-  lastLoadAt = Date.now();
-  await loadTasks(true);
-};
-
-const onVisibilityChange = () => {
-  if (document.visibilityState === "visible") refreshSilently();
-};
+let stopAutoRefresh: (() => void) | null = null;
 
 onMounted(() => {
   loadTasks();
-  pollInterval = setInterval(() => {
-    if (document.visibilityState !== "visible") return;
-    if (Date.now() - lastLoadAt >= desiredPollMs()) refreshSilently();
-  }, 5000);
-  document.addEventListener("visibilitychange", onVisibilityChange);
+  stopAutoRefresh = startAutoRefresh();
 });
 
 onUnmounted(() => {
-  if (pollInterval) clearInterval(pollInterval);
-  document.removeEventListener("visibilitychange", onVisibilityChange);
+  stopAutoRefresh?.();
 });
 
 const setFilter = (f: string) => {

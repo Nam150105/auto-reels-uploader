@@ -121,6 +121,12 @@ export const api = {
   },
 
   // Tasks
+  /** Số phiên bản dữ liệu bài đăng — đổi mỗi khi có bài/comment thay đổi (rất rẻ, đọc 1 dòng) */
+  async getTaskVersion(): Promise<number> {
+    const res = await request<{ version: number }>("/api/tasks/version");
+    return Number(res?.version || 0);
+  },
+
   async getTasks(params?: {
     status?: string;
     page_id?: string;

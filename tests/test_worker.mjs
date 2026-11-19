@@ -1492,6 +1492,9 @@ async function runAll30Tests() {
   });
   assert.equal(foreignPageResp.status, 400, "Không cho đăng lên Fanpage không thuộc quyền");
 
+  const getVersion = async () =>
+    (await (await callWorker("/api/tasks/version", { headers: { Cookie: `session_token=${tokenA}` } })).json()).version;
+  const versionBefore = await getVersion();
   const schedResp = await postJson("/api/tasks", {
     facebook_page_ids: ["page_101", "page_102"],
     media_id: composerMediaId,
@@ -1506,6 +1509,16 @@ async function runAll30Tests() {
   const schedJson = await schedResp.json();
   assert.equal(schedJson.task_ids.length, 2, "1 video x 2 Fanpage = 2 bài đăng");
   composerTaskIds.push(...schedJson.task_ids);
+  // Phiên bản dữ liệu tăng khi tạo bài; cập nhật chỉ phục vụ thống kê thì không làm giao diện tải lại
+  const versionAfter = await getVersion();
+  assert.ok(versionAfter > versionBefore, "Tạo bài phải làm đổi số phiên bản");
+  await d1
+    .prepare("UPDATE tasks SET analytics_status = 'syncing', analytics_next_sync_at = 'x' WHERE id = ?")
+    .bind(schedJson.task_ids[0])
+    .run();
+  assert.equal(await getVersion(), versionAfter, "Cập nhật thống kê không được đổi số phiên bản");
+  await d1.prepare("UPDATE tasks SET caption = caption WHERE id = ?").bind(schedJson.task_ids[0]).run();
+  assert.ok((await getVersion()) > versionAfter, "Sửa bài phải làm đổi số phiên bản");
   const schedRows = (
     await d1
       .prepare(`SELECT facebook_page_id, status, scheduled_at, comment_delay_minutes, comment_status, media_id

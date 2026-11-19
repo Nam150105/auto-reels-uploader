@@ -1,7 +1,7 @@
 <template>
   <div class="h-full p-4 lg:p-6 overflow-y-auto select-none">
-    <!-- Top bar -->
-    <div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
+    <!-- Top bar (Sticky khi cuộn trang) -->
+    <div class="sticky top-0 z-30 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 mb-3 bg-white/95 backdrop-blur-md p-4 rounded-2xl border border-slate-200/80 shadow-xs">
       <div>
         <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
           <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
@@ -47,6 +47,46 @@
       </div>
     </div>
 
+    <!-- Sub-menu Tabs (Sticky khi cuộn) -->
+    <div v-if="dashboard" class="sticky top-[80px] z-20 bg-white/95 backdrop-blur-md p-2 rounded-2xl border border-slate-200/80 mb-4 flex items-center gap-2 overflow-x-auto scrollbar-none shadow-xs">
+      <button
+        type="button"
+        @click="activeSubTab = 'all'"
+        class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+        :class="activeSubTab === 'all' ? 'bg-blue-50 text-blue-700 border border-blue-300 shadow-2xs' : 'bg-slate-100/70 text-slate-600 hover:bg-slate-200/70 border border-slate-200/50'"
+      >
+        <span>📊 Tổng quan tất cả</span>
+      </button>
+
+      <button
+        type="button"
+        @click="activeSubTab = 'charts'"
+        class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+        :class="activeSubTab === 'charts' ? 'bg-indigo-50 text-indigo-700 border border-indigo-300 shadow-2xs' : 'bg-slate-100/70 text-slate-600 hover:bg-slate-200/70 border border-slate-200/50'"
+      >
+        <span>📈 Biểu đồ hoạt động</span>
+      </button>
+
+      <button
+        type="button"
+        @click="activeSubTab = 'pages'"
+        class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+        :class="activeSubTab === 'pages' ? 'bg-emerald-50 text-emerald-700 border border-emerald-300 shadow-2xs' : 'bg-slate-100/70 text-slate-600 hover:bg-slate-200/70 border border-slate-200/50'"
+      >
+        <span>📑 Hiệu quả theo Fanpage</span>
+        <span v-if="dashboard.pages.length" class="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 font-bold">{{ dashboard.pages.length }}</span>
+      </button>
+
+      <button
+        type="button"
+        @click="activeSubTab = 'reels'"
+        class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+        :class="activeSubTab === 'reels' ? 'bg-purple-50 text-purple-700 border border-purple-300 shadow-2xs' : 'bg-slate-100/70 text-slate-600 hover:bg-slate-200/70 border border-slate-200/50'"
+      >
+        <span>🎬 Chi tiết bài Reels</span>
+      </button>
+    </div>
+
     <div v-if="isLoading && !dashboard" class="flex items-center justify-center text-xs text-slate-400 py-20">
       Loading numbers from Facebook...
     </div>
@@ -85,7 +125,7 @@
       </div>
 
       <!-- The five numbers -->
-      <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+      <div v-if="activeSubTab === 'all' || activeSubTab === 'charts'" class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         <div
           v-for="(card, cIdx) in cards"
           :key="card.label"
@@ -106,7 +146,7 @@
       </div>
 
       <!-- Daily chart -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 mb-6 shadow-xs">
+      <div v-if="activeSubTab === 'all' || activeSubTab === 'charts'" class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 mb-6 shadow-xs">
         <div class="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-100 mb-4">
           <h3 class="font-bold text-sm text-slate-800">Daily activity{{ selectedPage ? ` · ${selectedPage.page_name}` : "" }}</h3>
           <div class="flex items-center gap-4 text-xs font-semibold">
@@ -146,7 +186,7 @@
       </div>
 
       <!-- ALL PAGES: per-Page numbers + total row -->
-      <div v-if="!selectedPage" class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+      <div v-if="!selectedPage && (activeSubTab === 'all' || activeSubTab === 'pages')" class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs mb-6">
         <div class="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
           <h3 class="font-bold text-sm text-slate-800">Pages</h3>
           <span class="text-xs text-slate-500 font-medium">Click a Page for day-by-day details · "—" = not returned by Facebook</span>
@@ -220,7 +260,7 @@
       </div>
 
       <!-- ONE PAGE: day by day + Reels list -->
-      <div v-if="selectedPage" class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div v-if="selectedPage && (activeSubTab === 'all' || activeSubTab === 'reels')" class="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
           <div class="p-4 border-b border-slate-100 flex items-center justify-between">
             <h3 class="font-bold text-sm text-slate-800">Day by day</h3>
@@ -281,6 +321,7 @@ import { usePages } from "../../composables/usePages";
 
 const { dashboard, isLoading, isSyncing, rangeDays, loadAnalytics, syncInsights } = useAnalytics();
 const selectedPageId = ref("");
+const activeSubTab = ref<"all" | "charts" | "pages" | "reels">("all");
 
 /** Same number for a Page on every screen: its position in the full Page list */
 const { pages: allPages } = usePages();

@@ -1307,42 +1307,106 @@ export async function trackMetaGraphResponse(
   }
 
   if (db) {
+    // Cộng dồn trong bộ nhớ rồi ghi gộp (trước đây mỗi request Meta = 1 lần ghi D1)
     const bucketHour = nowIso.slice(0, 13) + ":00:00Z";
-    try {
-      await db
-        .prepare(
-          `INSERT INTO meta_api_telemetry (
-             bucket_hour, endpoint_group, total_requests, cache_hits, cache_misses,
-             error_requests, rate_limited_requests, retry_count,
-             max_app_call_pct, max_page_call_pct, last_status_code, last_error_code, updated_at
-           ) VALUES (?, ?, 1, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(bucket_hour, endpoint_group) DO UPDATE SET
-             total_requests = meta_api_telemetry.total_requests + 1,
-             cache_misses = meta_api_telemetry.cache_misses + 1,
-             error_requests = meta_api_telemetry.error_requests + excluded.error_requests,
-             rate_limited_requests = meta_api_telemetry.rate_limited_requests + excluded.rate_limited_requests,
-             retry_count = meta_api_telemetry.retry_count + excluded.retry_count,
-             max_app_call_pct = MAX(meta_api_telemetry.max_app_call_pct, excluded.max_app_call_pct),
-             max_page_call_pct = MAX(meta_api_telemetry.max_page_call_pct, excluded.max_page_call_pct),
-             last_status_code = excluded.last_status_code,
-             last_error_code = COALESCE(excluded.last_error_code, meta_api_telemetry.last_error_code),
-             updated_at = excluded.updated_at`
-        )
-        .bind(
-          bucketHour,
-          endpointGroup,
-          !resp || !resp.ok || (errorCode && errorCode > 0) ? 1 : 0,
-          isRateLimit ? 1 : 0,
-          isRetry ? 1 : 0,
-          appCallPct,
-          effectivePagePct,
-          status,
-          errorCode ?? null,
-          nowIso
-        )
-        .run();
-    } catch {}
+    const key = bucketHour + "|" + endpointGroup;
+    const p = pendingTelemetry.get(key) || {
+      bucket_hour: bucketHour,
+      endpoint_group: endpointGroup,
+      total: 0,
+      errors: 0,
+      rate_limited: 0,
+      retries: 0,
+      max_app: 0,
+      max_page: 0,
+      last_status: 0,
+      last_error: null as number | null,
+      updated_at: nowIso
+    };
+    p.total += 1;
+    if (!resp || !resp.ok || (errorCode && errorCode > 0)) p.errors += 1;
+    if (isRateLimit) p.rate_limited += 1;
+    if (isRetry) p.retries += 1;
+    p.max_app = Math.max(p.max_app, appCallPct);
+    p.max_page = Math.max(p.max_page, effectivePagePct);
+    p.last_status = status;
+    if (errorCode) p.last_error = errorCode;
+    p.updated_at = nowIso;
+    pendingTelemetry.set(key, p);
+    pendingTelemetryCount += 1;
+    if (!pendingSinceMs) pendingSinceMs = Date.now();
+
+    if (pendingTelemetryCount >= TELEMETRY_FLUSH_COUNT || Date.now() - pendingSinceMs >= TELEMETRY_FLUSH_MS) {
+      await flushMetaApiTelemetry(db);
+    }
   }
+}
+
+type PendingTelemetry = {
+  bucket_hour: string;
+  endpoint_group: string;
+  total: number;
+  errors: number;
+  rate_limited: number;
+  retries: number;
+  max_app: number;
+  max_page: number;
+  last_status: number;
+  last_error: number | null;
+  updated_at: string;
+};
+const TELEMETRY_FLUSH_COUNT = 50;
+const TELEMETRY_FLUSH_MS = 60_000;
+const pendingTelemetry = new Map<string, PendingTelemetry>();
+let pendingTelemetryCount = 0;
+let pendingSinceMs = 0;
+
+/** Ghi các số liệu Meta API đang cộng dồn xuống D1 (1 lần ghi cho mỗi nhóm endpoint/giờ) */
+export async function flushMetaApiTelemetry(db: D1Database | null | undefined): Promise<void> {
+  if (!db || pendingTelemetry.size === 0) return;
+  const rows = Array.from(pendingTelemetry.values());
+  pendingTelemetry.clear();
+  pendingTelemetryCount = 0;
+  pendingSinceMs = 0;
+  try {
+    await db.batch(
+      rows.map((p) =>
+        db
+          .prepare(
+            `INSERT INTO meta_api_telemetry (
+               bucket_hour, endpoint_group, total_requests, cache_hits, cache_misses,
+               error_requests, rate_limited_requests, retry_count,
+               max_app_call_pct, max_page_call_pct, last_status_code, last_error_code, updated_at
+             ) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(bucket_hour, endpoint_group) DO UPDATE SET
+               total_requests = meta_api_telemetry.total_requests + excluded.total_requests,
+               cache_misses = meta_api_telemetry.cache_misses + excluded.cache_misses,
+               error_requests = meta_api_telemetry.error_requests + excluded.error_requests,
+               rate_limited_requests = meta_api_telemetry.rate_limited_requests + excluded.rate_limited_requests,
+               retry_count = meta_api_telemetry.retry_count + excluded.retry_count,
+               max_app_call_pct = MAX(meta_api_telemetry.max_app_call_pct, excluded.max_app_call_pct),
+               max_page_call_pct = MAX(meta_api_telemetry.max_page_call_pct, excluded.max_page_call_pct),
+               last_status_code = excluded.last_status_code,
+               last_error_code = COALESCE(excluded.last_error_code, meta_api_telemetry.last_error_code),
+               updated_at = excluded.updated_at`
+          )
+          .bind(
+            p.bucket_hour,
+            p.endpoint_group,
+            p.total,
+            p.total,
+            p.errors,
+            p.rate_limited,
+            p.retries,
+            p.max_app,
+            p.max_page,
+            p.last_status,
+            p.last_error,
+            p.updated_at
+          )
+      )
+    );
+  } catch {}
 }
 
 export function recordMetaCacheHit(endpointGroup: string): void {

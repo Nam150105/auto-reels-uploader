@@ -138,7 +138,11 @@ export function assertTaskMutable(
   }
 }
 
+// PRAGMA table_info đọc mọi cột mỗi lần gọi → chỉ kiểm tra 1 lần cho mỗi isolate
+let taskColumnsEnsured = false;
+
 export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
+  if (taskColumnsEnsured) return;
   try {
     const info = await db.prepare("PRAGMA table_info(tasks)").all<{ name: string }>();
     const existing = new Set((info.results || []).map((c) => c.name));
@@ -205,6 +209,19 @@ export async function ensureTaskCommentColumns(db: D1Database): Promise<void> {
     if (!existing.has("comment_due_at")) {
       try { await db.exec("ALTER TABLE tasks ADD COLUMN comment_due_at INTEGER"); } catch {}
     }
+    if (!existing.has("analytics_next_sync_at")) {
+      // '' = chưa đồng bộ lần nào → luôn được ưu tiên (chuỗi rỗng nhỏ hơn mọi mốc ISO)
+      try { await db.exec("ALTER TABLE tasks ADD COLUMN analytics_next_sync_at TEXT DEFAULT ''"); } catch {}
+      try {
+        await db.exec(
+          "UPDATE tasks SET analytics_next_sync_at = '9999-12-31T00:00:00.000Z' WHERE status = 'success' AND (COALESCE(video_id, '') = '' OR analytics_status = 'token_expired')"
+        );
+      } catch {}
+    }
+    try {
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_analytics_due ON tasks(status, analytics_next_sync_at)");
+    } catch {}
+    taskColumnsEnsured = true;
 
     const pageInfo = await db.prepare("PRAGMA table_info(facebook_pages)").all<{ name: string }>();
     const pageExisting = new Set((pageInfo.results || []).map((c) => c.name));
@@ -750,6 +767,14 @@ export async function ensureDatabaseInitialized(
 
   // Tương thích với CSDL hiện có (Thêm các cột trạng thái comment nếu chưa có)
   await ensureTaskCommentColumns(db);
+  try {
+    await db.prepare("CREATE INDEX IF NOT EXISTS idx_tasks_comment_due ON tasks(comment_status, comment_due_at)").run();
+  } catch {}
+  try {
+    await ensureTaskVersionTriggers(db);
+  } catch (err) {
+    console.warn("[DB] Không tạo được trigger phiên bản bài đăng:", err);
+  }
 
   // Khởi tạo tài khoản quản trị viên mặc định nếu hệ thống mới tinh
   const existingAdmin = await db
@@ -1980,12 +2005,14 @@ export async function getFacebookPages(
     includeToken?: boolean;
     accountIds?: string[];
     ownerUserId: string;
+    /** false = bỏ 4 subquery đếm task (mỗi lần quét toàn bộ tasks của user) — dùng cho kiểm tra quyền sở hữu */
+    includeCounts?: boolean;
   }
 ): Promise<FacebookPageRecord[]> {
-  const { selectedOnly = false, includeToken = false, accountIds = [], ownerUserId } = options;
+  const { selectedOnly = false, includeToken = false, accountIds = [], ownerUserId, includeCounts = true } = options;
 
-  let pageSql = `
-    SELECT fp.*,
+  const countsSql = includeCounts
+    ? `,
            (SELECT COUNT(*) FROM tasks t
             WHERE t.facebook_page_id = fp.facebook_page_id
               AND t.owner_user_id = fp.owner_user_id
@@ -2001,7 +2028,11 @@ export async function getFacebookPages(
            (SELECT COUNT(*) FROM tasks t
             WHERE t.facebook_page_id = fp.facebook_page_id
               AND t.owner_user_id = fp.owner_user_id
-              AND t.status IN ('published', 'success')) AS success_count
+              AND t.status IN ('published', 'success')) AS success_count`
+    : `, 0 AS pending_count, 0 AS running_count, 0 AS failed_count, 0 AS success_count`;
+
+  let pageSql = `
+    SELECT fp.*${countsSql}
     FROM facebook_pages fp
     WHERE fp.owner_user_id = ?
   `;
@@ -3053,6 +3084,7 @@ export async function getTasks(
       ),
       comment_log: String(r.comment_log || ""),
       comment_posted_at: (r.comment_posted_at as string) || null,
+      comment_due_at: r.comment_due_at != null ? Number(r.comment_due_at) : null,
       analytics_status: String(
         r.analytics_status || (rawStatus === "success" ? "pending" : "not_synced")
       ),
@@ -3311,6 +3343,11 @@ export async function updateTaskExecutionState(
                WHEN ? = 1 AND (analytics_status IS NULL OR analytics_status = 'not_synced') THEN 'pending'
                ELSE COALESCE(analytics_status, 'not_synced')
              END,
+             analytics_next_sync_at = CASE
+               WHEN ? = 1 AND (analytics_next_sync_at IS NULL OR analytics_next_sync_at = '')
+                 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+30 minutes')
+               ELSE analytics_next_sync_at
+             END,
              log = ?,
              video_id = COALESCE(?, video_id),
              post_id = COALESCE(?, post_id),
@@ -3332,6 +3369,7 @@ export async function updateTaskExecutionState(
         status,
         isSuccess ? 1 : 0,
         isFailed ? 1 : 0,
+        isSuccess ? 1 : 0,
         isSuccess ? 1 : 0,
         cleanLog,
         extra?.videoId ?? null,
@@ -3390,6 +3428,22 @@ export async function updateTaskExecutionState(
   }
 }
 
+/**
+ * Mốc đồng bộ thống kê kế tiếp (tham số: analytics_status, synced_at).
+ * - token_expired: dừng hẳn cho tới khi người dùng đồng bộ thủ công
+ * - đang đồng bộ (synced_at NULL): giữ nguyên để nếu lỗi giữa chừng sẽ được thử lại
+ * - bài < 24h: 30 phút; 1–7 ngày: 3 giờ; > 7 ngày: 12 giờ
+ */
+const ANALYTICS_NEXT_SYNC_SQL = `CASE
+  WHEN ? = 'token_expired' THEN '9999-12-31T00:00:00.000Z'
+  WHEN ? IS NULL THEN analytics_next_sync_at
+  WHEN julianday('now') - julianday(COALESCE(published_at, updated_at, created_at)) < 1
+    THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+30 minutes')
+  WHEN julianday('now') - julianday(COALESCE(published_at, updated_at, created_at)) < 7
+    THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+3 hours')
+  ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+12 hours')
+END`;
+
 export async function updateTaskAnalyticsState(
   db: D1Database,
   taskId: number,
@@ -3406,10 +3460,11 @@ export async function updateTaskAnalyticsState(
          SET analytics_status = ?,
              analytics_error = ?,
              analytics_last_synced_at = COALESCE(?, analytics_last_synced_at),
+             analytics_next_sync_at = ${ANALYTICS_NEXT_SYNC_SQL},
              updated_at = ?
          WHERE id = ?`
       )
-      .bind(analyticsStatus, cleanErr, syncedAt !== undefined ? syncedAt : now, now, taskId)
+      .bind(analyticsStatus, cleanErr, syncedAt !== undefined ? syncedAt : now, analyticsStatus, syncedAt !== undefined ? syncedAt : now, now, taskId)
       .run();
   } catch {
     await ensureTaskCommentColumns(db);
@@ -3419,10 +3474,11 @@ export async function updateTaskAnalyticsState(
          SET analytics_status = ?,
              analytics_error = ?,
              analytics_last_synced_at = COALESCE(?, analytics_last_synced_at),
+             analytics_next_sync_at = ${ANALYTICS_NEXT_SYNC_SQL},
              updated_at = ?
          WHERE id = ?`
       )
-      .bind(analyticsStatus, cleanErr, syncedAt !== undefined ? syncedAt : now, now, taskId)
+      .bind(analyticsStatus, cleanErr, syncedAt !== undefined ? syncedAt : now, analyticsStatus, syncedAt !== undefined ? syncedAt : now, now, taskId)
       .run();
   }
 }
@@ -4722,6 +4778,88 @@ export interface TaskCommentRow {
 }
 
 let taskCommentsTableReady = false;
+
+// ==========================================
+// PHIÊN BẢN DỮ LIỆU BÀI ĐĂNG (cho giao diện tự làm mới rẻ)
+// ==========================================
+// Trigger tăng task_versions.version mỗi khi bài/comment của người dùng thay đổi.
+// Giao diện chỉ hỏi số phiên bản (đọc 1 dòng) và chỉ tải lại danh sách khi số này đổi.
+let taskVersionTriggersReady = false;
+
+const bumpTaskVersionSql = (ownerExpr: string) => `
+  INSERT INTO task_versions (owner_user_id, version, updated_at)
+  VALUES (${ownerExpr}, 1, CAST(strftime('%s', 'now') AS INTEGER))
+  ON CONFLICT(owner_user_id) DO UPDATE SET version = version + 1, updated_at = excluded.updated_at;`;
+
+export async function ensureTaskVersionTriggers(db: D1Database): Promise<void> {
+  if (taskVersionTriggersReady) return;
+  await ensureTaskCommentColumns(db);
+  await ensureTaskCommentsTable(db);
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS task_versions (
+       owner_user_id TEXT PRIMARY KEY,
+       version INTEGER NOT NULL DEFAULT 0,
+       updated_at INTEGER NOT NULL
+     )`,
+    `CREATE TRIGGER IF NOT EXISTS trg_tasks_version_ins AFTER INSERT ON tasks
+     BEGIN ${bumpTaskVersionSql("NEW.owner_user_id")} END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_tasks_version_del AFTER DELETE ON tasks
+     BEGIN ${bumpTaskVersionSql("OLD.owner_user_id")} END`,
+    // Bỏ qua các lần cập nhật chỉ phục vụ đồng bộ thống kê (không đổi gì trên danh sách bài)
+    `CREATE TRIGGER IF NOT EXISTS trg_tasks_version_upd AFTER UPDATE ON tasks
+     WHEN NEW.status IS NOT OLD.status
+       OR (NEW.analytics_status IS OLD.analytics_status
+           AND NEW.analytics_last_synced_at IS OLD.analytics_last_synced_at
+           AND NEW.analytics_next_sync_at IS OLD.analytics_next_sync_at)
+     BEGIN ${bumpTaskVersionSql("NEW.owner_user_id")} END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_task_comments_version_ins AFTER INSERT ON task_comments
+     BEGIN ${bumpTaskVersionSql("NEW.owner_user_id")} END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_task_comments_version_upd AFTER UPDATE ON task_comments
+     BEGIN ${bumpTaskVersionSql("NEW.owner_user_id")} END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_task_comments_version_del AFTER DELETE ON task_comments
+     BEGIN ${bumpTaskVersionSql("OLD.owner_user_id")} END`
+  ];
+  for (const sql of statements) {
+    await db.prepare(sql).run();
+  }
+  taskVersionTriggersReady = true;
+}
+
+export async function getTaskVersion(db: D1Database, ownerUserId: string): Promise<number> {
+  try {
+    const row = await db
+      .prepare("SELECT version FROM task_versions WHERE owner_user_id = ?")
+      .bind(ownerUserId)
+      .first<{ version: number }>();
+    if (row && typeof row.version === "number") {
+      return row.version;
+    }
+  } catch {
+    await ensureTaskVersionTriggers(db).catch(() => {});
+  }
+
+  try {
+    const fallback = await db
+      .prepare(
+        "SELECT COUNT(*) AS cnt, MAX(updated_at) AS latest FROM tasks WHERE owner_user_id = ?"
+      )
+      .bind(ownerUserId)
+      .first<{ cnt: number; latest: string | null }>();
+    const count = Number(fallback?.cnt || 0);
+    const ts = fallback?.latest ? Math.floor(new Date(fallback.latest).getTime() / 1000) : 0;
+    const version = count * 1000000 + (ts % 1000000);
+    await db
+      .prepare(
+        "INSERT INTO task_versions (owner_user_id, version, updated_at) VALUES (?, ?, CAST(strftime('%s', 'now') AS INTEGER)) ON CONFLICT(owner_user_id) DO NOTHING"
+      )
+      .bind(ownerUserId, version)
+      .run()
+      .catch(() => {});
+    return version;
+  } catch {
+    return 0;
+  }
+}
 
 export async function ensureTaskCommentsTable(db: D1Database): Promise<void> {
   if (taskCommentsTableReady) return;

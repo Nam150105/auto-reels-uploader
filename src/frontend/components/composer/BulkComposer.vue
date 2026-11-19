@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col p-4 lg:p-6 overflow-y-auto select-none">
-    <!-- Top bar: post count & submit -->
-    <div class="flex flex-wrap items-center justify-between gap-3 mb-4 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
+    <!-- Top bar: post count & submit (Sticky khi cuộn) -->
+    <div class="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 mb-4 bg-white/95 backdrop-blur-md p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
       <div class="flex items-center gap-2">
         <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
         <span class="text-xs font-bold text-slate-800">
@@ -38,7 +38,7 @@
     <div class="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs flex-1 flex flex-col min-h-[350px]">
       <div class="overflow-x-auto flex-1 scrollbar-thin">
         <table class="w-full text-xs text-left">
-          <thead class="bg-slate-50/80 text-slate-600 font-bold border-b border-slate-200/80">
+          <thead class="sticky top-0 z-10 bg-slate-50/95 backdrop-blur-md text-slate-600 font-bold border-b border-slate-200/80 shadow-2xs">
             <tr>
               <th class="py-3 px-4 w-10 text-center">#</th>
               <th class="py-3 px-4 w-64">Kênh đăng</th>

@@ -132,8 +132,8 @@
         </div>
       </div>
 
-      <!-- Bottom Bar: Publish Mode & Schedule & Submit -->
-      <div class="mt-auto pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <!-- Bottom Bar: Publish Mode & Schedule & Submit (Sticky khi cuộn soạn thảo) -->
+      <div class="sticky bottom-0 z-20 bg-white/95 backdrop-blur-md pt-3.5 pb-2 border-t border-slate-100 mt-auto flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs">
         <!-- Publish mode: now vs schedule -->
         <div class="flex items-center gap-1.5 bg-slate-100/80 p-1 rounded-xl text-xs font-bold">
           <button

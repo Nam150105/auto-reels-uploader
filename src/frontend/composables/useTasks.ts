@@ -9,25 +9,70 @@ const activeFilter = ref<string>("all"); // 'all' | 'pending' | 'running' | 'suc
 const searchQuery = ref<string>("");
 const selectedTaskIds = ref<number[]>([]);
 const isActionLoading = ref<boolean>(false);
+const lastRefreshedAt = ref<number>(0);
+
+// Tự làm mới: chỉ hỏi số phiên bản (rẻ, 1 dòng từ index), chỉ tải lại cả danh sách khi dữ liệu thật sự đổi
+const FAST_POLL_MS = 30000; // 30 giây khi có bài đang xử lý hoặc sắp đăng
+const IDLE_POLL_MS = 60000; // 60 giây khi bình thường
+let knownVersion = -1;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let autoRefreshUsers = 0;
 
 export function useTasks() {
   const toast = useToast();
 
+  // Luôn tải toàn bộ (bộ lọc & tìm kiếm làm ở giao diện) để số đếm từng trạng thái luôn đúng
   const loadTasks = async (silent = false) => {
     if (!silent) isLoading.value = true;
     try {
-      const res = await api.getTasks({
-        status: activeFilter.value !== "all" ? activeFilter.value : undefined,
-        search: searchQuery.value ? searchQuery.value : undefined
-      });
+      const [res, version] = await Promise.all([
+        api.getTasks(),
+        api.getTaskVersion().catch(() => -1)
+      ]);
       tasks.value = res.tasks || [];
+      if (version >= 0) knownVersion = version;
+      lastRefreshedAt.value = Date.now();
     } catch (err: any) {
       if (!silent) {
-        toast.error(err?.message || "Couldn't load posts.");
+        toast.error(err?.message || "Không thể tải danh sách bài viết.");
       }
     } finally {
       if (!silent) isLoading.value = false;
     }
+  };
+
+  const checkForChanges = async () => {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const version = await api.getTaskVersion();
+      if (version !== knownVersion) {
+        await loadTasks(true);
+      }
+    } catch {}
+  };
+
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "visible") checkForChanges();
+  };
+
+  /** Gọi khi màn hình hiển thị danh sách bài được mở; trả về hàm dừng */
+  const startAutoRefresh = () => {
+    autoRefreshUsers++;
+    if (autoRefreshUsers === 1) {
+      // Có bài đang chạy/chờ đăng thì 30s hỏi 1 lần, ngược lại 60s hỏi 1 lần
+      const hasActive = tasks.value.some((t) => t.status === "running" || t.status === "queued" || t.status === "pending");
+      const interval = hasActive ? FAST_POLL_MS : IDLE_POLL_MS;
+      pollTimer = setInterval(checkForChanges, interval);
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+    return () => {
+      autoRefreshUsers = Math.max(0, autoRefreshUsers - 1);
+      if (autoRefreshUsers === 0) {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = null;
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+    };
   };
 
   const filteredTasks = computed(() => {
@@ -171,6 +216,8 @@ export function useTasks() {
     taskStats,
     isAllSelected,
     loadTasks,
+    startAutoRefresh,
+    lastRefreshedAt,
     toggleSelectTask,
     toggleSelectAll,
     publishNow,

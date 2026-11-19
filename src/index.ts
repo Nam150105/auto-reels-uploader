@@ -23,6 +23,7 @@ import {
 import { parseVnScheduleToUtc, formatUtcToVn, nowUtcSeconds } from "./utils/timezone.ts";
 import {
   ensureDatabaseInitialized,
+  getTaskVersion,
   verifyUserCredentials,
   getFacebookAccounts,
   getFacebookAccountById,
@@ -82,7 +83,8 @@ import {
   postReelCommentViaGraphApi,
   getMetaApiTelemetrySummary,
   deleteFacebookReelOrPost,
-  refreshPageFollowerCounts
+  refreshPageFollowerCounts,
+  flushMetaApiTelemetry
 } from "./services/metaGraphService.ts";
 import {
   syncFacebookPagePosts,
@@ -846,6 +848,12 @@ export async function handleWorkerRequest(
     // ------------------------------------------
     // 6.4. QUẢN LÝ TÁC VỤ REELS (/api/tasks*)
     // ------------------------------------------
+    // Giao diện hỏi số phiên bản (đọc 1 dòng) để biết có cần tải lại danh sách bài không
+    if (pathname === "/api/tasks/version" && method === "GET") {
+      const version = await getTaskVersion(db, ownerUserId);
+      return jsonResponse({ version }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (pathname === "/api/tasks" && method === "GET") {
       const pageIdsParam =
         url.searchParams.get("facebook_page_ids") ||
@@ -900,6 +908,7 @@ export async function handleWorkerRequest(
             has_image: Boolean(c.image_media_id),
             delay_minutes: c.delay_minutes,
             status: c.status,
+            due_at: c.due_at ?? null,
             error: c.error_message || ""
           }))
         };
@@ -940,6 +949,7 @@ export async function handleWorkerRequest(
       if (targetPageId) {
         const ownedPages = await getFacebookPages(db, encryptionKey, {
           includeToken: false,
+          includeCounts: false,
           ownerUserId
         });
         const owns = ownedPages.some(
@@ -1197,6 +1207,7 @@ export async function handleWorkerRequest(
         const selectedPages = await getFacebookPages(db, encryptionKey, {
           selectedOnly: true,
           includeToken: false,
+          includeCounts: false,
           ownerUserId
         });
         assignIds = selectedPages.map((p) => p.facebook_page_id);
@@ -2339,10 +2350,15 @@ export async function handleScheduledCron(
   const db = getD1Database(env);
   await ensureDatabaseInitialized(db, encryptionKey);
   // Separate trigger = separate invocation, so the analytics sync never eats the publisher's request budget
-  if (event?.cron === ANALYTICS_SYNC_CRON) {
-    return syncDueAnalytics(db, env, encryptionKey);
+  try {
+    if (event?.cron === ANALYTICS_SYNC_CRON) {
+      return await syncDueAnalytics(db, env, encryptionKey);
+    }
+    return await dispatchDueScheduledTasks(db, env, ctx);
+  } finally {
+    // Ghi phần số liệu Meta API đang cộng dồn; phần phát sinh từ việc chạy nền sẽ được ghi ở lần sau
+    ctx.waitUntil(flushMetaApiTelemetry(db).catch(() => {}));
   }
-  return dispatchDueScheduledTasks(db, env, ctx);
 }
 
 export async function handleQueueConsumer(
@@ -2353,7 +2369,11 @@ export async function handleQueueConsumer(
   const encryptionKey = getEncryptionKeyMaterial(env);
   const db = getD1Database(env);
   await ensureDatabaseInitialized(db, encryptionKey);
-  await handleNativeQueueBatch(batch, db, env);
+  try {
+    await handleNativeQueueBatch(batch, db, env);
+  } finally {
+    await flushMetaApiTelemetry(db).catch(() => {});
+  }
 }
 
 export default {

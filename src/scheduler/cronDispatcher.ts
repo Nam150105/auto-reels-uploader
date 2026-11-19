@@ -24,6 +24,7 @@ import {
 } from "../queue/publishQueue.ts";
 import { cleanupExpiredR2Media } from "../services/r2MediaService.ts";
 import { syncDueReelsInsightsBatch } from "../services/reelsInsightsService.ts";
+import { flushMetaApiTelemetry } from "../services/metaGraphService.ts";
 
 export async function dispatchDueScheduledTasks(
   db: D1Database,
@@ -39,13 +40,17 @@ export async function dispatchDueScheduledTasks(
   const now = nowUtcSeconds();
   const isoNow = new Date().toISOString();
 
-  // 0. Comments left half-done by a stopped worker go back to the queue
   try {
-    const stuckTaskIds = await requeueStuckTaskComments(db, now);
-    for (const id of stuckTaskIds) {
-      await refreshTaskCommentSummary(db, id).catch(() => {});
+    // 0. Comments bị treo (processing > 10 phút) được đưa lại hàng đợi
+    // Chỉ kiểm tra định kỳ mỗi 5 phút (now % 300 === 0) hoặc khi cần thiết để tiết kiệm D1 reads ngoài giờ đăng
+    if (now % 300 === 0) {
+      try {
+        const stuckTaskIds = await requeueStuckTaskComments(db, now);
+        for (const id of stuckTaskIds) {
+          await refreshTaskCommentSummary(db, id).catch(() => {});
+        }
+      } catch {}
     }
-  } catch {}
 
   // Due comments share this run's request budget with publishing:
   // a few per minute while videos are publishing, more when the minute is free.
@@ -88,6 +93,7 @@ export async function dispatchDueScheduledTasks(
 
   if (!candidateRows || candidateRows.length === 0) {
     // Khi không có task đến hạn cần đăng ngay, chạy đồng bộ Insights định kỳ cho tối đa 2 Reels
+    // Query chọn bài dùng index analytics_next_sync_at → chỉ đọc vài dòng, chạy mỗi phút được
     if (ctx && typeof ctx.waitUntil === "function") {
       ctx.waitUntil(syncDueReelsInsightsBatch(db, env, 2, 30).catch(() => {}));
     }
@@ -161,18 +167,24 @@ export async function dispatchDueScheduledTasks(
     }
   }
 
-  // Tự động dọn dẹp các video lưu trên R2 đã quá 30 ngày (1 tháng)
-  try {
-    await cleanupExpiredR2Media(db, env, 30, 20);
-  } catch (err) {
-    console.warn("[Cron] Lỗi dọn dẹp video R2 hết hạn:", err);
+  // Tự động dọn dẹp các video lưu trên R2 đã quá 30 ngày (1 tháng).
+  // Chỉ chạy 1 lần/giờ: query quét bảng media_files, chạy mỗi phút rất tốn lượt đọc D1.
+  if (new Date(now * 1000).getUTCMinutes() === 17) {
+    try {
+      await cleanupExpiredR2Media(db, env, 30, 50);
+    } catch (err) {
+      console.warn("[Cron] Lỗi dọn dẹp video R2 hết hạn:", err);
+    }
   }
 
-  return {
-    checked_at_utc: now,
-    claimed_count: claimedIds.length,
-    task_ids: claimedIds
-  };
+    return {
+      checked_at_utc: now,
+      claimed_count: claimedIds.length,
+      task_ids: claimedIds
+    };
+  } finally {
+    await flushMetaApiTelemetry(db).catch(() => {});
+  }
 }
 
 export async function dispatchDueScheduledComments(

@@ -25,6 +25,7 @@ import {
 } from "../db.ts";
 import {
   classifyMetaApiError,
+  flushMetaApiTelemetry,
   getCurrentMetaThrottleState,
   getMetaConfig,
   trackMetaGraphResponse,
@@ -855,20 +856,21 @@ export async function syncUserReelsInsights(
 }> {
   await ensureTaskCommentColumns(db);
 
-  if (options?.taskId) {
-    const single = await syncSingleReelInsights(db, env, Number(options.taskId), ownerUserId);
-    return {
-      success: single.success,
-      synced_count: single.success ? 1 : 0,
-      partial_count: single.analytics_status === "partial" ? 1 : 0,
-      failed_count: single.success ? 0 : 1,
-      token_expired_count: single.analytics_status === "token_expired" ? 1 : 0,
-      permission_missing_count: single.analytics_status === "permission_required" ? 1 : 0,
-      warnings: single.warnings,
-      results: [single],
-      message: single.message
-    };
-  }
+  try {
+    if (options?.taskId) {
+      const single = await syncSingleReelInsights(db, env, Number(options.taskId), ownerUserId);
+      return {
+        success: single.success,
+        synced_count: single.success ? 1 : 0,
+        partial_count: single.analytics_status === "partial" ? 1 : 0,
+        failed_count: single.success ? 0 : 1,
+        token_expired_count: single.analytics_status === "token_expired" ? 1 : 0,
+        permission_missing_count: single.analytics_status === "permission_required" ? 1 : 0,
+        warnings: single.warnings,
+        results: [single],
+        message: single.message
+      };
+    }
 
   const allTasks = await getTasks(db, {
     facebookPageId: options?.facebookPageId || null,
@@ -906,21 +908,24 @@ export async function syncUserReelsInsights(
     }
   }
 
-  const warnings = Array.from(warningsSet);
-  return {
-    success: targets.length === 0 || syncedCount > 0,
-    synced_count: syncedCount,
-    partial_count: partialCount,
-    failed_count: failedCount,
-    token_expired_count: tokenExpiredCount,
-    permission_missing_count: permMissingCount,
-    warnings,
-    results,
-    message:
-      targets.length === 0
-        ? "No published Reels to sync stats for yet."
-        : `Synced stats for ${syncedCount}/${targets.length} Reels.`
-  };
+    const warnings = Array.from(warningsSet);
+    return {
+      success: targets.length === 0 || syncedCount > 0,
+      synced_count: syncedCount,
+      partial_count: partialCount,
+      failed_count: failedCount,
+      token_expired_count: tokenExpiredCount,
+      permission_missing_count: permMissingCount,
+      warnings,
+      results,
+      message:
+        targets.length === 0
+          ? "No published Reels to sync stats for yet."
+          : `Synced stats for ${syncedCount}/${targets.length} Reels.`
+    };
+  } finally {
+    await flushMetaApiTelemetry(db).catch(() => {});
+  }
 }
 
 /**
@@ -941,41 +946,23 @@ export async function syncDueReelsInsightsBatch(
     }
 
     await ensureTaskCommentColumns(db);
-    const nowMs = Date.now();
-    const cutoffRecentIso = new Date(nowMs - minIntervalMinutes * 60 * 1000).toISOString();
-    const cutoffMidIso = new Date(nowMs - 3 * 60 * 60 * 1000).toISOString(); // 3h cho bài 1-7 ngày
-    const cutoffOldIso = new Date(nowMs - 12 * 60 * 60 * 1000).toISOString(); // 12h cho bài > 7 ngày
-    const age24hIso = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
-    const age7dIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
-
+    // analytics_next_sync_at được tính sẵn khi đồng bộ xong (xem ANALYTICS_NEXT_SYNC_SQL trong db.ts)
+    // → chỉ đọc đúng các bài đã đến hạn qua index (status, analytics_next_sync_at), không quét toàn bộ bài đã đăng.
+    void minIntervalMinutes;
+    const nowIso = new Date().toISOString();
     const { results: dueRows } = await db
       .prepare(
         `SELECT id, owner_user_id
          FROM tasks
          WHERE status = 'success'
+           AND analytics_next_sync_at IS NOT NULL
+           AND analytics_next_sync_at != ''
+           AND analytics_next_sync_at <= ?
            AND video_id != ''
-           AND (analytics_status IS NULL OR analytics_status != 'token_expired')
-           AND (
-             analytics_last_synced_at IS NULL
-             OR (COALESCE(published_at, updated_at, created_at) >= ? AND analytics_last_synced_at < ?)
-             OR (COALESCE(published_at, updated_at, created_at) >= ? AND COALESCE(published_at, updated_at, created_at) < ? AND analytics_last_synced_at < ?)
-             OR (COALESCE(published_at, updated_at, created_at) < ? AND analytics_last_synced_at < ?)
-           )
-         ORDER BY CASE WHEN analytics_last_synced_at IS NULL THEN 0 ELSE 1 END ASC,
-                  published_at DESC,
-                  id DESC
+         ORDER BY analytics_next_sync_at ASC
          LIMIT ?`
       )
-      .bind(
-        age24hIso,
-        cutoffRecentIso,
-        age7dIso,
-        age24hIso,
-        cutoffMidIso,
-        age7dIso,
-        cutoffOldIso,
-        maxBatchSize
-      )
+      .bind(nowIso, maxBatchSize)
       .all<{ id: number; owner_user_id: string }>();
 
     if (!dueRows || dueRows.length === 0) {
@@ -987,6 +974,13 @@ export async function syncDueReelsInsightsBatch(
       if (getCurrentMetaThrottleState().defer_background_sync) {
         break;
       }
+      // Giữ chỗ 1 giờ: nếu bài này thoát sớm/lỗi mà không cập nhật trạng thái, nó không chặn hàng đợi mãi
+      try {
+        await db
+          .prepare("UPDATE tasks SET analytics_next_sync_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour') WHERE id = ?")
+          .bind(Number(row.id))
+          .run();
+      } catch {}
       try {
         const res = await syncSingleReelInsights(db, env, Number(row.id), String(row.owner_user_id));
         if (res.success) succeeded++;
@@ -996,6 +990,8 @@ export async function syncDueReelsInsightsBatch(
     return { processed: dueRows.length, succeeded };
   } catch {
     return { processed: 0, succeeded: 0 };
+  } finally {
+    await flushMetaApiTelemetry(db).catch(() => {});
   }
 }
 

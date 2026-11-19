@@ -184,7 +184,7 @@ async function resolveItems(
 ): Promise<{ items?: ResolvedItem[]; error?: string }> {
   const nowUtc = nowUtcSeconds();
   const nowVn = formatUtcToVn(nowUtc);
-  const ownedPages = await getFacebookPages(db, encryptionKey, { includeToken: false, ownerUserId });
+  const ownedPages = await getFacebookPages(db, encryptionKey, { includeToken: false, includeCounts: false, ownerUserId });
   const ownedIds = new Set(ownedPages.map((p) => p.facebook_page_id));
   const mediaCache = new Map<string, MediaFileRecord | string>();
   const imageCache = new Map<string, boolean>();
