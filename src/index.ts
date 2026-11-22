@@ -243,6 +243,18 @@ export async function handleWorkerRequest(
     if (directResp.ok || directResp.status === 304) return directResp;
   }
 
+  // UI routes serve index.html without touching D1. This prevents a database/runtime
+  // initialization problem from turning the whole SPA into Cloudflare Error 1101.
+  if (
+    env.ASSETS &&
+    method === "GET" &&
+    isSpaRoute(pathname) &&
+    request.headers.get("Accept")?.includes("text/html")
+  ) {
+    const spa = await serveStaticHtmlAsset(request, env, "/index.html");
+    if (spa) return spa;
+  }
+
   const encryptionKey = getEncryptionKeyMaterial(env);
   const db = getD1Database(env);
   await ensureDatabaseInitialized(db, encryptionKey);
@@ -2377,7 +2389,24 @@ export async function handleQueueConsumer(
 }
 
 export default {
-  fetch: handleWorkerRequest,
+  fetch: async (request: Request, env: Env, ctx: ExecutionContext): Promise<Response> => {
+    try {
+      return await handleWorkerRequest(request, env, ctx);
+    } catch (err: any) {
+      console.error("[Worker] Unhandled request exception:", err);
+      const accept = request.headers.get("Accept") || "";
+      if (accept.includes("text/html")) {
+        return new Response(
+          `<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hệ thống tạm gián đoạn</title><body style="font-family:system-ui;margin:0;display:grid;place-items:center;min-height:100vh;background:#f8fafc;color:#334155"><main style="max-width:440px;text-align:center;padding:24px"><h1 style="font-size:20px">Không thể tải dữ liệu lúc này</h1><p style="font-size:14px">Hệ thống gặp lỗi nội bộ tạm thời. Vui lòng tải lại trang sau vài giây.</p><button onclick="location.reload()" style="border:0;border-radius:12px;padding:10px 16px;background:#2563eb;color:white;font-weight:700">Tải lại</button></main></body></html>`,
+          {
+            status: 503,
+            headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }
+          }
+        );
+      }
+      return jsonResponse({ detail: "Internal service error. Please retry." }, 503);
+    }
+  },
   scheduled: handleScheduledCron,
   queue: handleQueueConsumer
 };

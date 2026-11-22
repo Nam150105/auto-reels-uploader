@@ -15,7 +15,7 @@ import {
   getFacebookAccounts
 } from "../db.ts";
 
-export const PRODUCTION_DOMAIN = "https://pagefb.namnangno.click";
+export const PRODUCTION_DOMAIN = "https://pagefb.namnongno.click";
 export const DEFAULT_META_APP_ID = "1469615908436980";
 export const DEFAULT_GRAPH_VERSION = "v19.0";
 

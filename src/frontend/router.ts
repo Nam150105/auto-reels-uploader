@@ -19,9 +19,9 @@ const keepQuery = (path: string) => (to: { query: LocationQuery; hash: string })
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", redirect: keepQuery("/compose") },
-    { path: "/page", redirect: keepQuery("/compose") },
-    { path: "/compose", redirect: keepQuery("/compose/single") },
+    { path: "/", redirect: keepQuery("/page") },
+    { path: "/page", name: "workspace", component: { template: "<div />" }, meta: { tab: "compose" } },
+    { path: "/compose", redirect: keepQuery("/page") },
     {
       path: "/compose/:mode(single|bulk|multipage)",
       name: "compose",
@@ -54,7 +54,7 @@ export const router = createRouter({
       component: AdminView,
       meta: { tab: "admin" }
     },
-    { path: "/:pathMatch(.*)*", redirect: "/compose/single" }
+    { path: "/:pathMatch(.*)*", redirect: "/page" }
   ]
 });
 

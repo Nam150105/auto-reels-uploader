@@ -14,21 +14,25 @@
 		{
 			"pattern": "pagefb.namnangno.click",
 			"custom_domain": true
+		},
+		{
+			"pattern": "pagefb.namnongno.click",
+			"custom_domain": true
 		}
 	],
 	// Cloudflare Cron Trigger: Kiểm tra và kích hoạt các tác vụ hẹn lịch đến hạn (UTC)
 	"triggers": {
 		"crons": [
 			"*/1 * * * *",
-			// Đồng bộ thống kê: mỗi 10 phút kiểm tra, snapshot nào đủ 3 tiếng thì sync lại
+			// Đồng bộ thống kê: mỗi 10 phút kiểm tra, snapshot nào đủ 6 tiếng thì sync lại
 			"*/10 * * * *"
 		]
 	},
 	// Biến môi trường Public cho Production (Tuyệt đối KHÔNG đặt META_APP_SECRET hay khóa mã hóa ở đây)
 	"vars": {
 		"META_APP_ID": "1469615908436980",
-		"APP_BASE_URL": "https://pagefb.namnangno.click",
-		"META_REDIRECT_URI": "https://pagefb.namnangno.click/api/meta/callback",
+		"APP_BASE_URL": "https://pagefb.namnongno.click",
+		"META_REDIRECT_URI": "https://pagefb.namnongno.click/api/meta/callback",
 		"META_GRAPH_VERSION": "v19.0",
 		"MAX_VIDEO_SIZE_MB": "200"
 	},

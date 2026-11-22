@@ -13,11 +13,17 @@ import MultiPageComposer from "./MultiPageComposer.vue";
 
 const route = useRoute();
 const router = useRouter();
+const emit = defineEmits<{ (e: "task-created"): void }>();
 
-const mode = computed(() => String(route.params.mode || "single"));
+const props = withDefaults(defineProps<{ initialMode?: "single" | "bulk" | "multipage" }>(), {
+  initialMode: "single"
+});
+
+const mode = computed(() => props.initialMode || String(route.params.mode || "single"));
 
 // After creating posts, open the schedule screen
 const goToSchedule = () => {
-  router.push("/schedule");
+  emit("task-created");
+  if (route.path !== "/page") router.replace("/page");
 };
 </script>

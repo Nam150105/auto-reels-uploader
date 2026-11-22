@@ -5,7 +5,7 @@
       <!-- Top Header with Breadcrumbs & Mode Dropdown -->
       <Header
         :activeTab="activeTab"
-        :composeMode="composeMode"
+        :composeMode="composeModeComputed"
         @switch-tab="switchTab"
         @update:composeMode="setComposeMode"
         @open-connect="() => openConnectModal(null)"
@@ -30,12 +30,13 @@
         </button>
       </div>
 
-      <!-- Main Dynamic View Area -->
-      <!-- Screens come from the web router (src/frontend/router.ts) -->
+      <!-- Một màn hình duy nhất: dùng sub-tab để chuyển 3 khu vực, không điều hướng sang trang riêng -->
       <main class="flex-1 overflow-hidden relative">
-        <RouterView v-slot="{ Component }">
-          <component :is="Component" @open-connect="(accId?: string | null) => openConnectModal(accId ?? null)" />
-        </RouterView>
+        <ComposeView v-if="activeTab === 'compose'" :initial-mode="composeMode" @task-created="activeTab = 'schedule'" />
+        <ScheduleView v-else-if="activeTab === 'schedule'" />
+        <AnalyticsView v-else-if="activeTab === 'analytics'" />
+        <FanpageView v-else-if="activeTab === 'pages'" />
+        <AdminView v-else-if="activeTab === 'admin'" />
       </main>
     </div>
 
@@ -53,15 +54,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { AppTab } from "@shared/types";
 import { useAuth } from "./composables/useAuth";
 import { usePages } from "./composables/usePages";
-import { TAB_PATHS, type ComposeMode } from "./router";
+import type { ComposeMode } from "./router";
 import Header from "./components/common/Header.vue";
 import Toast from "./components/common/Toast.vue";
 import ConnectFacebookModal from "./components/dialogs/ConnectFacebookModal.vue";
+import ComposeView from "./components/composer/ComposeView.vue";
+import ScheduleView from "./components/schedule/ScheduleView.vue";
+import AnalyticsView from "./components/analytics/AnalyticsView.vue";
+import FanpageView from "./components/pages/FanpageView.vue";
+import AdminView from "./components/admin/AdminView.vue";
 
 const { checkAuth } = useAuth();
 const {
@@ -78,11 +84,20 @@ const {
 const route = useRoute();
 const router = useRouter();
 
-// The URL is the source of truth for the current screen
-const activeTab = computed<AppTab>(() => (route.meta.tab as AppTab) || "compose");
-const composeMode = computed<ComposeMode>(() =>
-  activeTab.value === "compose" ? ((route.params.mode as ComposeMode) || "single") : "single"
+// Tất cả khu vực chính chạy trong một màn hình; chỉ dùng route để giữ tương thích URL cũ.
+const activeTab = ref<AppTab>(
+  route.path.startsWith("/schedule") ? "schedule"
+    : route.path.startsWith("/analytics") || route.path.startsWith("/insights") ? "analytics"
+    : route.path.startsWith("/pages") ? "pages"
+    : route.path.startsWith("/admin") ? "admin"
+    : "compose"
 );
+const composeMode = ref<ComposeMode>(
+  route.params.mode === "bulk" ? "bulk"
+    : route.params.mode === "multipage" ? "multipage"
+    : "single"
+);
+const composeModeComputed = computed<ComposeMode>(() => composeMode.value);
 
 onMounted(async () => {
   await checkAuth();
@@ -113,11 +128,11 @@ watch(pagesViewTab, (tab) => {
 });
 
 const switchTab = (tab: AppTab) => {
-  router.push(TAB_PATHS[tab]);
+  activeTab.value = tab;
 };
 
 const setComposeMode = (mode: ComposeMode) => {
-  router.push(`/compose/${mode}`);
+  composeMode.value = mode;
 };
 
 /** Admin accounts now live on the Fanpage screen */
