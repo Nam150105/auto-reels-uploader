@@ -1,7 +1,7 @@
 import type { ComposerComment } from "@shared/types";
 import type { CommentPayload } from "../services/api";
 
-export const MAX_COMMENTS = 10;
+export const MAX_COMMENTS = 1;
 
 export const COMMENT_DELAY_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 0, label: "Đăng ngay khi xuất bản" },

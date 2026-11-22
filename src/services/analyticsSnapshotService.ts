@@ -2,9 +2,7 @@
  * Stored analytics snapshots (D1).
  *
  * - The CMS only reads the latest snapshot from D1 (no Facebook call on page load).
- * - A cron worker refreshes every snapshot that is 3 hours old or older.
- * - "Làm mới dữ liệu" syncs right away; the stored time resets, so the next
- *   automatic sync for that snapshot happens 3 hours after the manual one.
+ * - A cron worker refreshes every snapshot that is 6 hours old or older.
  *
  * One row per (owner_user_id, range_days).
  */
@@ -12,7 +10,7 @@
 import type { D1Database, Env } from "../types.ts";
 import { getLiveAnalyticsDashboard, type LiveAnalyticsDashboard } from "./liveInsightsService.ts";
 
-export const ANALYTICS_SYNC_INTERVAL_MS = 3 * 60 * 60 * 1000;
+export const ANALYTICS_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Range always kept fresh for every user who has Pages (the CMS default) */
 export const DEFAULT_RANGE_DAYS = 28;
 /** Snapshots refreshed per cron run (keeps each run within Worker subrequest limits) */
@@ -109,7 +107,7 @@ export async function syncAndStoreAnalytics(
 /** Pushes a failed snapshot back in the queue so one bad account cannot block the others every run. */
 async function recordSyncFailure(db: D1Database, ownerUserId: string, days: number, message: string): Promise<void> {
   const nowMs = Date.now();
-  // Retry in ~30 minutes instead of 3 hours
+  // Retry in ~30 minutes instead of waiting the full 6-hour interval
   const retryBase = nowMs - ANALYTICS_SYNC_INTERVAL_MS + 30 * 60 * 1000;
   await db
     .prepare(
@@ -121,7 +119,7 @@ async function recordSyncFailure(db: D1Database, ownerUserId: string, days: numb
 }
 
 /**
- * Cron job: refreshes snapshots that are 3 hours old or older, and creates the default
+ * Cron job: refreshes snapshots that are 6 hours old or older, and creates the default
  * snapshot for users who have Pages but were never synced.
  */
 export async function syncDueAnalytics(

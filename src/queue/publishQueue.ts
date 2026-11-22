@@ -34,7 +34,7 @@ import {
   refreshTaskCommentSummary
 } from "../db.ts";
 import type { TaskCommentRow } from "../db.ts";
-import { loadCommentImage } from "../services/r2MediaService.ts";
+import { deleteUserVideo, loadCommentImage } from "../services/r2MediaService.ts";
 import {
   getMetaConfig,
   validateVideoSource,
@@ -486,6 +486,17 @@ export async function consumeSingleTaskMessage(
         video_url: pubRes.video_url || ""
       }
     });
+
+    // Video chỉ cần thiết để Facebook tiếp nhận bài đăng. Sau khi đăng thành công,
+    // xóa nguồn R2/D1 để tránh giữ dữ liệu không còn sử dụng.
+    try {
+      const sourceMediaId = String(claimedTask.media_id || "")
+        .trim()
+        .replace(/^r2:\/\//, "");
+      if (sourceMediaId) {
+        await deleteUserVideo(db, env, sourceMediaId, msg.owner_user_id);
+      }
+    } catch {}
 
     // Tự động tạo bản ghi bài viết trong danh mục Facebook Posts tập trung
     try {

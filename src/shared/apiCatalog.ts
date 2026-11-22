@@ -96,7 +96,7 @@ export const API_CATALOG: ApiEndpoint[] = [
   { group: "Video & ảnh", method: "POST", path: "/api/media/cleanup-expired", access: "user", description: "Dọn video hết hạn (cũng: /api/system/cleanup-expired-media)" },
 
   // Thống kê
-  { group: "Thống kê", method: "GET", path: "/api/insights", access: "user", description: "Thống kê đã lưu (cập nhật 3 tiếng/lần)" },
+  { group: "Thống kê", method: "GET", path: "/api/insights", access: "user", description: "Thống kê đã lưu (cập nhật 6 tiếng/lần)" },
   { group: "Thống kê", method: "GET", path: "/api/insights/live", access: "user", description: "Giống /api/insights (giữ cho tương thích)" },
   { group: "Thống kê", method: "POST", path: "/api/insights/refresh", access: "user", description: "Đồng bộ thống kê từ Facebook ngay" },
   { group: "Thống kê", method: "GET", path: "/api/insights/reels", access: "user", description: "Thống kê theo từng Reels" },

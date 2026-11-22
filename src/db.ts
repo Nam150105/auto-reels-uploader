@@ -3432,16 +3432,12 @@ export async function updateTaskExecutionState(
  * Mốc đồng bộ thống kê kế tiếp (tham số: analytics_status, synced_at).
  * - token_expired: dừng hẳn cho tới khi người dùng đồng bộ thủ công
  * - đang đồng bộ (synced_at NULL): giữ nguyên để nếu lỗi giữa chừng sẽ được thử lại
- * - bài < 24h: 30 phút; 1–7 ngày: 3 giờ; > 7 ngày: 12 giờ
+ * - Tất cả bài Reels đang hoạt động được đồng bộ Insights tối đa mỗi 6 giờ
  */
 const ANALYTICS_NEXT_SYNC_SQL = `CASE
   WHEN ? = 'token_expired' THEN '9999-12-31T00:00:00.000Z'
   WHEN ? IS NULL THEN analytics_next_sync_at
-  WHEN julianday('now') - julianday(COALESCE(published_at, updated_at, created_at)) < 1
-    THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+30 minutes')
-  WHEN julianday('now') - julianday(COALESCE(published_at, updated_at, created_at)) < 7
-    THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+3 hours')
-  ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+12 hours')
+  ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+6 hours')
 END`;
 
 export async function updateTaskAnalyticsState(
@@ -4756,7 +4752,7 @@ export async function insertComposerTasksBatch(
 // (text and/or one image), each with its own delay after publishing.
 // ============================================================================
 
-export const MAX_COMMENTS_PER_POST = 10;
+export const MAX_COMMENTS_PER_POST = 1;
 export const MAX_COMMENT_TEXT_LENGTH = 8000;
 
 export interface TaskCommentRow {

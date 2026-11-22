@@ -30,7 +30,7 @@
       <div class="border border-slate-200/90 rounded-2xl p-3.5 mb-4 bg-slate-50/30 focus-within:bg-white focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100/60 transition">
         <textarea
           v-model="caption"
-          rows="4"
+          rows="2"
           placeholder="Nhập nội dung bài viết (caption)..."
           class="w-full resize-none text-xs sm:text-sm text-slate-800 bg-transparent focus:outline-none placeholder:text-slate-400 leading-relaxed"
         ></textarea>
@@ -46,7 +46,7 @@
           @dragover.prevent="isDragging = true"
           @dragleave.prevent="isDragging = false"
           @drop.prevent="handleFileDrop"
-          class="border-2 border-dashed rounded-2xl p-6 text-center transition cursor-pointer relative"
+          class="border-2 border-dashed rounded-2xl p-6 lg:p-8 min-h-[180px] text-center transition cursor-pointer relative"
           :class="isDragging ? 'border-blue-500 bg-blue-50/60' : 'border-blue-200/80 hover:border-blue-400 bg-gradient-to-b from-blue-50/20 via-slate-50/20 to-indigo-50/20 hover:from-blue-50/40 hover:to-indigo-50/40'"
           @click="triggerFileInput"
         >
@@ -72,7 +72,7 @@
           </div>
 
           <!-- Video Selected & Upload Status -->
-          <div v-else class="flex items-center justify-between p-2">
+          <div v-else class="flex items-center justify-between p-2 w-full">
             <div class="flex items-center gap-3 text-left min-w-0">
               <div
                 class="w-10 h-10 rounded-xl text-white flex items-center justify-center font-black text-[10px] flex-shrink-0 shadow-xs"
@@ -81,7 +81,10 @@
                 {{ fileExtLabel }}
               </div>
               <div class="min-w-0">
-                <p class="text-xs font-bold text-slate-800 truncate">{{ mediaFileName || 'video' }}</p>
+                <p
+                  class="text-xs font-bold text-slate-800 break-all text-left"
+                  :title="mediaFileName || 'video'"
+                >{{ mediaFileName || 'video' }}</p>
                 <p class="text-[11px] text-slate-500">
                   <span v-if="isUploading" class="text-blue-600 font-semibold">Đang tải lên... {{ uploadProgress }}%</span>
                   <span v-else-if="uploadError" class="text-rose-600 font-semibold">{{ uploadError }} Bấm để chọn lại.</span>

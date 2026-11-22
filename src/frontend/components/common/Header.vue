@@ -185,6 +185,16 @@
           {{ ((user?.display_name || user?.username || 'U').substring(0, 2)).toUpperCase() }}
         </div>
         <span class="text-xs font-bold text-slate-700 hidden md:inline">{{ user?.display_name || user?.username || 'Tài khoản' }}</span>
+        <button
+          type="button"
+          @click="handleLogout"
+          class="ml-1 p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+          title="Đăng xuất"
+        >
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+        </button>
       </div>
     </div>
   </header>
@@ -209,12 +219,18 @@ const emit = defineEmits<{
 }>();
 
 const { pages, accounts } = usePages();
-const { user } = useAuth();
+const { user, logout } = useAuth();
 
 const isModeDropdownOpen = ref(false);
 
 const setComposeMode = (mode: "single" | "bulk" | "multipage") => {
   emit("update:composeMode", mode);
   isModeDropdownOpen.value = false;
+};
+
+const handleLogout = async () => {
+  if (confirm("Bạn có chắc chắn muốn đăng xuất?")) {
+    await logout();
+  }
 };
 </script>

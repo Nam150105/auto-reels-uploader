@@ -8,7 +8,7 @@ const isLoading = ref<boolean>(false);
 const isSyncing = ref<boolean>(false);
 const rangeDays = ref<number>(28);
 let lastFetchedTime = 0;
-const CACHE_TTL_MS = 60 * 1000; // numbers come from the database (synced every 3 hours), so a short reuse is enough
+const CACHE_TTL_MS = 60 * 1000; // numbers come from the database (synced every 6 hours), so a short reuse is enough
 
 export function useAnalytics() {
   const toast = useToast();

@@ -1,14 +1,6 @@
 <template>
   <div class="h-screen w-screen flex overflow-hidden bg-[#f8fafc] font-sans text-slate-800">
-    <!-- Modern Soft Sidebar: Exactly 3 Main Menus (Viết bài, Lịch đăng, Thống kê) -->
-    <Sidebar
-      :activeTab="activeTab"
-      @switch-tab="switchTab"
-      @open-connect="() => openConnectModal(null)"
-      @open-accounts="openAccountsTab"
-    />
-
-    <!-- Main Content Area -->
+    <!-- Main Content Area: bỏ menu trái, toàn bộ điều hướng nằm trên thanh đầu trang -->
     <div class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#f8fafc]">
       <!-- Top Header with Breadcrumbs & Mode Dropdown -->
       <Header
@@ -67,7 +59,6 @@ import type { AppTab } from "@shared/types";
 import { useAuth } from "./composables/useAuth";
 import { usePages } from "./composables/usePages";
 import { TAB_PATHS, type ComposeMode } from "./router";
-import Sidebar from "./components/common/Sidebar.vue";
 import Header from "./components/common/Header.vue";
 import Toast from "./components/common/Toast.vue";
 import ConnectFacebookModal from "./components/dialogs/ConnectFacebookModal.vue";

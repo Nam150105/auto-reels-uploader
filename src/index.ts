@@ -2025,7 +2025,7 @@ export async function handleWorkerRequest(
     // ------------------------------------------
     // 6.4D. THỐNG KÊ REELS INSIGHTS (/api/insights*)
     // ------------------------------------------
-    // Analytics read from D1 (synced from Facebook by the cron worker every 3 hours).
+    // Analytics read from D1 (synced from Facebook by the cron worker every 6 hours).
     // Only the very first view of a range (nothing stored yet) reads Facebook directly.
     if ((pathname === "/api/insights" || pathname === "/api/insights/live") && method === "GET") {
       const days = normalizeRangeDays(url.searchParams.get("days"));
@@ -2037,7 +2037,7 @@ export async function handleWorkerRequest(
       return jsonResponse(await syncAndStoreAnalytics(db, env, ownerUserId, days, encryptionKey));
     }
 
-    // "Làm mới dữ liệu": sync now; the next automatic sync comes 3 hours after this one
+    // Endpoint tương thích: đồng bộ thủ công; giao diện chính không tự gọi API
     if (pathname === "/api/insights/refresh" && method === "POST") {
       const body = (await request.json().catch(() => ({}))) as { days?: number };
       const days = normalizeRangeDays(body.days ?? url.searchParams.get("days"));

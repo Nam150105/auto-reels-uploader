@@ -8,7 +8,7 @@
           <span>Thống kê hiệu quả Fanpage & Reels</span>
         </h2>
         <p class="text-xs text-slate-500 mt-0.5">
-          Tự động đồng bộ từ Facebook 3 tiếng/lần.
+          Tự động đồng bộ từ Facebook 6 tiếng/lần.
           <span v-if="dashboard" class="font-medium text-slate-700 ml-1">{{ formatDay(dashboard.range_start) }} – {{ formatDay(dashboard.range_end) }}</span>
           <span v-if="dashboard?.synced_at || dashboard?.fetched_at" class="text-slate-400 ml-1">· Cập nhật {{ formatTime(dashboard.synced_at || dashboard.fetched_at) }}</span>
           <span v-if="dashboard?.next_sync_at" class="text-slate-400 ml-1">· Lần tới {{ formatTime(dashboard.next_sync_at) }}</span>
@@ -33,17 +33,6 @@
           <option :value="30">30 ngày gần nhất</option>
           <option :value="90">90 ngày gần nhất</option>
         </select>
-        <button
-          type="button"
-          :disabled="isSyncing || isLoading"
-          @click="syncInsights"
-          class="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold text-xs shadow-xs shadow-blue-500/20 transition"
-        >
-          <svg class="w-4 h-4" :class="{ 'animate-spin': isSyncing || isLoading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          <span>{{ isSyncing ? "Đang đồng bộ..." : "Làm mới dữ liệu" }}</span>
-        </button>
       </div>
     </div>
 
@@ -319,7 +308,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useAnalytics } from "../../composables/useAnalytics";
 import { usePages } from "../../composables/usePages";
 
-const { dashboard, isLoading, isSyncing, rangeDays, loadAnalytics, syncInsights } = useAnalytics();
+const { dashboard, isLoading, rangeDays, loadAnalytics } = useAnalytics();
 const selectedPageId = ref("");
 const activeSubTab = ref<"all" | "charts" | "pages" | "reels">("all");
 

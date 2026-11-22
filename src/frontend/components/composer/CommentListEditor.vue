@@ -15,16 +15,6 @@
           :placeholder="idx === 0 ? 'Nhập nội dung bình luận (link sản phẩm, thông tin liên hệ)...' : 'Nhập bình luận tiếp theo...'"
           class="flex-1 px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/40 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 resize-none transition"
         ></textarea>
-        <button
-          type="button"
-          @click="removeAt(idx)"
-          class="mt-1 p-1 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-rose-50 transition"
-          title="Xóa bình luận này"
-        >
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-        </button>
       </div>
 
       <div class="flex flex-wrap items-center gap-2 pl-7">
@@ -81,16 +71,6 @@
       </div>
     </div>
 
-    <button
-      v-if="modelValue.length < MAX_COMMENTS"
-      type="button"
-      @click="addComment"
-      class="flex items-center gap-1.5 text-xs font-bold text-purple-600 hover:text-purple-700 transition px-2 py-1 rounded-lg hover:bg-purple-50/50"
-    >
-      <span class="text-base leading-none font-bold">+</span>
-      <span>{{ modelValue.length === 0 ? "Thêm một bình luận" : "Thêm một bình luận khác" }}</span>
-    </button>
-    <p v-else class="text-[11px] text-slate-400">Tối đa {{ MAX_COMMENTS }} bình luận cho mỗi bài viết.</p>
     <p class="text-[11px] text-slate-400">
       Hỗ trợ ảnh: JPG, PNG, GIF hoặc WEBP tối đa 8 MB. Facebook không hỗ trợ video trong bình luận.
     </p>
@@ -100,7 +80,7 @@
 <script setup lang="ts">
 import type { ComposerComment } from "@shared/types";
 import { api } from "../../services/api";
-import { COMMENT_DELAY_OPTIONS, MAX_COMMENTS, createEmptyComment } from "../../utils/comments";
+import { COMMENT_DELAY_OPTIONS } from "../../utils/comments";
 
 const props = defineProps<{ modelValue: ComposerComment[] }>();
 const emit = defineEmits<{ (e: "update:modelValue", value: ComposerComment[]): void }>();
@@ -108,20 +88,6 @@ const emit = defineEmits<{ (e: "update:modelValue", value: ComposerComment[]): v
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const uploadTokens = new WeakMap<ComposerComment, number>();
 
-const addComment = () => {
-  if (props.modelValue.length >= MAX_COMMENTS) return;
-  const last = props.modelValue[props.modelValue.length - 1];
-  emit("update:modelValue", [...props.modelValue, createEmptyComment(last ? last.delayMinutes : 0)]);
-};
-
-const removeAt = (idx: number) => {
-  const item = props.modelValue[idx];
-  if (item) clearImage(item);
-  emit(
-    "update:modelValue",
-    props.modelValue.filter((_, i) => i !== idx)
-  );
-};
 
 const clearImage = (item: ComposerComment) => {
   uploadTokens.set(item, (uploadTokens.get(item) || 0) + 1);
