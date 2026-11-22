@@ -176,8 +176,7 @@ export function verifyCsrfProtection(request: Request, env: Env): { valid: boole
   const referer = request.headers.get("Referer");
   const allowedHosts = new Set<string>([
     url.host.toLowerCase(),
-    "pagefb.namnangno.click",
-    "pagefb.namnongno.click"
+    "pagefb.namnangno.click"
   ]);
 
   if (env.APP_BASE_URL) {

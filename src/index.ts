@@ -243,6 +243,23 @@ export async function handleWorkerRequest(
     if (directResp.ok || directResp.status === 304) return directResp;
   }
 
+  // Public HTML assets must never require D1. This keeps the app and login usable
+  // when D1's daily free-tier read quota is exhausted.
+  if (env.ASSETS && (method === "GET" || method === "HEAD")) {
+    const publicAssetPath =
+      pathname === "/" ? "/index.html"
+      : pathname === "/login" ? "/login.html"
+      : pathname === "/privacy" ? "/privacy.html"
+      : pathname === "/terms" ? "/terms.html"
+      : pathname === "/data-deletion" ? "/data-deletion.html"
+      : isSpaRoute(pathname) ? "/index.html"
+      : null;
+    if (publicAssetPath) {
+      const publicResp = await serveStaticHtmlAsset(request, env, publicAssetPath);
+      if (publicResp) return method === "HEAD" ? new Response(null, publicResp) : publicResp;
+    }
+  }
+
   // UI routes serve index.html without touching D1. This prevents a database/runtime
   // initialization problem from turning the whole SPA into Cloudflare Error 1101.
   if (
