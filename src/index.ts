@@ -17,6 +17,7 @@ import { getEncryptionKeyMaterial } from "./utils/crypto.ts";
 import {
   getStoredAnalytics,
   normalizeRangeDays,
+  getAnalytics,
   syncAndStoreAnalytics,
   syncDueAnalytics
 } from "./services/analyticsSnapshotService.ts";
@@ -2066,9 +2067,8 @@ export async function handleWorkerRequest(
       if (url.searchParams.get("refresh") === "1") {
         return jsonResponse(await syncAndStoreAnalytics(db, env, ownerUserId, days, encryptionKey));
       }
-      const stored = await getStoredAnalytics(db, ownerUserId, days);
-      if (stored) return jsonResponse(stored);
-      return jsonResponse(await syncAndStoreAnalytics(db, env, ownerUserId, days, encryptionKey));
+      // days=30 (30 ngày gần nhất) hoặc days=all (Tất cả, cộng dồn từ lịch sử đã lưu)
+      return jsonResponse(await getAnalytics(db, env, ownerUserId, days, encryptionKey));
     }
 
     // Endpoint tương thích: đồng bộ thủ công; giao diện chính không tự gọi API

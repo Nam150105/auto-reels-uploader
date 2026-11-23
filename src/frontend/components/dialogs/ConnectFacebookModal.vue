@@ -7,7 +7,7 @@
           <h3 class="text-base font-bold text-slate-800">
             {{ targetAccountId ? "Reconnect Facebook account" : "Connect a Facebook account" }}
           </h3>
-          <p class="text-[11px] text-slate-400">All Pages managed by the account are synced automatically.</p>
+          <p class="text-[11px] text-slate-400">Mọi Fanpage tài khoản này quản lý sẽ được đồng bộ tự động.</p>
         </div>
         <button type="button" @click="$emit('close')" class="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg transition text-lg font-bold">
           &times;
@@ -55,7 +55,7 @@
         </button>
 
         <ol class="list-decimal pl-5 space-y-1 text-[11px] text-slate-600 leading-relaxed">
-          <li>A Facebook window opens. Log in with the account that manages your Pages.</li>
+          <li>Cửa sổ Facebook sẽ mở ra. Đăng nhập bằng tài khoản quản lý các Fanpage của bạn.</li>
           <li>Choose <b>all Pages</b> (and Businesses) you want to use, then keep every permission switched on.</li>
           <li>Confirm. The window closes and your Pages appear here automatically.</li>
         </ol>

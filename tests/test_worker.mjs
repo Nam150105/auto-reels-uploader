@@ -1940,7 +1940,10 @@ async function runAll30Tests() {
       assert.equal(live.totals[field], sum(field), `Tổng ${field} = cộng các Page`);
     }
     assert.ok(!requestedPaths.some((r) => /video_insights|page_daily_follows_unique/.test(r)), "Chỉ gọi các số liệu cần thiết");
-    assert.ok(liveBatchCalls <= 3, `Gọi Meta theo batch (${liveBatchCalls})`);
+    // Lần đồng bộ đầu tiên đọc thêm 90 ngày để có lịch sử cho "Tất cả" -> tối đa 2 lượt đọc
+    assert.ok(liveBatchCalls <= 6, `Gọi Meta theo batch (${liveBatchCalls})`);
+    const dailyRows = Number((await d1.prepare("SELECT COUNT(*) AS n FROM page_daily_insights").first()).n);
+    assert.ok(dailyRows > 0, "Mỗi lần đồng bộ lưu số liệu theo ngày vào DB");
 
     const callsBefore = liveBatchCalls;
     const cachedResp = await (
@@ -1958,8 +1961,26 @@ async function runAll30Tests() {
     const callsBeforeRead = liveBatchCalls;
     await callWorker("/api/insights?days=28", { headers: authHeaders });
     assert.equal(liveBatchCalls, callsBeforeRead, "Mở CMS không gọi Facebook khi đã có dữ liệu trong DB");
+    assert.equal(stored.range_days, 30, "Chỉ còn khoảng 30 ngày (mọi số ngày khác quy về 30)");
 
-    const ownerA = (await d1.prepare("SELECT owner_user_id FROM analytics_snapshots WHERE range_days = 28 LIMIT 1").first()).owner_user_id;
+    // "Tất cả": cộng dồn các ngày đã lưu, đọc bản tính sẵn trong DB, không gọi Facebook
+    const allTime = await (await callWorker("/api/insights?days=all", { headers: authHeaders })).json();
+    assert.equal(allTime.range_days, 0);
+    assert.equal(liveBatchCalls, callsBeforeRead, "Xem Tất cả không gọi Facebook");
+    const dbSums = await d1
+      .prepare("SELECT page_id, SUM(views) AS v FROM page_daily_insights GROUP BY page_id")
+      .all();
+    for (const row of dbSums.results) {
+      const pg = allTime.pages.find((p) => p.page_id === row.page_id);
+      if (pg) assert.equal(pg.views, Number(row.v), "Tất cả = tổng các ngày đã lưu của Page");
+    }
+    assert.equal(
+      allTime.totals.views,
+      allTime.pages.reduce((a, p) => (p.views == null ? a : (a ?? 0) + p.views), null),
+      "Tổng Tất cả = cộng các Page"
+    );
+
+    const ownerA = (await d1.prepare("SELECT owner_user_id FROM analytics_snapshots WHERE range_days = 30 LIMIT 1").first()).owner_user_id;
     const cronAnalytics = () =>
       workerDefault.scheduled(
         { cron: "*/10 * * * *", type: "scheduled", scheduledTime: Date.now() },
@@ -1967,15 +1988,15 @@ async function runAll30Tests() {
         { waitUntil: () => {}, passThroughOnException: () => {} }
       );
     // Chưa đủ 6 tiếng -> cron không sync snapshot của A
-    const syncedAtBefore = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
+    const syncedAtBefore = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 30").bind(ownerA).first()).synced_at;
     await cronAnalytics();
-    const syncedAtAfterEarlyCron = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
+    const syncedAtAfterEarlyCron = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 30").bind(ownerA).first()).synced_at;
     assert.equal(syncedAtAfterEarlyCron, syncedAtBefore, "Chưa đủ 6 tiếng thì cron bỏ qua");
     // Đẩy lùi 6 tiếng -> cron sync lại
     await d1.prepare("UPDATE analytics_snapshots SET synced_at = ? WHERE owner_user_id = ?").bind(Date.now() - 6 * 3600 * 1000 - 1000, ownerA).run();
     const cronRes = await cronAnalytics();
     assert.ok(cronRes.synced >= 1, "Cron sync snapshot đã đủ 6 tiếng");
-    const syncedAtAfterCron = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
+    const syncedAtAfterCron = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 30").bind(ownerA).first()).synced_at;
     assert.ok(syncedAtAfterCron > Date.now() - 60 * 1000, "Snapshot được cập nhật");
 
     // Nút "Làm mới dữ liệu" (POST) -> sync ngay, đặt lại mốc 6 tiếng

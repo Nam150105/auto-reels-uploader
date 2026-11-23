@@ -80,7 +80,7 @@
               <th class="py-2.5 px-2 w-8 text-center">#</th>
               <th class="py-2.5 px-2 w-36">Fanpage</th>
               <th class="py-2.5 px-2 min-w-[220px]">Caption · Bình luận tự động</th>
-              <th class="py-2.5 px-2 w-20 text-center">Video</th>
+              <th class="py-2.5 px-2 w-44">Video</th>
               <th class="py-2.5 px-2 w-8 text-center"></th>
             </tr>
           </thead>
@@ -114,40 +114,39 @@
                 <textarea
                   v-model="row.comment"
                   rows="1"
-                  placeholder="💬 Bình luận tự động (không bắt buộc)..."
+                  placeholder="💬 Bình luận tự động..."
                   class="mt-1.5 w-full px-3 py-1.5 text-xs rounded-xl border border-purple-200/70 bg-purple-50/20 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-100 focus:border-purple-400 resize-y transition"
                 ></textarea>
                 <p v-if="row.errorMessage" class="mt-1 text-[11px] text-rose-600 font-medium">{{ row.errorMessage }}</p>
               </td>
 
-              <!-- Video -->
-              <td class="py-2.5 px-2 text-center">
-                <div class="flex items-center justify-center">
-                  <label
-                    class="cursor-pointer p-2 rounded-xl border border-dashed border-blue-200 hover:border-blue-500 hover:bg-blue-50/40 transition relative shadow-2xs bg-white"
-                    :title="row.mediaFileName || 'Bấm để chọn video'"
-                  >
-                    <input
-                      type="file"
-                      accept="video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm"
-                      class="hidden"
-                      @change="(e) => handleRowFileChange(row, e)"
-                    />
-                    <svg v-if="!row.mediaFile && !row.mediaId" class="w-5 h-5 text-slate-400 hover:text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    <div v-else-if="row.isUploading" class="text-[10px] font-bold text-blue-600">{{ row.uploadProgress || 0 }}%</div>
-                    <div v-else-if="!row.mediaId" class="text-[10px] font-bold text-rose-600 flex items-center gap-1">
-                      <span>✕</span>
-                      <span class="max-w-[60px] truncate">Thử lại</span>
-                    </div>
-                    <div v-else class="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
-                      <span>✓</span>
-                      <span class="max-w-[60px] truncate">{{ row.mediaFileName || "Video" }}</span>
-                    </div>
-                  </label>
-                </div>
-                <div v-if="row.isUploading" class="w-16 mx-auto bg-slate-200 h-1 rounded-full overflow-hidden mt-1">
+              <!-- Video: ô rộng, hiện tên file (2 dòng), bấm để chọn / đổi video -->
+              <td class="py-2.5 px-2">
+                <label
+                  class="cursor-pointer w-full min-h-[46px] px-2.5 py-1.5 rounded-xl border border-dashed transition flex items-center gap-2 shadow-2xs bg-white"
+                  :class="row.mediaId ? 'border-emerald-300 bg-emerald-50/40' : row.mediaFile && !row.isUploading ? 'border-rose-300 bg-rose-50/40' : 'border-blue-200 hover:border-blue-500 hover:bg-blue-50/40'"
+                  :title="row.mediaFileName ? row.mediaFileName + ' — bấm để đổi video' : 'Bấm để chọn video'"
+                >
+                  <input
+                    type="file"
+                    accept="video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm"
+                    class="hidden"
+                    @change="(e) => handleRowFileChange(row, e)"
+                  />
+                  <svg class="w-5 h-5 shrink-0" :class="row.mediaId ? 'text-emerald-600' : 'text-slate-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  <span class="min-w-0 flex-1 text-[11px] leading-tight">
+                    <span v-if="!row.mediaFile && !row.mediaId" class="text-slate-500 font-semibold">Chọn video</span>
+                    <template v-else>
+                      <span class="block font-semibold text-slate-800 break-all line-clamp-2">{{ row.mediaFileName || "Video" }}</span>
+                      <span v-if="row.isUploading" class="block text-blue-600 font-bold">Đang tải {{ row.uploadProgress || 0 }}%</span>
+                      <span v-else-if="!row.mediaId" class="block text-rose-600 font-bold">Lỗi — bấm để chọn lại</span>
+                      <span v-else class="block text-emerald-600 font-bold">✓ Sẵn sàng</span>
+                    </template>
+                  </span>
+                </label>
+                <div v-if="row.isUploading" class="w-full bg-slate-200 h-1 rounded-full overflow-hidden mt-1">
                   <div class="bg-blue-600 h-full transition-all" :style="{ width: `${row.uploadProgress || 0}%` }"></div>
                 </div>
               </td>

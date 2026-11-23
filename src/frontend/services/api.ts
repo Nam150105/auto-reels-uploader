@@ -11,6 +11,8 @@ import type {
   AnalyticsDashboard
 } from "@shared/types";
 
+export type AnalyticsRange = "30" | "all";
+
 class ApiError extends Error {
   status: number;
   data: any;
@@ -369,15 +371,16 @@ export const api = {
   },
 
   // Analytics: stored numbers (synced from Facebook every 6 hours)
-  async getAnalytics(days = 28): Promise<AnalyticsDashboard> {
-    return request<AnalyticsDashboard>(`/api/insights?days=${days}`);
+  /** range: "30" = 30 ngày gần nhất, "all" = tất cả (cộng dồn từ lịch sử đã lưu) */
+  async getAnalytics(range: AnalyticsRange = "30"): Promise<AnalyticsDashboard> {
+    return request<AnalyticsDashboard>(`/api/insights?days=${range}`);
   },
 
   // Compatibility endpoint: manual sync; the UI does not expose it
-  async syncAnalytics(days = 28): Promise<AnalyticsDashboard> {
+  async syncAnalytics(range: AnalyticsRange = "30"): Promise<AnalyticsDashboard> {
     return request<AnalyticsDashboard>("/api/insights/refresh", {
       method: "POST",
-      body: JSON.stringify({ days })
+      body: JSON.stringify({ days: range })
     });
   }
 };

@@ -1,6 +1,6 @@
 <template>
   <!-- Thanh trên cùng (cố định): số đếm trạng thái, Làm mới, menu ⋯ -->
-  <header class="bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-3 sm:px-5 select-none z-30 flex-shrink-0 relative">
+  <header class="bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-3 sm:px-5 select-none z-50 flex-shrink-0 relative">
     <div class="absolute top-0 left-0 right-0 h-[2.5px] bg-gradient-to-r from-blue-500 via-indigo-500 to-pink-500"></div>
 
     <div class="h-12 flex items-center gap-2 sm:gap-3">

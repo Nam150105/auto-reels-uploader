@@ -105,7 +105,7 @@
               <!-- Checkbox: the whole cell is clickable, Shift + click selects a range -->
               <td
                 class="py-2.5 px-2.5 text-center cursor-pointer"
-                title="Shift + click to select a range"
+                title="Giữ Shift + bấm để chọn nhiều bài liên tiếp"
                 @mousedown.shift.prevent
                 @click="onSelectCellClick(task.id, taskIdx, $event)"
               >
@@ -139,7 +139,7 @@
               <!-- Caption & Media -->
               <td class="py-2.5 px-2.5">
                 <p class="text-slate-800 line-clamp-2 leading-relaxed">
-                  {{ task.caption || '(No content)' }}
+                  {{ task.caption || '(Không có caption)' }}
                 </p>
                 <div class="flex items-center gap-2 mt-1">
                   <span v-if="task.media_id || task.video_path" class="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
@@ -153,7 +153,7 @@
                     class="inline-flex items-center gap-1 text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded truncate max-w-[180px]"
                     :title="commentsTooltip(task)"
                   >
-                    💬 {{ task.comments.length }} comment{{ task.comments.length > 1 ? "s" : "" }}
+                    💬 {{ task.comments.length }} bình luận
                   </span>
                 </div>
               </td>
@@ -199,7 +199,7 @@
                     rel="noopener noreferrer"
                     class="inline-flex items-center gap-1 font-bold text-blue-600 hover:text-blue-800 hover:underline"
                   >
-                    <span>View on Facebook</span>
+                    <span>Xem trên Facebook</span>
                     <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                     </svg>
@@ -208,19 +208,19 @@
                   <!-- Comment State -->
                   <div v-if="task.comment_text || (task.comments && task.comments.length)" class="text-[10px]">
                     <span v-if="task.comment_status === 'success'" class="text-emerald-600 font-semibold">
-                      ✓ {{ task.comments && task.comments.length ? task.comment_log || "Commented" : "Commented" }}
+                      ✓ {{ task.comments && task.comments.length ? task.comment_log || "Đã bình luận" : "Đã bình luận" }}
                     </span>
                     <span v-else-if="task.comment_status === 'scheduled' || task.comment_status === 'processing'" class="text-slate-500 font-semibold">
-                      {{ task.comment_log || "Comments waiting" }}
+                      {{ task.comment_log || "Bình luận đang chờ" }}
                     </span>
                     <div v-else-if="task.comment_status === 'failed'" class="flex items-center gap-1.5 text-rose-600 font-semibold">
-                      <span>{{ task.comments && task.comments.length ? task.comment_log || "Comment failed" : "Comment failed" }}</span>
+                      <span>{{ task.comments && task.comments.length ? task.comment_log || "Bình luận lỗi" : "Bình luận lỗi" }}</span>
                       <button
                         type="button"
                         @click="retryComment(task.id)"
                         class="text-blue-600 hover:underline font-bold"
                       >
-                        Retry
+                        Thử lại
                       </button>
                     </div>
                   </div>
@@ -228,11 +228,11 @@
 
                 <!-- Failed: Error Message -->
                 <div v-else-if="task.status === 'failed'" class="text-rose-600 text-[11px] line-clamp-2" :title="task.error_message || ''">
-                  {{ task.error_message || 'Publishing failed' }}
+                  {{ task.error_message || 'Đăng thất bại' }}
                 </div>
 
                 <div v-else class="text-slate-400 text-[11px] italic">
-                  Not published yet
+                  Chưa đăng
                 </div>
               </td>
 
@@ -245,7 +245,7 @@
                     type="button"
                     @click="publishNow(task.id)"
                     class="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                    title="Publish now"
+                    title="Đăng ngay"
                   >
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -258,7 +258,7 @@
                     type="button"
                     @click="openEditModal(task)"
                     class="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition"
-                    title="Edit schedule or content"
+                    title="Sửa lịch hoặc nội dung"
                   >
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -270,7 +270,7 @@
                     type="button"
                     @click="deleteTask(task.id)"
                     class="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                    title="Delete post"
+                    title="Xóa bài"
                   >
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />

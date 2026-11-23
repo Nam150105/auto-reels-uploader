@@ -224,7 +224,8 @@ export async function getLiveAnalyticsDashboard(
     return { ...hit.data, cached: true };
   }
 
-  const allPages = await getFacebookPages(db, options.encryptionKey, { includeToken: true, ownerUserId });
+  // Không cần đếm bài theo Page (đếm sẽ quét toàn bộ bài của người dùng)
+  const allPages = await getFacebookPages(db, options.encryptionKey, { includeToken: true, includeCounts: false, ownerUserId });
   // One entry per Facebook Page, so nothing is ever counted twice
   const seen = new Set<string>();
   const pages = allPages.filter((p) => {
