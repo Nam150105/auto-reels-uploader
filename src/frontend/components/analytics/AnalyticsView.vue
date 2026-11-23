@@ -1,14 +1,14 @@
 <template>
-  <div class="h-full p-4 lg:p-6 overflow-y-auto select-none">
+  <div class="h-full p-3 lg:p-4 overflow-y-auto select-none">
     <!-- Top bar (Sticky khi cuộn trang) -->
-    <div class="sticky top-0 z-30 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 mb-3 bg-white/95 backdrop-blur-md p-4 rounded-2xl border border-slate-200/80 shadow-xs">
+    <div class="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 mb-3 bg-white/95 backdrop-blur-md px-3 py-2.5 rounded-2xl border border-slate-200/80 shadow-xs">
       <div>
         <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
           <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-          <span>Thống kê hiệu quả Fanpage & Reels</span>
+          <span>📊 Thống kê</span>
         </h2>
-        <p class="text-xs text-slate-500 mt-0.5">
-          Tự động đồng bộ từ Facebook 6 tiếng/lần.
+        <p class="text-[11px] text-slate-500 mt-0.5">
+          Tự đồng bộ 6 tiếng/lần.
           <span v-if="dashboard" class="font-medium text-slate-700 ml-1">{{ formatDay(dashboard.range_start) }} – {{ formatDay(dashboard.range_end) }}</span>
           <span v-if="dashboard?.synced_at || dashboard?.fetched_at" class="text-slate-400 ml-1">· Cập nhật {{ formatTime(dashboard.synced_at || dashboard.fetched_at) }}</span>
           <span v-if="dashboard?.next_sync_at" class="text-slate-400 ml-1">· Lần tới {{ formatTime(dashboard.next_sync_at) }}</span>
@@ -18,7 +18,7 @@
       <div class="flex flex-wrap items-center gap-2">
         <select
           v-model="selectedPageId"
-          class="px-3 py-2 text-xs rounded-xl border border-slate-200/90 bg-white font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 max-w-[220px] shadow-2xs"
+          class="px-2.5 py-1.5 text-xs rounded-xl border border-slate-200/90 bg-white font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 max-w-[180px] shadow-2xs"
         >
           <option value="">Tất cả Fanpage</option>
           <option v-for="(p, i) in dashboard?.pages || []" :key="p.page_id" :value="p.page_id">{{ pageNumber(p.page_id, i) }}. {{ p.page_name }}</option>
@@ -26,7 +26,7 @@
         <select
           v-model.number="rangeDays"
           @change="loadAnalytics()"
-          class="px-3 py-2 text-xs rounded-xl border border-slate-200/90 bg-white font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 shadow-2xs"
+          class="px-2.5 py-1.5 text-xs rounded-xl border border-slate-200/90 bg-white font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 shadow-2xs"
         >
           <option :value="7">7 ngày gần nhất</option>
           <option :value="28">28 ngày gần nhất</option>
@@ -74,11 +74,11 @@
       </div>
 
       <!-- The five numbers -->
-      <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 mb-4">
         <div
           v-for="(card, cIdx) in cards"
           :key="card.label"
-          class="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs transition hover:shadow-sm"
+          class="bg-white rounded-2xl border border-slate-200/80 p-3 shadow-xs transition hover:shadow-sm"
           :class="[
             cIdx === 0 ? 'border-t-[3px] border-t-blue-500 bg-gradient-to-b from-blue-50/20 to-white' :
             cIdx === 1 ? 'border-t-[3px] border-t-indigo-500 bg-gradient-to-b from-indigo-50/20 to-white' :
@@ -88,15 +88,15 @@
           ]"
           :title="card.help"
         >
-          <span class="text-[11px] font-bold tracking-wider uppercase text-slate-500">{{ card.label }}</span>
-          <p class="text-2xl font-black text-slate-900 tracking-tight mt-2">{{ formatNumber(card.value) }}</p>
+          <span class="text-[10px] font-bold tracking-wider uppercase text-slate-500">{{ card.label }}</span>
+          <p class="text-xl font-black text-slate-900 tracking-tight mt-1">{{ formatNumber(card.value) }}</p>
           <span class="text-[10px] font-bold mt-1 block" :class="card.tone">{{ card.hint }}</span>
         </div>
       </div>
 
       <!-- Daily chart -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 mb-6 shadow-xs">
-        <div class="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-100 mb-4">
+      <div class="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 mb-4 shadow-xs">
+        <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 mb-3">
           <h3 class="font-bold text-sm text-slate-800">Daily activity{{ selectedPage ? ` · ${selectedPage.page_name}` : "" }}</h3>
           <div class="flex items-center gap-4 text-xs font-semibold">
             <span class="flex items-center gap-1.5 text-blue-600">
@@ -113,7 +113,7 @@
         <div v-if="chartPoints.length === 0" class="h-40 flex items-center justify-center text-xs text-slate-400 text-center px-6">
           Facebook did not return daily Page insights for this period.
         </div>
-        <div v-else class="w-full h-56 relative">
+        <div v-else class="w-full h-44 relative">
           <svg class="w-full h-full overflow-visible" viewBox="0 0 800 200" preserveAspectRatio="none">
             <line x1="0" y1="30" x2="800" y2="30" stroke="#f1f5f9" stroke-width="1" />
             <line x1="0" y1="100" x2="800" y2="100" stroke="#f1f5f9" stroke-width="1" />
@@ -209,7 +209,7 @@
       </div>
 
       <!-- ONE PAGE: day by day + Reels list -->
-      <div v-if="selectedPage" class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div v-if="selectedPage" class="grid grid-cols-1 gap-4">
         <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
           <div class="p-4 border-b border-slate-100 flex items-center justify-between">
             <h3 class="font-bold text-sm text-slate-800">Day by day</h3>

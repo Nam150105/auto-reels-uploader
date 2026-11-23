@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col lg:flex-row gap-3 p-3 lg:p-4 overflow-y-auto lg:overflow-hidden select-none">
     <!-- LEFT: Step 1 (shared time) + Step 2 (pages) -->
-    <div class="w-full lg:w-72 flex flex-col gap-3 flex-shrink-0 lg:min-h-0 lg:h-full">
+    <div class="w-full lg:w-60 2xl:w-72 flex flex-col gap-3 flex-shrink-0 lg:min-h-0 lg:h-full">
       <!-- Step 1: shared publish time -->
       <div class="bg-white rounded-2xl border border-slate-200/80 p-3 shadow-xs shrink-0">
         <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2 mb-2">
@@ -77,20 +77,19 @@
         <table class="w-full text-xs text-left">
           <thead class="bg-slate-50/80 text-slate-600 font-bold border-b border-slate-200/80 sticky top-0 z-10">
             <tr>
-              <th class="py-3 px-4 w-10 text-center">#</th>
-              <th class="py-3 px-4 w-52">Fanpage</th>
-              <th class="py-3 px-4 min-w-[240px]">Nội dung (Caption)</th>
-              <th class="py-3 px-4 w-28 text-center">Video Reels</th>
-              <th class="py-3 px-4 w-28 text-center">Bình luận</th>
-              <th class="py-3 px-4 w-12 text-center"></th>
+              <th class="py-2.5 px-2 w-8 text-center">#</th>
+              <th class="py-2.5 px-2 w-36">Fanpage</th>
+              <th class="py-2.5 px-2 min-w-[220px]">Caption · Bình luận tự động</th>
+              <th class="py-2.5 px-2 w-20 text-center">Video</th>
+              <th class="py-2.5 px-2 w-8 text-center"></th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr v-for="(row, idx) in rows" :key="row.pageId" class="hover:bg-blue-50/20 transition align-top">
-              <td class="py-3.5 px-4 text-center text-slate-400 font-bold">{{ idx + 1 }}</td>
+              <td class="py-2.5 px-2 text-center text-slate-400 font-bold">{{ idx + 1 }}</td>
 
               <!-- Page (fixed) -->
-              <td class="py-3.5 px-4">
+              <td class="py-2.5 px-2">
                 <div class="flex items-center gap-2 min-w-0">
                   <img
                     v-if="pageById(row.pageId)?.avatar_url"
@@ -104,18 +103,25 @@
               </td>
 
               <!-- Caption -->
-              <td class="py-3.5 px-4">
+              <td class="py-2.5 px-2">
                 <textarea
                   v-model="row.caption"
                   rows="2"
                   placeholder="Nhập caption..."
                   class="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200/90 bg-slate-50/30 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 resize-none transition"
                 ></textarea>
+                <!-- Bình luận: ô nhập chữ như caption, tự đăng sau khi Reels lên (tối thiểu 3 phút) -->
+                <textarea
+                  v-model="row.comment"
+                  rows="1"
+                  placeholder="💬 Bình luận tự động (không bắt buộc)..."
+                  class="mt-1.5 w-full px-3 py-1.5 text-xs rounded-xl border border-purple-200/70 bg-purple-50/20 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-100 focus:border-purple-400 resize-y transition"
+                ></textarea>
                 <p v-if="row.errorMessage" class="mt-1 text-[11px] text-rose-600 font-medium">{{ row.errorMessage }}</p>
               </td>
 
               <!-- Video -->
-              <td class="py-3.5 px-4 text-center">
+              <td class="py-2.5 px-2 text-center">
                 <div class="flex items-center justify-center">
                   <label
                     class="cursor-pointer p-2 rounded-xl border border-dashed border-blue-200 hover:border-blue-500 hover:bg-blue-50/40 transition relative shadow-2xs bg-white"
@@ -146,24 +152,8 @@
                 </div>
               </td>
 
-              <!-- Comments -->
-              <td class="py-3.5 px-4 text-center">
-                <button
-                  type="button"
-                  @click="openRowCommentModal(row)"
-                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-[11px] font-bold transition shadow-2xs"
-                  :class="filledComments(row.comments).length ? 'border-purple-200 bg-purple-50 text-purple-700' : 'border-slate-200 text-slate-500 hover:border-blue-400 hover:text-blue-600 bg-white'"
-                  :title="commentSummary(row)"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  </svg>
-                  <span>{{ filledComments(row.comments).length ? filledComments(row.comments).length : "+ Thêm" }}</span>
-                </button>
-              </td>
-
               <!-- Remove page -->
-              <td class="py-3.5 px-4 text-center">
+              <td class="py-2.5 px-2 text-center">
                 <button
                   type="button"
                   @click="removePage(row.pageId)"
@@ -189,12 +179,6 @@
       @confirm="onCalendarConfirm"
     />
 
-    <BulkCommentModal
-      :isOpen="isCommentModalOpen"
-      :initialComments="commentModalInitial"
-      @close="isCommentModalOpen = false"
-      @save="onCommentSave"
-    />
   </div>
 </template>
 
@@ -204,10 +188,7 @@ import { usePages } from "../../composables/usePages";
 import { useToast } from "../../composables/useToast";
 import { api } from "../../services/api";
 import { getDefaultScheduleTime, isScheduleSlotAllowed } from "../../utils/date";
-import { filledComments, toCommentPayload, validateComments, delayLabel } from "../../utils/comments";
-import type { ComposerComment } from "@shared/types";
 import CalendarPickerModal from "../dialogs/CalendarPickerModal.vue";
-import BulkCommentModal from "../dialogs/BulkCommentModal.vue";
 import PagePicker from "./PagePicker.vue";
 
 interface PageRow {
@@ -218,7 +199,8 @@ interface PageRow {
   mediaId: string;
   uploadProgress: number;
   isUploading: boolean;
-  comments: ComposerComment[];
+  /** Bình luận tự động (một dòng chữ), để trống nếu không cần */
+  comment: string;
   errorMessage: string;
 }
 
@@ -257,7 +239,7 @@ const createRow = (pageId: string): PageRow => ({
   mediaId: "",
   uploadProgress: 0,
   isUploading: false,
-  comments: [],
+  comment: "",
   errorMessage: ""
 });
 
@@ -304,31 +286,6 @@ const handleRowFileChange = async (row: PageRow, e: Event) => {
   }
 };
 
-// Comments (per row)
-const isCommentModalOpen = ref(false);
-const commentTargetPageId = ref<string | null>(null);
-const commentModalInitial = ref<ComposerComment[]>([]);
-
-const openRowCommentModal = (row: PageRow) => {
-  commentTargetPageId.value = row.pageId;
-  commentModalInitial.value = row.comments;
-  isCommentModalOpen.value = true;
-};
-
-const onCommentSave = (list: ComposerComment[]) => {
-  const target = rows.value.find((r) => r.pageId === commentTargetPageId.value);
-  if (target) target.comments = list;
-  isCommentModalOpen.value = false;
-};
-
-const commentSummary = (row: PageRow) => {
-  const list = filledComments(row.comments);
-  if (list.length === 0) return "Add auto-comments";
-  return list
-    .map((c, i) => `${i + 1}. ${c.text.trim() || "(photo)"}${c.imageMediaId && c.text.trim() ? " + photo" : ""} — ${delayLabel(c.delayMinutes)}`)
-    .join("\n");
-};
-
 // Submit
 const isSubmitting = ref(false);
 
@@ -350,8 +307,7 @@ const handleSubmitAll = async () => {
   rows.value.forEach((r) => {
     const keepUploadError = r.mediaFile && !r.mediaId ? r.errorMessage : "";
     let err = "";
-    if (!r.mediaId) err = keepUploadError || "No video yet.";
-    else err = validateComments(r.comments);
+    if (!r.mediaId) err = keepUploadError || "Chưa có video.";
     r.errorMessage = err;
     if (err && !firstError) firstError = `${pageName(r.pageId)}: ${err}`;
   });
@@ -369,7 +325,7 @@ const handleSubmitAll = async () => {
         media_id: r.mediaId,
         schedule_date: scheduleDate.value,
         schedule_time: scheduleTime.value,
-        comments: toCommentPayload(r.comments)
+        comments: r.comment.trim() ? [{ text: r.comment.trim(), delay_minutes: 0 }] : []
       }))
     });
     toast.success(res?.message || `Scheduled ${res?.created_count || rows.value.length} post(s).`);

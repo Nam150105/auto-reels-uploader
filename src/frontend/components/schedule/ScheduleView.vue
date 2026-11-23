@@ -78,7 +78,7 @@
         <table class="w-full text-xs text-left">
           <thead class="sticky top-0 z-10 bg-slate-50/95 backdrop-blur-md text-slate-600 font-bold border-b border-slate-200/80 shadow-2xs">
             <tr>
-              <th class="py-3 px-4 w-10 text-center">
+              <th class="py-2.5 px-2.5 w-10 text-center">
                 <input
                   type="checkbox"
                   :checked="allVisibleSelected"
@@ -86,13 +86,13 @@
                   class="rounded text-blue-600 focus:ring-blue-500 border-slate-300 w-4 h-4"
                 />
               </th>
-              <th class="py-3 px-4 w-16 text-center">ID</th>
-              <th class="py-3 px-4 w-56">Fanpage</th>
-              <th class="py-3 px-4 min-w-[200px]">Nội dung & Media</th>
-              <th class="py-3 px-4 w-40">Lịch đăng (GMT+7)</th>
-              <th class="py-3 px-4 w-32 text-center">Trạng thái</th>
-              <th class="py-3 px-4 w-44">Kết quả đăng</th>
-              <th class="py-3 px-4 w-32 text-center">Thao tác</th>
+              <th class="py-2.5 px-2.5 w-16 text-center hidden 2xl:table-cell">ID</th>
+              <th class="py-2.5 px-2.5 w-56">Fanpage</th>
+              <th class="py-2.5 px-2.5 min-w-[200px]">Nội dung & Media</th>
+              <th class="py-2.5 px-2.5 w-40">Lịch đăng (GMT+7)</th>
+              <th class="py-2.5 px-2.5 w-32 text-center">Trạng thái</th>
+              <th class="py-2.5 px-2.5 w-44">Kết quả đăng</th>
+              <th class="py-2.5 px-2.5 w-32 text-center">Thao tác</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -104,7 +104,7 @@
             >
               <!-- Checkbox: the whole cell is clickable, Shift + click selects a range -->
               <td
-                class="py-3 px-4 text-center cursor-pointer"
+                class="py-2.5 px-2.5 text-center cursor-pointer"
                 title="Shift + click to select a range"
                 @mousedown.shift.prevent
                 @click="onSelectCellClick(task.id, taskIdx, $event)"
@@ -118,12 +118,12 @@
               </td>
 
               <!-- ID -->
-              <td class="py-3 px-4 text-center font-mono text-slate-400 text-[11px]">
+              <td class="py-2.5 px-2.5 text-center font-mono text-slate-400 text-[11px] hidden 2xl:table-cell">
                 #{{ task.id }}
               </td>
 
               <!-- Page -->
-              <td class="py-3 px-4">
+              <td class="py-2.5 px-2.5">
                 <div class="flex items-center gap-2 min-w-0">
                   <div class="w-7 h-7 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border border-slate-200">
                     <img v-if="task.page_avatar" :src="task.page_avatar" class="w-full h-full object-cover" />
@@ -137,7 +137,7 @@
               </td>
 
               <!-- Caption & Media -->
-              <td class="py-3 px-4">
+              <td class="py-2.5 px-2.5">
                 <p class="text-slate-800 line-clamp-2 leading-relaxed">
                   {{ task.caption || '(No content)' }}
                 </p>
@@ -159,7 +159,7 @@
               </td>
 
               <!-- Schedule Time -->
-              <td class="py-3 px-4">
+              <td class="py-2.5 px-2.5">
                 <div class="text-xs font-medium text-slate-700">
                   <span>{{ task.schedule_date || '--' }}</span>
                   <span class="text-slate-400 mx-1">|</span>
@@ -169,7 +169,7 @@
               </td>
 
               <!-- Status Badge -->
-              <td class="py-3 px-4 text-center">
+              <td class="py-2.5 px-2.5 text-center">
                 <span
                   class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold"
                   :class="{
@@ -190,7 +190,7 @@
               </td>
 
               <!-- Publish Result / Facebook Link -->
-              <td class="py-3 px-4 text-xs">
+              <td class="py-2.5 px-2.5 text-xs">
                 <!-- Success: Link to Facebook Post -->
                 <div v-if="task.status === 'success'" class="space-y-1">
                   <a
@@ -237,7 +237,7 @@
               </td>
 
               <!-- Action Buttons -->
-              <td class="py-3 px-4 text-center">
+              <td class="py-2.5 px-2.5 text-center">
                 <div class="flex items-center justify-center gap-1">
                   <!-- Publish Now Button (for pending or failed) -->
                   <button
