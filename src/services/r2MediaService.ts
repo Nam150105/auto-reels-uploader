@@ -562,13 +562,14 @@ export async function deleteUserVideo(
     };
   }
 
-  // Bảo vệ object R2 đang được sử dụng bởi task chờ lịch / đang xử lý
+  // Bảo vệ object R2 còn được dùng: bài chờ lịch / đang xử lý, và bài thất bại (có thể bấm Đăng ngay lại).
+  // Quan trọng khi 1 video lên lịch cho nhiều Fanpage: bài đầu đăng xong không được xóa video của các bài còn lại.
   const activeRef = await db
     .prepare(
       `SELECT COUNT(*) AS cnt FROM tasks
        WHERE owner_user_id = ?
          AND (media_id = ? OR object_key = ? OR video_path = ?)
-         AND status IN ('pending', 'queued', 'processing', 'running')`
+         AND status IN ('pending', 'scheduled', 'needs_schedule', 'queued', 'processing', 'running', 'failed')`
     )
     .bind(ownerUserId, existing.id, existing.object_key, `r2://${existing.id}`)
     .first<{ cnt: number }>();

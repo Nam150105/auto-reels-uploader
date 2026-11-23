@@ -50,7 +50,7 @@ export async function request<T>(url: string, options: RequestInit = {}): Promis
   if (res.status === 401) {
     // If unauthorized, redirect to login page if not already there
     if (!window.location.pathname.includes("/login")) {
-      window.location.href = "/login.html";
+      window.location.href = "/login";
     }
   }
 
@@ -78,7 +78,7 @@ export const api = {
 
   async logout(): Promise<void> {
     await request("/api/auth/logout", { method: "POST" });
-    window.location.href = "/login.html";
+    window.location.href = "/login";
   },
 
   // Fanpages & Accounts

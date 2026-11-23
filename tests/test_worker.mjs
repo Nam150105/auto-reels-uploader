@@ -389,17 +389,15 @@ async function runAll30Tests() {
   const loginHtml = await loginPageResp.text();
   assert.ok(loginHtml.toLowerCase().includes("quản lý fanpage"));
 
-  const unauthRootResp = await callWorker("/");
-  assert.equal(unauthRootResp.status, 302);
-  assert.ok(unauthRootResp.headers.get("Location")?.endsWith("/login"), "Chưa đăng nhập truy cập / phải chuyển đến /login");
-
-  const unauthPageResp = await callWorker("/page");
-  assert.equal(unauthPageResp.status, 302);
-  assert.ok(unauthPageResp.headers.get("Location")?.endsWith("/login"), "Chưa đăng nhập truy cập /page phải chuyển đến /login");
-
-  const unauthSchedResp = await callWorker("/schedules");
-  assert.equal(unauthSchedResp.status, 302);
-  assert.ok(unauthSchedResp.headers.get("Location")?.includes("/login"), "Chưa đăng nhập truy cập /schedules phải chuyển đến /login");
+  // Khung giao diện (HTML) được trả thẳng, không cần D1 — để site không sập (Error 1101) khi D1 hết hạn mức.
+  // Chưa đăng nhập: HTML không chứa dữ liệu; API trả 401 và giao diện tự chuyển sang /login.
+  for (const p of ["/", "/page", "/schedules"]) {
+    const unauthResp = await callWorker(p);
+    assert.equal(unauthResp.status, 200, `${p} phải trả khung giao diện`);
+    assert.ok((unauthResp.headers.get("content-type") || "").includes("text/html"), `${p} phải là HTML`);
+  }
+  const unauthApiResp = await callWorker("/api/tasks");
+  assert.equal(unauthApiResp.status, 401, "Chưa đăng nhập thì API phải trả 401");
 
   // Bundle Vue thật được static/index.html tham chiếu: phục vụ được qua /assets/... và qua tiền tố /static/...
   const builtIndexHtml = fs.readFileSync(path.join(process.cwd(), "static/index.html"), "utf8");
@@ -506,19 +504,17 @@ async function runAll30Tests() {
   console.log("  ✓ [Test 03] Login hoạt động chính xác cho nhiều người dùng");
 
   // Kiểm tra đầy đủ quy tắc điều hướng khi ĐÃ đăng nhập & khi hết hạn phiên (Mục I & IV):
-  // - Đã đăng nhập truy cập / -> 302 chuyển đến /page
+  // HTML được trả không cần D1; việc chuyển hướng do giao diện làm:
+  // - / -> /page (router), /login khi đã đăng nhập -> /page (login.html gọi /api/auth/me)
   const authedRootResp = await callWorker("/", {
     headers: { Cookie: `session_token=${tokenA}` }
   });
-  assert.equal(authedRootResp.status, 302);
-  assert.ok(authedRootResp.headers.get("Location")?.endsWith("/page"), "Đã đăng nhập truy cập / phải chuyển đến /page");
-
-  // - Đã đăng nhập truy cập /login -> 302 chuyển đến /page
+  assert.equal(authedRootResp.status, 200, "Đã đăng nhập truy cập / phải nhận giao diện chính");
   const authedLoginResp = await callWorker("/login", {
     headers: { Cookie: `session_token=${tokenA}` }
   });
-  assert.equal(authedLoginResp.status, 302);
-  assert.ok(authedLoginResp.headers.get("Location")?.endsWith("/page"), "Đã đăng nhập truy cập /login phải chuyển đến /page");
+  assert.equal(authedLoginResp.status, 200);
+  assert.ok((await authedLoginResp.text()).includes("/api/auth/me"), "Trang login phải tự kiểm tra phiên để chuyển vào /page");
 
   // - Đã đăng nhập truy cập /page -> 200 OK giữ nguyên /page (và reload /page lần 2 vẫn ổn định)
   const authedPageResp1 = await callWorker("/page", {
@@ -533,12 +529,11 @@ async function runAll30Tests() {
   });
   assert.equal(authedPageReloadResp.status, 200, "Reload /page kèm If-None-Match vẫn phải trả về 200 OK đầy đủ");
 
-  // - Phiên đã thu hồi (tokenA1) truy cập /page -> 302 chuyển về /login
-  const revokedPageResp = await callWorker("/page", {
+  // - Phiên đã thu hồi (tokenA1): API trả 401 -> giao diện tự chuyển về /login
+  const revokedApiResp = await callWorker("/api/tasks", {
     headers: { Cookie: `session_token=${tokenA1}` }
   });
-  assert.equal(revokedPageResp.status, 302);
-  assert.ok(revokedPageResp.headers.get("Location")?.endsWith("/login"), "Phiên hết hạn/thu hồi truy cập /page phải chuyển về /login");
+  assert.equal(revokedApiResp.status, 401, "Phiên hết hạn/thu hồi không được gọi API");
   console.log("  ✓ [Test 06B] Quy tắc điều hướng /, /login, /page & khôi phục phiên hoạt động chuẩn xác 100%");
 
   // --------------------------------------------------------------------------
@@ -1361,6 +1356,40 @@ async function runAll30Tests() {
   assert.equal(compUploadData.video_path, `r2://${initUploadData.media_id}`);
   console.log("  ✓ [Test 15] R2 Streaming Video Upload (upload-init -> stream -> upload-complete)");
 
+  // Video được xóa khi không còn bài nào cần (đăng xong / xóa bài / quá 30 ngày).
+  // Bài chờ "giữ chỗ" (lịch năm 2099) giữ video dùng chung này cho các kịch bản phía sau.
+  await d1
+    .prepare(
+      `INSERT INTO tasks (owner_user_id, profile_id, facebook_page_id, media_id, video_path, caption, schedule_date, schedule_time, scheduled_at, status, created_at, updated_at)
+       VALUES ((SELECT id FROM users WHERE username = 'alice_admin'), 'page_anchor', 'page_anchor', ?, ?, 'anchor', '2099-01-01', '00:00', 4070908800, 'pending', ?, ?)`
+    )
+    .bind(initUploadData.media_id, compUploadData.video_path, new Date().toISOString(), new Date().toISOString())
+    .run();
+
+  // Video được xóa sau khi đăng thành công → mỗi kịch bản đăng dùng một video mới tải lên
+  const uploadFreshVideo = async (filename) => {
+    const init = await (
+      await callWorker("/api/media/upload-init", {
+        method: "POST",
+        headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, size_bytes: 4096, mime_type: "video/mp4" })
+      })
+    ).json();
+    const put = await callWorker(init.upload_url, {
+      method: "PUT",
+      headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "video/mp4", "Content-Length": "4096" },
+      body: fakeMp4Bytes
+    });
+    assert.equal(put.status, 200);
+    const done = await callWorker("/api/media/upload-complete", {
+      method: "POST",
+      headers: { Cookie: `session_token=${tokenA}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ media_id: init.media_id })
+    });
+    assert.equal(done.status, 200);
+    return done.json();
+  };
+
   // --------------------------------------------------------------------------
   // [TEST 15b] R2 Multipart Upload theo phân đoạn (upload-init -> upload-part xN -> upload-complete)
   // --------------------------------------------------------------------------
@@ -1584,9 +1613,10 @@ async function runAll30Tests() {
 
   // Đăng ngay: tạo task và đưa vào hàng đợi ngay (giữ nguyên bộ đếm mock để không ảnh hưởng Test 20)
   const savedReelsCounter = graphApiReelsCalled;
+  const publishNowVideo = await uploadFreshVideo("publish_now.mp4");
   const nowResp = await postJson("/api/tasks", {
     facebook_page_ids: ["page_102"],
-    media_id: composerMediaId,
+    media_id: publishNowVideo.media_id,
     publish_mode: "now",
     caption: "Composer publish now"
   });
@@ -1669,16 +1699,28 @@ async function runAll30Tests() {
   });
   assert.equal(imgAsVideoResp.status, 400, "Ảnh không được dùng làm video Reels");
 
+  // Mỗi bài chỉ được 1 bình luận (MAX_COMMENTS_PER_POST); bình luận trống được bỏ qua trước khi đếm
+  const tooManyCmtResp = await postJson("/api/tasks", {
+    facebook_page_ids: ["page_101"],
+    media_id: composerMediaId,
+    publish_mode: "schedule",
+    ...slotOk,
+    caption: "Too many comments",
+    comments: [
+      { text: "First comment", delay_minutes: 0 },
+      { text: "Second comment", delay_minutes: 0 }
+    ]
+  });
+  assert.equal(tooManyCmtResp.status, 400, "Quá số bình luận cho phép phải bị từ chối");
+
   const multiResp = await postJson("/api/tasks", {
     facebook_page_ids: ["page_101"],
     media_id: composerMediaId,
     publish_mode: "schedule",
     ...slotOk,
-    caption: "Multi comment test",
+    caption: "Comment with photo test",
     comments: [
-      { text: "First comment", delay_minutes: 0 },
-      { text: "", image_media_id: imgJson.media_id, delay_minutes: 0 },
-      { text: "Later comment", delay_minutes: 30 },
+      { text: "First comment", image_media_id: imgJson.media_id, delay_minutes: 30 },
       { text: "   " }
     ]
   });
@@ -1694,15 +1736,14 @@ async function runAll30Tests() {
         .all()
     ).results;
   let mRows = await multiRows();
-  assert.equal(mRows.length, 3, "Bình luận trống bị bỏ qua, còn 3 bình luận");
-  assert.deepEqual(mRows.map((r) => r.status), ["pending", "pending", "pending"]);
-  assert.equal(mRows[1].image_media_id, imgJson.media_id);
+  assert.equal(mRows.length, 1, "Bình luận trống bị bỏ qua, còn 1 bình luận");
+  assert.equal(mRows[0].status, "pending");
+  assert.equal(mRows[0].image_media_id, imgJson.media_id);
   const multiTask = await d1.prepare("SELECT comment_text, comment_status FROM tasks WHERE id = ?").bind(multiTaskId).first();
   assert.equal(multiTask.comment_text, "");
   assert.equal(multiTask.comment_status, "pending");
 
-  // Giả lập Reels đã đăng xong -> không bình luận ngay (Reels cần vài phút để Facebook xử lý):
-  // bình luận độ trễ 0 được hẹn sau 3 phút, bình luận 30 phút chờ Cron
+  // Reels vừa đăng xong -> không bình luận ngay; bình luận 30 phút chờ Cron
   await d1
     .prepare("UPDATE tasks SET status = 'success', publish_status = 'success', video_id = 'vid_multi', post_id = 'page_101_vid_multi' WHERE id = ?")
     .bind(multiTaskId)
@@ -1712,37 +1753,32 @@ async function runAll30Tests() {
   const inline = await processTaskComments(d1, env, multiTaskId, { publishedAtUtc: publishedAt });
   assert.equal(inline.posted, 0, "Không được bình luận ngay khi Reels vừa đăng");
   mRows = await multiRows();
-  assert.deepEqual(mRows.map((r) => r.status), ["scheduled", "scheduled", "scheduled"]);
-  assert.equal(Number(mRows[0].due_at), publishedAt + 3 * 60, "Độ trễ tối thiểu 3 phút");
-  await dispatchDueScheduledComments(d1, env, publishedAt + 3 * 60 + 5, 5);
-  const postedNow = commentsCreatedOnFacebook.slice(fbCommentsBefore);
-  assert.equal(postedNow.length, 2);
-  assert.equal(postedNow[0].message, "First comment");
-  assert.equal(postedNow[1].has_image, true, "Bình luận thứ 2 phải gửi kèm ảnh");
-  mRows = await multiRows();
-  assert.deepEqual(mRows.map((r) => r.status), ["success", "success", "scheduled"]);
-  assert.equal(Number(mRows[2].due_at), publishedAt + 30 * 60);
-  assert.equal(
-    (await d1.prepare("SELECT comment_status FROM tasks WHERE id = ?").bind(multiTaskId).first()).comment_status,
-    "scheduled"
-  );
+  assert.equal(mRows[0].status, "scheduled");
+  assert.equal(Number(mRows[0].due_at), publishedAt + 30 * 60);
 
-  // Cron sau 30 phút đăng nốt bình luận còn lại
+  // Chưa đến giờ: Cron không đăng
+  await dispatchDueScheduledComments(d1, env, publishedAt + 3 * 60 + 5, 5);
+  assert.equal(commentsCreatedOnFacebook.slice(fbCommentsBefore).length, 0);
+
+  // Cron sau 30 phút đăng bình luận kèm ảnh
   await dispatchDueScheduledComments(d1, env, publishedAt + 30 * 60 + 5, 3);
+  const postedNow = commentsCreatedOnFacebook.slice(fbCommentsBefore);
+  assert.equal(postedNow.length, 1);
+  assert.equal(postedNow[0].message, "First comment");
+  assert.equal(postedNow[0].has_image, true, "Bình luận phải gửi kèm ảnh");
   mRows = await multiRows();
-  assert.deepEqual(mRows.map((r) => r.status), ["success", "success", "success"]);
-  assert.equal(commentsCreatedOnFacebook.slice(fbCommentsBefore).length, 3);
+  assert.equal(mRows[0].status, "success");
   const multiTaskAfter = await d1.prepare("SELECT comment_status, comment_log FROM tasks WHERE id = ?").bind(multiTaskId).first();
   assert.equal(multiTaskAfter.comment_status, "success");
-  assert.match(multiTaskAfter.comment_log, /3\/3/);
+  assert.match(multiTaskAfter.comment_log, /1\/1/);
 
-  // Danh sách lịch đăng trả kèm các bình luận
+  // Danh sách lịch đăng trả kèm bình luận
   const listWithComments = await (
     await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })
   ).json();
   const listedMulti = listWithComments.find((t) => t.id === multiTaskId);
-  assert.equal(listedMulti.comments.length, 3);
-  assert.equal(listedMulti.comments[1].has_image, true);
+  assert.equal(listedMulti.comments.length, 1);
+  assert.equal(listedMulti.comments[0].has_image, true);
   await d1.prepare("DELETE FROM task_comments WHERE task_id = ?").bind(multiTaskId).run();
 
   // Bình luận lỗi tạm thời (mạng) được tự động thử lại sau 2 phút, không đánh dấu thất bại ngay
@@ -1882,12 +1918,12 @@ async function runAll30Tests() {
     assert.equal(cachedResp.cached, true);
     assert.equal(liveBatchCalls, callsBefore, "Lần tải lại trong 10 phút dùng bộ nhớ đệm");
 
-    // ---- Snapshot D1: CMS chỉ đọc DB, "Làm mới" sync ngay, cron sync lại sau 3 tiếng ----
+    // ---- Snapshot D1: CMS chỉ đọc DB, "Làm mới" sync ngay, cron sync lại sau 6 tiếng ----
     const authHeaders = { Cookie: `session_token=${tokenA}` };
     const stored = await (await callWorker("/api/insights?days=28", { headers: authHeaders })).json();
     assert.equal(stored.cached, true, "Đọc từ DB");
     assert.ok(stored.synced_at && stored.next_sync_at, "Có thời điểm sync và lần sync tới");
-    assert.equal(Date.parse(stored.next_sync_at) - Date.parse(stored.synced_at), 3 * 3600 * 1000);
+    assert.equal(Date.parse(stored.next_sync_at) - Date.parse(stored.synced_at), 6 * 3600 * 1000);
     const callsBeforeRead = liveBatchCalls;
     await callWorker("/api/insights?days=28", { headers: authHeaders });
     assert.equal(liveBatchCalls, callsBeforeRead, "Mở CMS không gọi Facebook khi đã có dữ liệu trong DB");
@@ -1899,19 +1935,19 @@ async function runAll30Tests() {
         env,
         { waitUntil: () => {}, passThroughOnException: () => {} }
       );
-    // Chưa đủ 3 tiếng -> cron không sync snapshot của A
+    // Chưa đủ 6 tiếng -> cron không sync snapshot của A
     const syncedAtBefore = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
     await cronAnalytics();
     const syncedAtAfterEarlyCron = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
-    assert.equal(syncedAtAfterEarlyCron, syncedAtBefore, "Chưa đủ 3 tiếng thì cron bỏ qua");
-    // Đẩy lùi 3 tiếng -> cron sync lại
-    await d1.prepare("UPDATE analytics_snapshots SET synced_at = ? WHERE owner_user_id = ?").bind(Date.now() - 3 * 3600 * 1000 - 1000, ownerA).run();
+    assert.equal(syncedAtAfterEarlyCron, syncedAtBefore, "Chưa đủ 6 tiếng thì cron bỏ qua");
+    // Đẩy lùi 6 tiếng -> cron sync lại
+    await d1.prepare("UPDATE analytics_snapshots SET synced_at = ? WHERE owner_user_id = ?").bind(Date.now() - 6 * 3600 * 1000 - 1000, ownerA).run();
     const cronRes = await cronAnalytics();
-    assert.ok(cronRes.synced >= 1, "Cron sync snapshot đã đủ 3 tiếng");
+    assert.ok(cronRes.synced >= 1, "Cron sync snapshot đã đủ 6 tiếng");
     const syncedAtAfterCron = (await d1.prepare("SELECT synced_at FROM analytics_snapshots WHERE owner_user_id = ? AND range_days = 28").bind(ownerA).first()).synced_at;
     assert.ok(syncedAtAfterCron > Date.now() - 60 * 1000, "Snapshot được cập nhật");
 
-    // Nút "Làm mới dữ liệu" (POST) -> sync ngay, đặt lại mốc 3 tiếng
+    // Nút "Làm mới dữ liệu" (POST) -> sync ngay, đặt lại mốc 6 tiếng
     await d1.prepare("UPDATE analytics_snapshots SET synced_at = ? WHERE owner_user_id = ?").bind(Date.now() - 3600 * 1000, ownerA).run();
     const refreshed = await (
       await callWorker("/api/insights/refresh", {
@@ -1921,7 +1957,7 @@ async function runAll30Tests() {
       })
     ).json();
     assert.equal(refreshed.cached, false);
-    assert.ok(Date.parse(refreshed.next_sync_at) > Date.now() + 2.9 * 3600 * 1000, "Lần sync tự động tiếp theo là 3 tiếng sau khi làm mới");
+    assert.ok(Date.parse(refreshed.next_sync_at) > Date.now() + 5.9 * 3600 * 1000, "Lần sync tự động tiếp theo là 6 tiếng sau khi làm mới");
   } finally {
     globalThis.fetch = fetchBeforeLive;
   }
@@ -1960,6 +1996,7 @@ async function runAll30Tests() {
   // --------------------------------------------------------------------------
   // [TEST 17 & 18] Task Creation & Bulk Task Creation
   // --------------------------------------------------------------------------
+  const publishVideo = await uploadFreshVideo("publish_flow.mp4");
   const createTaskResp = await callWorker("/api/tasks", {
     method: "POST",
     headers: {
@@ -1968,7 +2005,7 @@ async function runAll30Tests() {
     },
     body: JSON.stringify({
       facebook_page_id: "page_101",
-      video_path: compUploadData.video_path,
+      video_path: publishVideo.video_path,
       caption: "Thước phim số 1 đăng từ R2 #reels",
       comment_text: "Bình luận tự động dưới Reels!",
       schedule_date: "2029-12-20",
@@ -1977,7 +2014,7 @@ async function runAll30Tests() {
   });
   assert.equal(createTaskResp.status, 200);
   const createdTask1 = (await createTaskResp.json()).task;
-  assert.equal(createdTask1.media_id, initUploadData.media_id);
+  assert.equal(createdTask1.media_id, publishVideo.media_id);
   console.log("  ✓ [Test 17] Tạo Task đơn lẻ tham chiếu R2 Object thành công");
 
   const bulkCreateResp = await callWorker("/api/tasks/bulk", {
@@ -1989,14 +2026,14 @@ async function runAll30Tests() {
     body: JSON.stringify({
       tasks: [
         {
-          video_path: compUploadData.video_path,
+          video_path: publishVideo.video_path,
           caption: "Bulk Task 1",
           comment_text: "",
           schedule_date: "2029-12-20",
           schedule_time: "07:00"
         },
         {
-          video_path: compUploadData.video_path,
+          video_path: publishVideo.video_path,
           caption: "Bulk Task 2",
           comment_text: "",
           schedule_date: "2029-12-20",
@@ -2070,6 +2107,8 @@ async function runAll30Tests() {
   assert.equal(task1AfterComment.comment_status, "success");
   assert.ok(task1AfterComment.comment_id);
   assert.ok(task1AfterComment.log.includes("Auto comment posted"));
+  const publishedMedia = await d1.prepare("SELECT id FROM media_files WHERE id = ?").bind(publishVideo.media_id).first();
+  assert.equal(publishedMedia, null, "Video phải được xóa sau khi đăng thành công (không còn bài nào dùng)");
   console.log("  ✓ [Test 20] Queue Publishing xuất bản Reels từ R2 + Auto-Comment (sau 3 phút) thành công");
 
   // Kiểm tra Idempotency: Gửi lại đúng Queue Message của finishedTask1 lần nữa -> Không được gọi Graph API lần 2!
@@ -2088,6 +2127,8 @@ async function runAll30Tests() {
   // --------------------------------------------------------------------------
   // [TEST 21] Queue Retry với Exponential Backoff & Chặn Retry khi Ambiguous Publish
   // --------------------------------------------------------------------------
+  const retryVideo = await uploadFreshVideo("retry_backoff.mp4");
+
   const retryTaskResp = await callWorker("/api/tasks", {
     method: "POST",
     headers: {
@@ -2096,13 +2137,14 @@ async function runAll30Tests() {
     },
     body: JSON.stringify({
       facebook_page_id: "page_101",
-      video_path: compUploadData.video_path,
+      video_path: retryVideo.video_path,
       caption: "Task kiểm thử Retry & Backoff",
       schedule_date: "2029-12-20",
       schedule_time: "20:00"
     })
   });
-  const retryTask = (await retryTaskResp.json()).task;
+  const retryTaskJson = await retryTaskResp.json();
+  const retryTask = retryTaskJson.task;
   const nowDue = Math.floor(Date.now() / 1000) - 10;
   await d1.prepare("UPDATE tasks SET scheduled_at = ? WHERE id = ?").bind(nowDue, retryTask.id).run();
 

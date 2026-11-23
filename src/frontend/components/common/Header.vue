@@ -1,236 +1,252 @@
 <template>
-  <header class="h-14 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 flex items-center justify-between select-none z-20 flex-shrink-0 relative">
-    <!-- Top accent line for subtle premium touch -->
+  <!-- Thanh trên cùng: luôn cố định, chứa mọi thứ cần bấm nhanh dù đang cuộn tới đâu -->
+  <header class="bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-3 sm:px-5 select-none z-30 flex-shrink-0 relative">
     <div class="absolute top-0 left-0 right-0 h-[2.5px] bg-gradient-to-r from-blue-500 via-indigo-500 to-pink-500"></div>
 
-    <!-- Left: Workspace & Breadcrumb -->
-    <div class="flex items-center gap-3">
-      <!-- Workspace Brand (NNN REELS FB) -->
-      <div class="flex items-center gap-2 font-bold text-slate-800 text-sm select-none cursor-pointer" @click="$emit('update:composeMode', 'single')">
-        <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-500 via-indigo-500 to-pink-500 text-white flex items-center justify-center font-black text-xs shadow-xs">
+    <div class="h-14 flex items-center gap-2 sm:gap-3">
+      <!-- Logo: về Lịch đăng -->
+      <button type="button" class="flex items-center gap-2 shrink-0" title="Về Lịch đăng" @click="$emit('go-home')">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-500 via-indigo-500 to-pink-500 text-white flex items-center justify-center font-black text-xs shadow-xs">
           NNN
         </div>
-        <span class="font-extrabold tracking-tight text-slate-900 text-sm">NNN REELS FB</span>
+        <span class="hidden xl:inline font-extrabold tracking-tight text-slate-900 text-sm">NNN REELS FB</span>
+      </button>
+
+      <!-- Số đếm trạng thái: bấm để lọc danh sách -->
+      <div class="flex items-center gap-1 overflow-x-auto scrollbar-none min-w-0">
+        <button
+          v-for="chip in statusChips"
+          :key="chip.key"
+          type="button"
+          class="px-2.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 border"
+          :class="activeFilter === chip.key ? chip.active : 'bg-slate-50 text-slate-600 border-slate-200/70 hover:bg-slate-100'"
+          :title="`Lọc: ${chip.label}`"
+          @click="pickFilter(chip.key)"
+        >
+          <span class="w-1.5 h-1.5 rounded-full" :class="chip.dot"></span>
+          <span class="hidden sm:inline">{{ chip.label }}</span>
+          <span class="font-black">{{ chip.count }}</span>
+        </button>
       </div>
 
-      <span class="text-slate-300">/</span>
+      <!-- Biểu đồ mini thống kê: bấm để mở thống kê chi tiết -->
+      <button
+        type="button"
+        class="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-xl border border-slate-200/80 hover:border-emerald-300 hover:bg-emerald-50/40 transition shrink-0"
+        title="Xem thống kê chi tiết"
+        @click="$emit('open-panel', 'analytics')"
+      >
+        <svg class="w-24 h-8" viewBox="0 0 96 32" preserveAspectRatio="none">
+          <path v-if="spark.views" :d="spark.views" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          <path v-if="spark.engagement" :d="spark.engagement" fill="none" stroke="#10b981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          <line v-if="!spark.views" x1="0" y1="24" x2="96" y2="24" stroke="#e2e8f0" stroke-width="2" stroke-dasharray="4 3" />
+        </svg>
+        <div class="text-left leading-tight">
+          <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Xem 7 ngày</p>
+          <p class="text-xs font-black text-blue-600">{{ formatCompact(dashboard?.totals?.views_7d) }}</p>
+        </div>
+        <div class="text-left leading-tight hidden lg:block">
+          <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Tương tác</p>
+          <p class="text-xs font-black text-emerald-600">{{ formatCompact(dashboard?.totals?.engagement) }}</p>
+        </div>
+      </button>
 
-      <!-- Breadcrumbs & Mode Switcher for Viết bài -->
-      <div v-if="activeTab === 'compose'" class="flex items-center gap-2">
-        <span class="text-slate-500 text-xs sm:text-sm font-medium">Viết bài</span>
-        <span class="text-slate-300">/</span>
-        
-        <!-- Mode Switcher Dropdown (Đăng thường vs Đăng hàng loạt) -->
-        <div class="relative">
+      <div class="flex-1"></div>
+
+      <!-- Làm mới -->
+      <button
+        type="button"
+        class="p-2 sm:px-3 sm:py-1.5 rounded-xl border border-slate-200/90 bg-white hover:bg-blue-50/60 text-slate-600 hover:text-blue-700 text-xs font-bold transition shadow-2xs flex items-center gap-1.5 shrink-0"
+        title="Làm mới danh sách bài và số liệu"
+        :disabled="isRefreshing"
+        @click="refreshAll"
+      >
+        <svg class="w-4 h-4" :class="{ 'animate-spin': isRefreshing }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span class="hidden lg:inline">Làm mới</span>
+      </button>
+
+      <!-- Tạo bài + menu con chọn chế độ -->
+      <div ref="composeMenuRef" class="relative shrink-0">
+        <div class="flex rounded-xl shadow-xs shadow-blue-500/20 overflow-hidden">
           <button
             type="button"
-            @click="isModeDropdownOpen = !isModeDropdownOpen"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-bold text-blue-600 bg-blue-50 hover:bg-blue-100/80 border border-blue-200/60 shadow-2xs transition"
+            class="flex items-center gap-1.5 pl-3 pr-2.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold transition"
+            @click="$emit('open-compose', lastComposeMode)"
           >
-            <span>{{ composeMode === 'bulk' ? 'Đăng hàng loạt' : composeMode === 'multipage' ? 'Đăng theo Fanpage' : 'Đăng thường' }}</span>
-            <svg class="w-3.5 h-3.5 transition-transform" :class="{ 'rotate-180': isModeDropdownOpen }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+            <span class="hidden sm:inline">Tạo bài</span>
+          </button>
+          <button
+            type="button"
+            class="px-1.5 bg-indigo-600 hover:bg-indigo-500 text-white border-l border-white/25 transition"
+            title="Chọn cách đăng"
+            @click="toggleMenu('compose')"
+          >
+            <svg class="w-3.5 h-3.5 transition-transform" :class="{ 'rotate-180': openMenu === 'compose' }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
-
-          <!-- Dropdown Menu -->
-          <div
-            v-if="isModeDropdownOpen"
-            class="absolute left-0 mt-1.5 w-52 bg-white rounded-2xl shadow-xl border border-slate-200/80 py-1.5 z-50 text-xs"
+        </div>
+        <div v-if="openMenu === 'compose'" class="absolute right-0 mt-1.5 w-60 bg-white rounded-2xl shadow-xl border border-slate-200/80 py-1.5 z-50 text-xs">
+          <p class="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Chọn cách đăng</p>
+          <button
+            v-for="m in composeModes"
+            :key="m.key"
+            type="button"
+            class="w-full px-3 py-2 text-left hover:bg-blue-50/60 transition flex flex-col"
+            @click="pickCompose(m.key)"
           >
-            <div class="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              Chọn chế độ viết
-            </div>
-            <button
-              type="button"
-              @click="setComposeMode('single')"
-              class="w-full px-3 py-2 text-left flex items-center justify-between hover:bg-blue-50/50 transition"
-              :class="composeMode === 'single' ? 'text-blue-600 font-bold bg-blue-50/30' : 'text-slate-700'"
-            >
-              <div class="flex items-center gap-2">
-                <svg class="w-4 h-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-                <span>Đăng thường</span>
-              </div>
-              <svg v-if="composeMode === 'single'" class="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              @click="setComposeMode('bulk')"
-              class="w-full px-3 py-2 text-left flex items-center justify-between hover:bg-blue-50/50 transition"
-              :class="composeMode === 'bulk' ? 'text-blue-600 font-bold bg-blue-50/30' : 'text-slate-700'"
-            >
-              <div class="flex items-center gap-2">
-                <svg class="w-4 h-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                </svg>
-                <span>Đăng hàng loạt</span>
-              </div>
-              <svg v-if="composeMode === 'bulk'" class="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              @click="setComposeMode('multipage')"
-              class="w-full px-3 py-2 text-left flex items-center justify-between hover:bg-blue-50/50 transition"
-              :class="composeMode === 'multipage' ? 'text-blue-600 font-bold bg-blue-50/30' : 'text-slate-700'"
-            >
-              <div class="flex items-center gap-2">
-                <svg class="w-4 h-4 text-pink-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-                </svg>
-                <span>Đăng theo Fanpage</span>
-              </div>
-              <svg v-if="composeMode === 'multipage'" class="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-              </svg>
-            </button>
-          </div>
+            <span class="font-bold text-slate-800">{{ m.label }}</span>
+            <span class="text-[11px] text-slate-500">{{ m.hint }}</span>
+          </button>
         </div>
       </div>
 
-      <div v-else-if="activeTab === 'schedule'" class="flex items-center gap-2">
-        <span class="text-violet-700 bg-violet-50 px-2.5 py-1 rounded-xl border border-violet-200/60 text-xs sm:text-sm font-bold">Lịch đăng</span>
-      </div>
-
-      <div v-else-if="activeTab === 'analytics'" class="flex items-center gap-2">
-        <span class="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200/60 text-xs sm:text-sm font-bold">Thống kê</span>
-      </div>
-    </div>
-
-    <!-- Center: 3 Menu chính tập hợp trên 1 màn hình (Viết bài, Lịch đăng, Thống kê) -->
-    <div class="hidden md:flex items-center gap-1 bg-slate-100/90 p-1 rounded-2xl border border-slate-200/80 shadow-2xs">
-      <!-- 1. Viết bài -->
-      <button
-        type="button"
-        @click="$emit('switch-tab', 'compose')"
-        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition select-none"
-        :class="activeTab === 'compose' ? 'bg-white text-blue-600 shadow-xs border border-blue-100' : 'text-slate-600 hover:text-slate-900'"
-      >
-        <svg class="w-3.5 h-3.5" :class="activeTab === 'compose' ? 'text-blue-600' : 'text-slate-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-        </svg>
-        <span>Viết bài</span>
-      </button>
-
-      <!-- 2. Lịch đăng -->
-      <button
-        type="button"
-        @click="$emit('switch-tab', 'schedule')"
-        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition select-none"
-        :class="activeTab === 'schedule' ? 'bg-white text-violet-600 shadow-xs border border-violet-100' : 'text-slate-600 hover:text-slate-900'"
-      >
-        <svg class="w-3.5 h-3.5" :class="activeTab === 'schedule' ? 'text-violet-600' : 'text-slate-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
-        <span>Lịch đăng</span>
-      </button>
-
-      <!-- 3. Thống kê -->
-      <button
-        type="button"
-        @click="$emit('switch-tab', 'analytics')"
-        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition select-none"
-        :class="activeTab === 'analytics' ? 'bg-white text-emerald-600 shadow-xs border border-emerald-100' : 'text-slate-600 hover:text-slate-900'"
-      >
-        <svg class="w-3.5 h-3.5" :class="activeTab === 'analytics' ? 'text-emerald-600' : 'text-slate-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-        </svg>
-        <span>Thống kê</span>
-      </button>
-    </div>
-
-    <!-- Right: Page Count & Connect & Profile -->
-    <div class="flex items-center gap-2.5">
-      <!-- Facebook Accounts Button -->
-      <button
-        type="button"
-        @click="$emit('open-accounts')"
-        class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50/80 hover:bg-blue-100/80 border border-blue-200/70 text-xs text-blue-700 font-bold transition shadow-2xs"
-        title="Quản lý tài khoản Facebook Admin"
-      >
-        <svg class="w-3.5 h-3.5 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-        </svg>
-        <span>{{ accounts.length }} Tài khoản FB</span>
-      </button>
-
-      <!-- Page Stats Pill -->
-      <div class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50/80 border border-indigo-200/70 text-xs text-indigo-700 font-bold shadow-2xs">
-        <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-        </svg>
-        <span>{{ pages.length }} Fanpage</span>
-      </div>
-
-      <!-- Connect Page Button -->
-      <button
-        type="button"
-        @click="$emit('open-connect')"
-        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-xs shadow-blue-500/20 transition"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-        </svg>
-        <span class="hidden sm:inline">Thêm Token / Page</span>
-      </button>
-
-      <!-- User Avatar / Info -->
-      <div class="flex items-center gap-2 pl-2 border-l border-slate-200">
-        <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-100 to-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-black overflow-hidden border border-indigo-200 shadow-2xs">
-          {{ ((user?.display_name || user?.username || 'U').substring(0, 2)).toUpperCase() }}
-        </div>
-        <span class="text-xs font-bold text-slate-700 hidden md:inline">{{ user?.display_name || user?.username || 'Tài khoản' }}</span>
+      <!-- Menu ⋯: các phần ít dùng -->
+      <div ref="moreMenuRef" class="relative shrink-0">
         <button
           type="button"
-          @click="handleLogout"
-          class="ml-1 p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
-          title="Đăng xuất"
+          class="p-2 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-100 text-slate-600 transition shadow-2xs relative"
+          title="Thêm"
+          @click="toggleMenu('more')"
         >
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
           </svg>
+          <span v-if="expiredAccounts.length" class="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-500 border-2 border-white"></span>
         </button>
+        <div v-if="openMenu === 'more'" class="absolute right-0 mt-1.5 w-64 bg-white rounded-2xl shadow-xl border border-slate-200/80 py-1.5 z-50 text-xs">
+          <div class="px-3 py-2 border-b border-slate-100 mb-1 flex items-center gap-2">
+            <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-100 to-indigo-100 text-indigo-700 flex items-center justify-center text-[11px] font-black border border-indigo-200">
+              {{ initials }}
+            </div>
+            <div class="min-w-0">
+              <p class="font-bold text-slate-800 truncate">{{ user?.display_name || user?.username || "Tài khoản" }}</p>
+              <p class="text-[11px] text-slate-500">{{ pages.length }} Fanpage · {{ accounts.length }} tài khoản FB</p>
+            </div>
+          </div>
+          <button type="button" class="menu-item" @click="pickPanel('analytics')">📊 <span>Thống kê chi tiết</span></button>
+          <button type="button" class="menu-item" @click="pickPanel('pages')">📄 <span>Quản lý Fanpage</span></button>
+          <button type="button" class="menu-item" @click="pickPanel('accounts')">
+            👤 <span>Tài khoản Facebook Admin</span>
+            <span v-if="expiredAccounts.length" class="ml-auto text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 rounded">hết hạn</span>
+          </button>
+          <button type="button" class="menu-item" @click="pickConnect">🔑 <span>Thêm Token / Page</span></button>
+          <button v-if="isAdmin" type="button" class="menu-item" @click="pickPanel('admin')">🛡️ <span>Quản trị hệ thống</span></button>
+          <div class="border-t border-slate-100 my-1"></div>
+          <button type="button" class="menu-item text-rose-600" @click="handleLogout">↩ <span>Đăng xuất</span></button>
+        </div>
       </div>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
-import type { AppTab } from "@shared/types";
-import { ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { usePages } from "../../composables/usePages";
 import { useAuth } from "../../composables/useAuth";
+import { useTasks } from "../../composables/useTasks";
+import { useAnalytics } from "../../composables/useAnalytics";
 
-defineProps<{
-  activeTab: AppTab;
-  composeMode: "single" | "bulk" | "multipage";
-}>();
+import type { ComposeMode, PanelKey } from "../../router";
+
+const props = defineProps<{ composeMode: ComposeMode }>();
 
 const emit = defineEmits<{
-  (e: "update:composeMode", mode: "single" | "bulk" | "multipage"): void;
-  (e: "switch-tab", tab: AppTab): void;
+  (e: "go-home"): void;
+  (e: "open-compose", mode: ComposeMode): void;
+  (e: "open-panel", panel: PanelKey): void;
   (e: "open-connect"): void;
-  (e: "open-accounts"): void;
 }>();
 
-const { pages, accounts } = usePages();
+const { pages, accounts, expiredAccounts } = usePages();
 const { user, logout } = useAuth();
+const { activeFilter, taskStats, loadTasks, isLoading } = useTasks();
+const { dashboard, loadAnalytics, isLoading: analyticsLoading } = useAnalytics();
 
-const isModeDropdownOpen = ref(false);
+const isAdmin = computed(() => (user.value as any)?.role === "admin");
+const initials = computed(() => (user.value?.display_name || user.value?.username || "U").substring(0, 2).toUpperCase());
+const isRefreshing = computed(() => isLoading.value || analyticsLoading.value);
+const lastComposeMode = computed(() => props.composeMode || "single");
 
-const setComposeMode = (mode: "single" | "bulk" | "multipage") => {
-  emit("update:composeMode", mode);
-  isModeDropdownOpen.value = false;
+const statusChips = computed(() => [
+  { key: "all", label: "Tất cả", count: taskStats.value.total, dot: "bg-slate-400", active: "bg-slate-800 text-white border-slate-800" },
+  { key: "pending", label: "Chờ đăng", count: taskStats.value.pending, dot: "bg-amber-500", active: "bg-amber-50 text-amber-800 border-amber-300" },
+  { key: "running", label: "Đang đăng", count: taskStats.value.running, dot: "bg-sky-500 animate-pulse", active: "bg-sky-50 text-sky-800 border-sky-300" },
+  { key: "success", label: "Đã đăng", count: taskStats.value.success, dot: "bg-emerald-500", active: "bg-emerald-50 text-emerald-800 border-emerald-300" },
+  { key: "failed", label: "Thất bại", count: taskStats.value.failed, dot: "bg-rose-500", active: "bg-rose-50 text-rose-800 border-rose-300" }
+]);
+
+const composeModes: Array<{ key: ComposeMode; label: string; hint: string }> = [
+  { key: "single", label: "Đăng thường", hint: "1 video, chọn một hoặc nhiều Fanpage" },
+  { key: "bulk", label: "Đăng hàng loạt", hint: "Nhiều video cùng lúc, chung khung giờ" },
+  { key: "multipage", label: "Đăng theo Fanpage", hint: "Mỗi Fanpage một nội dung riêng" }
+];
+
+// Đường biểu đồ mini từ chuỗi số liệu theo ngày (lấy tối đa 14 ngày gần nhất)
+const spark = computed(() => {
+  const ts = (dashboard.value?.time_series || []).slice(-14);
+  if (ts.length < 2) return { views: "", engagement: "" };
+  const max = Math.max(1, ...ts.map((p) => Math.max(p.views ?? 0, p.engagement ?? 0)));
+  const step = 92 / (ts.length - 1);
+  const path = (key: "views" | "engagement") =>
+    ts.map((p, i) => `${i === 0 ? "M" : "L"} ${(2 + i * step).toFixed(1)} ${(29 - ((p[key] ?? 0) / max) * 26).toFixed(1)}`).join(" ");
+  return { views: path("views"), engagement: path("engagement") };
+});
+
+const formatCompact = (n: number | null | undefined) =>
+  n === null || n === undefined ? "—" : new Intl.NumberFormat("vi-VN", { notation: "compact", maximumFractionDigits: 1 }).format(n);
+
+// Menu con: chỉ mở một cái, bấm ra ngoài thì đóng
+const openMenu = ref<"compose" | "more" | null>(null);
+const composeMenuRef = ref<HTMLElement | null>(null);
+const moreMenuRef = ref<HTMLElement | null>(null);
+const toggleMenu = (m: "compose" | "more") => {
+  openMenu.value = openMenu.value === m ? null : m;
+};
+const onDocClick = (e: MouseEvent) => {
+  const t = e.target as Node;
+  if (composeMenuRef.value?.contains(t) || moreMenuRef.value?.contains(t)) return;
+  openMenu.value = null;
+};
+onMounted(() => document.addEventListener("click", onDocClick));
+onUnmounted(() => document.removeEventListener("click", onDocClick));
+
+const pickFilter = (key: string) => {
+  activeFilter.value = key;
+  emit("go-home");
+};
+const pickCompose = (mode: ComposeMode) => {
+  openMenu.value = null;
+  emit("open-compose", mode);
+};
+const pickPanel = (panel: PanelKey) => {
+  openMenu.value = null;
+  emit("open-panel", panel);
+};
+const pickConnect = () => {
+  openMenu.value = null;
+  emit("open-connect");
+};
+
+const refreshAll = async () => {
+  await Promise.all([loadTasks(), loadAnalytics(true)]);
 };
 
 const handleLogout = async () => {
+  openMenu.value = null;
   if (confirm("Bạn có chắc chắn muốn đăng xuất?")) {
     await logout();
   }
 };
 </script>
+
+<style scoped>
+.menu-item {
+  @apply w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-slate-50 text-slate-700 font-semibold transition;
+}
+</style>

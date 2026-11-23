@@ -2368,7 +2368,7 @@ export async function handleWorkerRequest(
 }
 
 /** Cron expression (wrangler.jsonc) that runs the analytics sync worker */
-export const ANALYTICS_SYNC_CRON = "*/10 * * * *";
+const ANALYTICS_SYNC_CRON = "*/10 * * * *";
 
 export async function handleScheduledCron(
   event: ScheduledEvent,

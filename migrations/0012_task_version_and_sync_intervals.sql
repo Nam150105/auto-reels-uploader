@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS task_versions (
 -- Index tối ưu kiểm tra cập nhật bài theo người dùng
 CREATE INDEX IF NOT EXISTS idx_tasks_owner_updated ON tasks(owner_user_id, updated_at);
 
--- Index tối ưu Cron quét bài Reels đến hạn đồng bộ Insights
-CREATE INDEX IF NOT EXISTS idx_tasks_analytics_due ON tasks(status, analytics_next_sync_at);
+-- Index idx_tasks_analytics_due ON tasks(status, analytics_next_sync_at) do Worker tự tạo khi khởi động
+-- (cột analytics_next_sync_at do Worker tự thêm), không tạo ở đây để migration chạy được trên CSDL mới.
 
 -- Index tối ưu kiểm tra comment bị treo
 CREATE INDEX IF NOT EXISTS idx_task_comments_stuck ON task_comments (status, updated_at);

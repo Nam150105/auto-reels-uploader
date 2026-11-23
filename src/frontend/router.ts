@@ -6,6 +6,9 @@ import AnalyticsView from "./components/analytics/AnalyticsView.vue";
 import FanpageView from "./components/pages/FanpageView.vue";
 import AdminView from "./components/admin/AdminView.vue";
 
+/** Các khung mở đè lên Lịch đăng */
+export type PanelKey = "analytics" | "pages" | "accounts" | "admin";
+
 export type ComposeMode = "single" | "bulk" | "multipage";
 export const COMPOSE_MODES: ComposeMode[] = ["single", "bulk", "multipage"];
 

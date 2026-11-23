@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col p-4 lg:p-6 overflow-y-auto">
-    <!-- Tabs -->
-    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+    <!-- Tabs + nút Đồng bộ / Thêm Admin (cố định khi cuộn) -->
+    <div class="sticky -top-4 lg:-top-6 z-20 -mx-4 lg:-mx-6 -mt-4 lg:-mt-6 px-4 lg:px-6 pt-4 lg:pt-6 pb-3 mb-1 bg-[#f8fafc]/95 backdrop-blur-sm flex flex-wrap items-center justify-between gap-3">
       <div class="inline-flex p-1 rounded-2xl bg-white border border-slate-200/80 shadow-2xs">
         <button
           v-for="t in tabs"
