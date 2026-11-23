@@ -1,32 +1,16 @@
 <template>
   <div class="h-screen w-screen flex flex-col overflow-hidden bg-[#f8fafc] font-sans text-slate-800">
-    <!-- Thanh trên cùng (cố định): số đếm, biểu đồ mini, Làm mới, Tạo bài, menu ⋯ -->
+    <!-- Thanh trên cùng (cố định): số đếm, thống kê mini, Làm mới, menu ⋯ -->
     <Header
-      :composeMode="composeMode"
-      @go-home="scrollToSection('schedule')"
-      @open-compose="openCompose"
+      @go-home="closePanel"
       @open-panel="openPanel"
       @open-connect="() => openConnectModal(null)"
     />
 
-    <!-- Nhảy nhanh tới từng phần của trang (cố định) -->
-    <nav class="shrink-0 bg-white/90 backdrop-blur-sm border-b border-slate-200/70 px-3 sm:px-5 flex items-center gap-1 overflow-x-auto scrollbar-none z-20">
-      <button
-        v-for="s in sections"
-        :key="s.key"
-        type="button"
-        class="px-3 py-2 text-xs font-bold border-b-2 transition shrink-0"
-        :class="visibleSection === s.key ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'"
-        @click="goSection(s.key)"
-      >
-        {{ s.label }}
-      </button>
-    </nav>
-
     <!-- Token hết hạn -->
     <div
       v-if="expiredAccounts.length > 0"
-      class="mx-4 sm:mx-6 mt-3 px-4 py-2.5 rounded-2xl bg-amber-50/80 border border-amber-200/80 flex items-center justify-between gap-3 shrink-0 shadow-2xs"
+      class="mx-3 sm:mx-5 mt-2 px-4 py-2 rounded-2xl bg-amber-50/80 border border-amber-200/80 flex items-center justify-between gap-3 shrink-0 shadow-2xs"
     >
       <div class="flex items-center gap-2 text-xs text-amber-800 font-semibold">
         <span class="text-amber-600">⚠️</span>
@@ -41,71 +25,56 @@
       </button>
     </div>
 
-    <!-- MỘT TRANG DUY NHẤT: Viết bài → Lịch đăng → Thống kê, cuộn liên tục -->
-    <main class="flex-1 min-h-0 relative">
-      <div ref="scrollerRef" class="h-full overflow-y-auto" @scroll.passive="onScroll">
-        <!-- 1. VIẾT BÀI -->
-        <section ref="composeRef" data-section="compose" class="scroll-mt-2">
-          <div class="flex flex-wrap items-center gap-2 px-4 lg:px-6 pt-5">
-            <h2 class="section-title">✍️ Viết bài</h2>
-            <div class="flex items-center gap-1 bg-white border border-slate-200/80 p-1 rounded-xl overflow-x-auto scrollbar-none shadow-2xs">
-              <button
-                v-for="m in composeModes"
-                :key="m.key"
-                type="button"
-                class="px-3 py-1.5 rounded-lg text-xs font-bold transition shrink-0"
-                :class="composeMode === m.key ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'"
-                @click="openCompose(m.key)"
-              >
-                {{ m.label }}
-              </button>
-            </div>
-            <button
-              type="button"
-              class="ml-auto text-xs font-bold text-slate-500 hover:text-slate-800 px-2 py-1 rounded-lg hover:bg-slate-100"
-              @click="composeCollapsed = !composeCollapsed"
-            >
-              {{ composeCollapsed ? "▾ Mở khung viết bài" : "▴ Thu gọn" }}
-            </button>
-          </div>
-          <div v-show="!composeCollapsed" class="embed-view">
-            <ComposeView :initial-mode="composeMode" @task-created="onTasksCreated" />
-          </div>
-        </section>
+    <!--
+      MỘT MÀN HÌNH DUY NHẤT (máy tính): nửa trên Đăng theo Fanpage, nửa dưới Lịch đăng.
+      Mỗi nửa tự cuộn bên trong, trang không cuộn. Điện thoại: xếp dọc, cuộn cả trang.
+    -->
+    <main class="flex-1 min-h-0 relative flex flex-col overflow-y-auto lg:overflow-hidden">
+      <!-- ĐĂNG THEO FANPAGE -->
+      <section
+        class="shrink-0 flex flex-col border-b border-slate-200/80"
+        :class="composeCollapsed ? '' : 'lg:h-[60%] lg:min-h-[320px]'"
+      >
+        <div class="shrink-0 flex items-center gap-2 px-3 lg:px-4 pt-2">
+          <h2 class="text-sm font-extrabold text-slate-800">✍️ Đăng theo Fanpage</h2>
+          <span class="hidden sm:inline text-[11px] text-slate-400">Chọn giờ đăng chung → chọn Fanpage → nhập nội dung từng Page</span>
+          <button
+            type="button"
+            class="ml-auto text-[11px] font-bold text-slate-500 hover:text-slate-800 px-2 py-1 rounded-lg hover:bg-slate-100"
+            :title="composeCollapsed ? 'Mở khung đăng bài' : 'Thu gọn để xem lịch đăng rộng hơn'"
+            @click="composeCollapsed = !composeCollapsed"
+          >
+            {{ composeCollapsed ? "▾ Mở khung đăng bài" : "▴ Thu gọn" }}
+          </button>
+        </div>
+        <div v-show="!composeCollapsed" class="flex-1 min-h-0">
+          <MultiPageComposer @tasks-created="onTasksCreated" />
+        </div>
+      </section>
 
-        <!-- 2. LỊCH ĐĂNG -->
-        <section ref="scheduleRef" data-section="schedule" class="scroll-mt-2 border-t border-slate-200/70 mt-2">
-          <div class="px-4 lg:px-6 pt-5">
-            <h2 class="section-title">📅 Lịch đăng</h2>
-          </div>
-          <ScheduleView />
-        </section>
+      <!-- LỊCH ĐĂNG -->
+      <section ref="scheduleRef" class="flex-1 min-h-0 lg:overflow-y-auto relative" @scroll.passive="onScheduleScroll">
+        <div class="flex items-center gap-2 px-4 lg:px-6 pt-3">
+          <h2 class="text-sm font-extrabold text-slate-800">📅 Lịch đăng</h2>
+          <span class="text-[11px] text-slate-400">Bài chưa đăng + bài đã xong trong {{ BOARD_RECENT_DAYS }} ngày gần nhất</span>
+        </div>
+        <ScheduleView />
+      </section>
 
-        <!-- 3. THỐNG KÊ -->
-        <section ref="analyticsRef" data-section="analytics" class="scroll-mt-2 border-t border-slate-200/70">
-          <div class="px-4 lg:px-6 pt-5">
-            <h2 class="section-title">📊 Thống kê</h2>
-          </div>
-          <div class="embed-view">
-            <AnalyticsView />
-          </div>
-        </section>
-      </div>
-
-      <!-- Nút lên đầu trang -->
+      <!-- Nút lên đầu danh sách -->
       <button
         v-if="showBackToTop"
         type="button"
-        class="absolute bottom-6 right-6 z-10 w-11 h-11 rounded-full bg-slate-900/85 hover:bg-slate-900 text-white shadow-lg flex items-center justify-center transition"
-        title="Lên đầu trang"
-        @click="scrollerRef?.scrollTo({ top: 0, behavior: 'smooth' })"
+        class="absolute bottom-5 right-5 z-10 w-11 h-11 rounded-full bg-slate-900/85 hover:bg-slate-900 text-white shadow-lg flex items-center justify-center transition"
+        title="Lên đầu danh sách"
+        @click="scheduleRef?.scrollTo({ top: 0, behavior: 'smooth' })"
       >
         <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
         </svg>
       </button>
 
-      <!-- Phần quản lý ít dùng (mở từ menu ⋯): Fanpage / Tài khoản FB / Quản trị -->
+      <!-- Phần không hiện hết trên màn hình chính (mở từ menu ⋯ / biểu đồ mini): khung đè có nút Quay lại -->
       <section v-if="panel" class="absolute inset-0 z-30 bg-[#f8fafc] flex flex-col">
         <div class="shrink-0 flex items-center gap-3 px-4 lg:px-6 py-2.5 bg-white border-b border-slate-200/80 shadow-2xs">
           <button
@@ -122,7 +91,8 @@
           <h2 class="text-sm font-bold text-slate-800">{{ panelTitle }}</h2>
         </div>
         <div class="flex-1 min-h-0">
-          <FanpageView v-if="panel === 'pages' || panel === 'accounts'" @open-connect="(id: string | null) => openConnectModal(id)" />
+          <AnalyticsView v-if="panel === 'analytics'" />
+          <FanpageView v-else-if="panel === 'pages' || panel === 'accounts'" @open-connect="(id: string | null) => openConnectModal(id)" />
           <AdminView v-else-if="panel === 'admin'" />
         </div>
       </section>
@@ -139,23 +109,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuth } from "./composables/useAuth";
 import { usePages } from "./composables/usePages";
-import { useTasks } from "./composables/useTasks";
+import { useTasks, BOARD_RECENT_DAYS } from "./composables/useTasks";
 import { useAnalytics } from "./composables/useAnalytics";
-import type { ComposeMode, PanelKey } from "./router";
+import type { PanelKey } from "./router";
 import Header from "./components/common/Header.vue";
 import Toast from "./components/common/Toast.vue";
 import ConnectFacebookModal from "./components/dialogs/ConnectFacebookModal.vue";
-import ComposeView from "./components/composer/ComposeView.vue";
+import MultiPageComposer from "./components/composer/MultiPageComposer.vue";
 import ScheduleView from "./components/schedule/ScheduleView.vue";
 import AnalyticsView from "./components/analytics/AnalyticsView.vue";
 import FanpageView from "./components/pages/FanpageView.vue";
 import AdminView from "./components/admin/AdminView.vue";
-
-type SectionKey = "compose" | "schedule" | "analytics";
 
 const { checkAuth } = useAuth();
 const {
@@ -175,108 +143,51 @@ const route = useRoute();
 const router = useRouter();
 const HOME = "/page";
 
-const sections: Array<{ key: SectionKey; label: string }> = [
-  { key: "compose", label: "✍️ Viết bài" },
-  { key: "schedule", label: "📅 Lịch đăng" },
-  { key: "analytics", label: "📊 Thống kê" }
-];
-const composeModes: Array<{ key: ComposeMode; label: string }> = [
-  { key: "single", label: "Đăng thường" },
-  { key: "bulk", label: "Đăng hàng loạt" },
-  { key: "multipage", label: "Đăng theo Fanpage" }
-];
-
-// ---- Cuộn tới từng phần ----
-const scrollerRef = ref<HTMLElement | null>(null);
-const composeRef = ref<HTMLElement | null>(null);
-const scheduleRef = ref<HTMLElement | null>(null);
-const analyticsRef = ref<HTMLElement | null>(null);
-const sectionEl = (k: SectionKey) => (k === "compose" ? composeRef : k === "schedule" ? scheduleRef : analyticsRef).value;
-
-const scrollToSection = async (k: SectionKey) => {
-  await nextTick();
-  const scroller = scrollerRef.value;
-  const el = sectionEl(k);
-  if (!scroller || !el) return;
-  scroller.scrollTo({ top: el.offsetTop - 4, behavior: "smooth" });
-};
-
-// Đánh dấu phần đang xem trên thanh nhảy nhanh + hiện nút lên đầu trang
-const visibleSection = ref<SectionKey>("compose");
-const showBackToTop = ref(false);
-const onScroll = () => {
-  const scroller = scrollerRef.value;
-  if (!scroller) return;
-  showBackToTop.value = scroller.scrollTop > 400;
-  const probe = scroller.scrollTop + 120;
-  let current: SectionKey = "compose";
-  for (const s of sections) {
-    const el = sectionEl(s.key);
-    if (el && el.offsetTop <= probe) current = s.key;
-  }
-  visibleSection.value = current;
-};
-
-// ---- URL: /compose/:mode, /schedule, /analytics cuộn tới phần tương ứng; /pages, /admin mở khung quản lý ----
-const SECTION_PATHS: Record<SectionKey, string> = { compose: "/compose/single", schedule: HOME, analytics: "/analytics" };
-const composeMode = ref<ComposeMode>("single");
 const composeCollapsed = ref(false);
 
-const panel = computed<Exclude<PanelKey, "analytics"> | null>(() => {
+// Nút lên đầu danh sách lịch đăng
+const scheduleRef = ref<HTMLElement | null>(null);
+const showBackToTop = ref(false);
+const onScheduleScroll = () => {
+  showBackToTop.value = (scheduleRef.value?.scrollTop || 0) > 400;
+};
+
+// Khung đè theo URL: /analytics, /pages, /pages/accounts, /admin
+const panel = computed<PanelKey | null>(() => {
+  if (route.name === "analytics") return "analytics";
   if (route.name === "pages") return route.params.section === "accounts" ? "accounts" : "pages";
   if (route.name === "admin") return "admin";
   return null;
 });
-const panelTitle = computed(() =>
-  panel.value === "accounts" ? "Tài khoản Facebook Admin" : panel.value === "admin" ? "Quản trị hệ thống" : "Quản lý Fanpage"
-);
-
-watch(
-  () => [route.name, route.params.mode] as const,
-  ([name, mode]) => {
-    if (name === "compose") {
-      composeMode.value = mode === "bulk" || mode === "multipage" ? mode : "single";
-      composeCollapsed.value = false;
-      scrollToSection("compose");
-    } else if (name === "analytics") {
-      scrollToSection("analytics");
-    } else if (name === "schedule") {
-      scrollToSection("schedule");
-    }
-  },
-  { immediate: true }
-);
-
-const goSection = (k: SectionKey) => {
-  if (k === "compose") composeCollapsed.value = false;
-  if (route.path !== SECTION_PATHS[k]) router.replace(k === "compose" ? `/compose/${composeMode.value}` : SECTION_PATHS[k]);
-  scrollToSection(k);
+const PANEL_TITLES: Record<PanelKey, string> = {
+  analytics: "Thống kê chi tiết",
+  pages: "Quản lý Fanpage",
+  accounts: "Tài khoản Facebook Admin",
+  admin: "Quản trị hệ thống"
 };
-const openCompose = (mode: ComposeMode) => {
-  composeMode.value = mode;
-  composeCollapsed.value = false;
-  router.replace(`/compose/${mode}`);
-  scrollToSection("compose");
-};
-const PANEL_PATHS: Record<Exclude<PanelKey, "analytics">, string> = {
+const panelTitle = computed(() => (panel.value ? PANEL_TITLES[panel.value] : ""));
+const PANEL_PATHS: Record<PanelKey, string> = {
+  analytics: "/analytics",
   pages: "/pages",
   accounts: "/pages/accounts",
   admin: "/admin"
 };
+
 const openPanel = (p: PanelKey) => {
-  if (p === "analytics") return goSection("analytics");
-  router.push(PANEL_PATHS[p]);
+  if (route.path !== PANEL_PATHS[p]) router.push(PANEL_PATHS[p]);
 };
 const closePanel = () => {
+  if (!panel.value) return;
   if (window.history.state?.back) router.back();
   else router.replace(HOME);
 };
+
 const onTasksCreated = async () => {
   await loadTasks(true);
-  goSection("schedule");
+  scheduleRef.value?.scrollTo({ top: 0, behavior: "smooth" });
 };
 
-// Esc đóng khung quản lý (trừ khi đang có hộp thoại khác bật)
+// Esc đóng khung đè (trừ khi đang có hộp thoại khác bật)
 const onKeydown = (e: KeyboardEvent) => {
   if (e.key !== "Escape" || isConnectModalOpen.value || !panel.value) return;
   if (document.querySelector("[role='dialog'], .modal-open")) return;
@@ -287,6 +198,7 @@ onMounted(async () => {
   document.addEventListener("keydown", onKeydown);
   await checkAuth();
   await loadPages();
+  // Số liệu cho thống kê mini trên thanh trên cùng (đọc từ dữ liệu đã đồng bộ, có cache 1 phút)
   loadAnalytics();
 
   // Back from a full-page Facebook login (used when the popup was blocked)
@@ -314,15 +226,3 @@ watch(pagesViewTab, (tab) => {
   if (route.path !== target) router.replace(target);
 });
 </script>
-
-<style scoped>
-.section-title {
-  @apply text-base font-extrabold text-slate-800 mr-2;
-}
-/* Các khu vực vốn là màn hình riêng (tự cuộn, cao 100%) -> giãn theo nội dung trong trang chung,
-   để thanh cố định bên trong chúng bám theo thanh cuộn của cả trang */
-.embed-view > :deep(div:first-child) {
-  height: auto;
-  overflow: visible;
-}
-</style>

@@ -810,8 +810,10 @@ export async function handleWorkerRequest(
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+      // Đếm số bài theo từng Page quét toàn bộ bài của người dùng -> chỉ tính khi được yêu cầu (?counts=1)
       const pages = await getFacebookPages(db, encryptionKey, {
         includeToken: false,
+        includeCounts: url.searchParams.get("counts") === "1",
         accountIds,
         ownerUserId
       });
@@ -911,6 +913,8 @@ export async function handleWorkerRequest(
         .map((s) => s.trim())
         .filter(Boolean);
 
+      const recentDaysRaw = Number(url.searchParams.get("recent_days") || 0);
+      const recentDays = Number.isFinite(recentDaysRaw) && recentDaysRaw > 0 ? Math.min(recentDaysRaw, 90) : null;
       const tasks = await getTasks(db, {
         facebookPageId,
         facebookPageIds,
@@ -920,7 +924,8 @@ export async function handleWorkerRequest(
         endDate,
         accountIds,
         ownerUserId,
-        excludePublished
+        excludePublished,
+        recentDays
       });
       const commentMap = await getTaskCommentsForTasks(
         db,

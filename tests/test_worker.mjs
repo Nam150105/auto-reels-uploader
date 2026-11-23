@@ -1579,6 +1579,37 @@ async function runAll30Tests() {
   assert.ok(Array.isArray(listAfterCompose));
   assert.ok(schedJson.task_ids.every((id) => listAfterCompose.some((t) => t.id === id)));
 
+  // ?recent_days=N: bài chưa xong luôn có; bài đã xong chỉ lấy trong N ngày gần đây (đọc qua index, không quét bài cũ)
+  const nowIsoR = new Date().toISOString();
+  const oldDoneId = Number(
+    (
+      await d1
+        .prepare(
+          `INSERT INTO tasks (owner_user_id, profile_id, facebook_page_id, video_path, caption, schedule_date, schedule_time, scheduled_at, status, created_at, updated_at)
+           VALUES ((SELECT id FROM users WHERE username = 'alice_admin'), 'page_101', 'page_101', 'r2://old', 'old done', '2020-01-01', '07:00', ?, 'success', ?, ?)`
+        )
+        .bind(Math.floor(Date.now() / 1000) - 10 * 86400, nowIsoR, nowIsoR)
+        .run()
+    ).meta.last_row_id
+  );
+  const recentList = await (
+    await callWorker("/api/tasks?recent_days=3", { headers: { Cookie: `session_token=${tokenA}` } })
+  ).json();
+  assert.ok(!recentList.some((t) => t.id === oldDoneId), "Bài đã xong quá 3 ngày không được tải");
+  assert.ok(schedJson.task_ids.every((id) => recentList.some((t) => t.id === id)), "Bài chờ đăng luôn được tải");
+  assert.ok(listAfterCompose.length > 0);
+  const fullList = await (await callWorker("/api/tasks", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  assert.ok(fullList.some((t) => t.id === oldDoneId), "Không có recent_days thì vẫn trả đủ");
+  await d1.prepare("DELETE FROM tasks WHERE id = ?").bind(oldDoneId).run();
+
+  // /api/pages mặc định không đếm bài (tiết kiệm lượt đọc); ?counts=1 mới đếm
+  const pagesNoCount = await (await callWorker("/api/pages", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const pagesWithCount = await (await callWorker("/api/pages?counts=1", { headers: { Cookie: `session_token=${tokenA}` } })).json();
+  const p101NoCount = pagesNoCount.find((p) => p.facebook_page_id === "page_101");
+  const p101Count = pagesWithCount.find((p) => p.facebook_page_id === "page_101");
+  assert.equal(Number(p101NoCount.pending_count || 0), 0);
+  assert.ok(Number(p101Count.pending_count) >= 1, "?counts=1 phải đếm bài chờ đăng của Page");
+
   // Đăng hàng loạt: 1 dòng sai giờ -> chặn toàn bộ, không tạo task nào
   const countTasks = async () =>
     Number((await d1.prepare("SELECT COUNT(*) AS c FROM tasks").first()).c);

@@ -82,8 +82,9 @@ export const api = {
   },
 
   // Fanpages & Accounts
-  async getPages(): Promise<FacebookPageRecord[]> {
-    const res = await request<any>("/api/pages");
+  /** withCounts: kèm số bài chờ/đã đăng/lỗi của từng Page (tốn lượt đọc, chỉ dùng ở màn hình Quản lý Fanpage) */
+  async getPages(withCounts = false): Promise<FacebookPageRecord[]> {
+    const res = await request<any>(withCounts ? "/api/pages?counts=1" : "/api/pages");
     return Array.isArray(res) ? res : (res?.pages || []);
   },
 
@@ -132,8 +133,11 @@ export const api = {
     page_id?: string;
     exclude_published?: boolean;
     search?: string;
+    /** Bài đã xong chỉ lấy trong N ngày gần đây (bài chưa xong luôn lấy hết) */
+    recent_days?: number;
   }): Promise<{ tasks: TaskRecord[]; total: number }> {
     const q = new URLSearchParams();
+    if (params?.recent_days) q.set("recent_days", String(params.recent_days));
     if (params?.status && params.status !== "all") q.set("status", params.status);
     if (params?.page_id) q.set("page_id", params.page_id);
     if (params?.exclude_published) q.set("exclude_published", "true");

@@ -2923,6 +2923,10 @@ export async function addTasksBulk(
   return insertedIds;
 }
 
+/** Trạng thái bài chưa xong (luôn hiện trên lịch đăng) và đã xong (chỉ hiện gần đây) */
+const ACTIVE_TASK_STATUSES_SQL = "'pending', 'scheduled', 'needs_schedule', 'queued', 'processing', 'running'";
+const DONE_TASK_STATUSES_SQL = "'success', 'published', 'failed', 'canceled', 'cancelled'";
+
 export async function getTasks(
   db: D1Database,
   options: {
@@ -2935,23 +2939,39 @@ export async function getTasks(
     endDate?: string | null;
     ownerUserId: string;
     excludePublished?: boolean;
+    /**
+     * Chỉ lấy bài đã xong (đã đăng / thất bại / hủy) trong N ngày gần đây; bài chưa xong lấy hết.
+     * Mỗi nhánh đọc qua index (owner_user_id, status, scheduled_at) -> không quét toàn bộ bài cũ.
+     */
+    recentDays?: number | null;
   }
 ): Promise<TaskRecord[]> {
-  const { facebookPageId, facebookPageIds, status, search, accountIds = [], startDate, endDate, ownerUserId, excludePublished } = options;
+  const { facebookPageId, facebookPageIds, status, search, accountIds = [], startDate, endDate, ownerUserId, excludePublished, recentDays } = options;
   const nowSec = nowUtcSeconds();
+
+  const params: unknown[] = [];
+  let fromSql = "tasks t";
+  if (recentDays && recentDays > 0) {
+    fromSql = `(
+      SELECT * FROM tasks INDEXED BY idx_tasks_owner_status_sched WHERE owner_user_id = ? AND status IN (${ACTIVE_TASK_STATUSES_SQL})
+      UNION ALL
+      SELECT * FROM tasks INDEXED BY idx_tasks_owner_status_sched WHERE owner_user_id = ? AND status IN (${DONE_TASK_STATUSES_SQL}) AND scheduled_at >= ?
+    ) t`;
+    params.push(ownerUserId, ownerUserId, nowSec - Math.floor(recentDays * 86400));
+  }
 
   let sql = `
     SELECT t.*,
            fp.page_name AS page_name,
            fp.avatar_url AS page_avatar,
            fp.category AS page_category
-    FROM tasks t
+    FROM ${fromSql}
     LEFT JOIN facebook_pages fp
       ON fp.facebook_page_id = t.facebook_page_id
       AND fp.owner_user_id = t.owner_user_id
     WHERE t.owner_user_id = ?
   `;
-  const params: unknown[] = [ownerUserId];
+  params.push(ownerUserId);
 
   if (facebookPageIds && facebookPageIds.length > 0) {
     const placeholders = facebookPageIds.map(() => "?").join(",");
@@ -3008,7 +3028,14 @@ export async function getTasks(
 
   sql += " ORDER BY t.id DESC";
 
-  const { results } = await db.prepare(sql).bind(...params).all<Record<string, unknown>>();
+  let results: Record<string, unknown>[];
+  try {
+    results = (await db.prepare(sql).bind(...params).all<Record<string, unknown>>()).results;
+  } catch (err) {
+    // Thiếu index (CSDL cũ) -> tải theo cách thường thay vì làm hỏng danh sách bài
+    if (recentDays) return getTasks(db, { ...options, recentDays: null });
+    throw err;
+  }
 
   return results.map((r) => {
     const rawStatus = String(r.status || "pending");

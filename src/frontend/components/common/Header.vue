@@ -67,45 +67,6 @@
         <span class="hidden lg:inline">Làm mới</span>
       </button>
 
-      <!-- Tạo bài + menu con chọn chế độ -->
-      <div ref="composeMenuRef" class="relative shrink-0">
-        <div class="flex rounded-xl shadow-xs shadow-blue-500/20 overflow-hidden">
-          <button
-            type="button"
-            class="flex items-center gap-1.5 pl-3 pr-2.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold transition"
-            @click="$emit('open-compose', lastComposeMode)"
-          >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
-            <span class="hidden sm:inline">Tạo bài</span>
-          </button>
-          <button
-            type="button"
-            class="px-1.5 bg-indigo-600 hover:bg-indigo-500 text-white border-l border-white/25 transition"
-            title="Chọn cách đăng"
-            @click="toggleMenu('compose')"
-          >
-            <svg class="w-3.5 h-3.5 transition-transform" :class="{ 'rotate-180': openMenu === 'compose' }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-        </div>
-        <div v-if="openMenu === 'compose'" class="absolute right-0 mt-1.5 w-60 bg-white rounded-2xl shadow-xl border border-slate-200/80 py-1.5 z-50 text-xs">
-          <p class="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Chọn cách đăng</p>
-          <button
-            v-for="m in composeModes"
-            :key="m.key"
-            type="button"
-            class="w-full px-3 py-2 text-left hover:bg-blue-50/60 transition flex flex-col"
-            @click="pickCompose(m.key)"
-          >
-            <span class="font-bold text-slate-800">{{ m.label }}</span>
-            <span class="text-[11px] text-slate-500">{{ m.hint }}</span>
-          </button>
-        </div>
-      </div>
-
       <!-- Menu ⋯: các phần ít dùng -->
       <div ref="moreMenuRef" class="relative shrink-0">
         <button
@@ -152,13 +113,10 @@ import { useAuth } from "../../composables/useAuth";
 import { useTasks } from "../../composables/useTasks";
 import { useAnalytics } from "../../composables/useAnalytics";
 
-import type { ComposeMode, PanelKey } from "../../router";
-
-const props = defineProps<{ composeMode: ComposeMode }>();
+import type { PanelKey } from "../../router";
 
 const emit = defineEmits<{
   (e: "go-home"): void;
-  (e: "open-compose", mode: ComposeMode): void;
   (e: "open-panel", panel: PanelKey): void;
   (e: "open-connect"): void;
 }>();
@@ -171,7 +129,6 @@ const { dashboard, loadAnalytics, isLoading: analyticsLoading } = useAnalytics()
 const isAdmin = computed(() => (user.value as any)?.role === "admin");
 const initials = computed(() => (user.value?.display_name || user.value?.username || "U").substring(0, 2).toUpperCase());
 const isRefreshing = computed(() => isLoading.value || analyticsLoading.value);
-const lastComposeMode = computed(() => props.composeMode || "single");
 
 const statusChips = computed(() => [
   { key: "all", label: "Tất cả", count: taskStats.value.total, dot: "bg-slate-400", active: "bg-slate-800 text-white border-slate-800" },
@@ -180,12 +137,6 @@ const statusChips = computed(() => [
   { key: "success", label: "Đã đăng", count: taskStats.value.success, dot: "bg-emerald-500", active: "bg-emerald-50 text-emerald-800 border-emerald-300" },
   { key: "failed", label: "Thất bại", count: taskStats.value.failed, dot: "bg-rose-500", active: "bg-rose-50 text-rose-800 border-rose-300" }
 ]);
-
-const composeModes: Array<{ key: ComposeMode; label: string; hint: string }> = [
-  { key: "single", label: "Đăng thường", hint: "1 video, chọn một hoặc nhiều Fanpage" },
-  { key: "bulk", label: "Đăng hàng loạt", hint: "Nhiều video cùng lúc, chung khung giờ" },
-  { key: "multipage", label: "Đăng theo Fanpage", hint: "Mỗi Fanpage một nội dung riêng" }
-];
 
 // Đường biểu đồ mini từ chuỗi số liệu theo ngày (lấy tối đa 14 ngày gần nhất)
 const spark = computed(() => {
@@ -202,15 +153,14 @@ const formatCompact = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : new Intl.NumberFormat("vi-VN", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
 // Menu con: chỉ mở một cái, bấm ra ngoài thì đóng
-const openMenu = ref<"compose" | "more" | null>(null);
-const composeMenuRef = ref<HTMLElement | null>(null);
+const openMenu = ref<"more" | null>(null);
 const moreMenuRef = ref<HTMLElement | null>(null);
-const toggleMenu = (m: "compose" | "more") => {
+const toggleMenu = (m: "more") => {
   openMenu.value = openMenu.value === m ? null : m;
 };
 const onDocClick = (e: MouseEvent) => {
   const t = e.target as Node;
-  if (composeMenuRef.value?.contains(t) || moreMenuRef.value?.contains(t)) return;
+  if (moreMenuRef.value?.contains(t)) return;
   openMenu.value = null;
 };
 onMounted(() => document.addEventListener("click", onDocClick));
@@ -219,10 +169,6 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
 const pickFilter = (key: string) => {
   activeFilter.value = key;
   emit("go-home");
-};
-const pickCompose = (mode: ComposeMode) => {
-  openMenu.value = null;
-  emit("open-compose", mode);
 };
 const pickPanel = (panel: PanelKey) => {
   openMenu.value = null;

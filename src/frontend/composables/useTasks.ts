@@ -14,6 +14,8 @@ const lastRefreshedAt = ref<number>(0);
 // Tự làm mới: chỉ hỏi số phiên bản (rẻ, 1 dòng từ index), chỉ tải lại cả danh sách khi dữ liệu thật sự đổi
 const FAST_POLL_MS = 30000; // 30 giây khi có bài đang xử lý hoặc sắp đăng
 const IDLE_POLL_MS = 60000; // 60 giây khi bình thường
+/** Lịch đăng hiện bài chưa xong + bài đã xong trong N ngày gần đây (không đọc lại toàn bộ bài cũ) */
+export const BOARD_RECENT_DAYS = 3;
 let knownVersion = -1;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let autoRefreshUsers = 0;
@@ -26,7 +28,7 @@ export function useTasks() {
     if (!silent) isLoading.value = true;
     try {
       const [res, version] = await Promise.all([
-        api.getTasks(),
+        api.getTasks({ recent_days: BOARD_RECENT_DAYS }),
         api.getTaskVersion().catch(() => -1)
       ]);
       tasks.value = res.tasks || [];

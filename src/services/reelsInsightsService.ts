@@ -955,8 +955,9 @@ export async function syncDueReelsInsightsBatch(
         `SELECT id, owner_user_id
          FROM tasks
          WHERE status = 'success'
-           AND analytics_next_sync_at IS NOT NULL
-           AND analytics_next_sync_at != ''
+           -- "> ''" (không dùng "!= ''") để index (status, analytics_next_sync_at) nhảy qua các bài
+           -- chưa từng đồng bộ thay vì đọc rồi loại từng dòng
+           AND analytics_next_sync_at > ''
            AND analytics_next_sync_at <= ?
            AND video_id != ''
          ORDER BY analytics_next_sync_at ASC

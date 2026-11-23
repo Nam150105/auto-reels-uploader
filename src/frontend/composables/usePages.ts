@@ -6,6 +6,8 @@ import { useToast } from "./useToast";
 const pages = ref<FacebookPageRecord[]>([]);
 const accounts = ref<FacebookAccount[]>([]);
 const isLoading = ref<boolean>(false);
+/** Màn hình Quản lý Fanpage đang mở -> mọi lần tải lại Page đều kèm số bài (chỉ lúc đó mới cần) */
+const wantPageCounts = ref<boolean>(false);
 const searchQuery = ref<string>("");
 const isConnectModalOpen = ref<boolean>(false);
 const connectTargetAccountId = ref<string | null>(null);
@@ -17,11 +19,11 @@ const missingPagesNotice = ref<{ accountName: string; pageNames: string[] } | nu
 export function usePages() {
   const toast = useToast();
 
-  const loadPages = async () => {
+  const loadPages = async (withCounts = wantPageCounts.value) => {
     isLoading.value = true;
     try {
       const [pagesRes, accountsRes] = await Promise.all([
-        api.getPages().catch((err) => {
+        api.getPages(withCounts).catch((err) => {
           console.warn("getPages fallback to empty array:", err);
           return [];
         }),
@@ -218,6 +220,7 @@ export function usePages() {
   };
 
   return {
+    wantPageCounts,
     pages,
     accounts,
     pagesViewTab,

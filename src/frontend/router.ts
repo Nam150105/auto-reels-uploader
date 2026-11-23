@@ -1,70 +1,32 @@
 import { createRouter, createWebHistory, type LocationQuery } from "vue-router";
-import type { AppTab } from "@shared/types";
-import ComposeView from "./components/composer/ComposeView.vue";
-import ScheduleView from "./components/schedule/ScheduleView.vue";
-import AnalyticsView from "./components/analytics/AnalyticsView.vue";
-import FanpageView from "./components/pages/FanpageView.vue";
-import AdminView from "./components/admin/AdminView.vue";
 
-/** Các khung mở đè lên Lịch đăng */
+/**
+ * Toàn bộ ứng dụng là MỘT màn hình (App.vue): Đăng theo Fanpage + Lịch đăng.
+ * URL chỉ dùng để mở các khung quản lý ít dùng đè lên màn hình chính:
+ *   /analytics          Thống kê chi tiết
+ *   /pages, /pages/accounts  Quản lý Fanpage / Tài khoản Facebook Admin
+ *   /admin/...          Quản trị hệ thống
+ * Mọi đường dẫn cũ khác (/compose/..., /schedule, ...) đưa về màn hình chính /page.
+ * The Worker returns index.html for these paths (SPA_ROUTE_ROOTS in src/index.ts).
+ */
 export type PanelKey = "analytics" | "pages" | "accounts" | "admin";
-
-export type ComposeMode = "single" | "bulk" | "multipage";
-export const COMPOSE_MODES: ComposeMode[] = ["single", "bulk", "multipage"];
 
 // Keeps ?oauth_status=... when an old URL redirects to a new one
 const keepQuery = (path: string) => (to: { query: LocationQuery; hash: string }) => ({ path, query: to.query, hash: to.hash });
 
-/**
- * Web router (HTML5 history): each screen has its own URL.
- * The Worker returns index.html for these paths (SPA_ROUTE_ROOTS in src/index.ts).
- */
+// App.vue tự hiển thị theo route (không dùng <RouterView>), mỗi route chỉ cần một component rỗng
+const Empty = { render: () => null };
+
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", redirect: keepQuery("/page") },
-    { path: "/page", name: "workspace", component: { template: "<div />" }, meta: { tab: "compose" } },
-    { path: "/compose", redirect: keepQuery("/page") },
-    {
-      path: "/compose/:mode(single|bulk|multipage)",
-      name: "compose",
-      component: ComposeView,
-      meta: { tab: "compose" }
-    },
-    {
-      path: "/schedule",
-      name: "schedule",
-      component: ScheduleView,
-      meta: { tab: "schedule" },
-      alias: ["/schedules", "/reels", "/posts", "/comments"]
-    },
-    {
-      path: "/analytics",
-      name: "analytics",
-      component: AnalyticsView,
-      meta: { tab: "analytics" },
-      alias: ["/insights"]
-    },
-    {
-      path: "/pages/:section(accounts)?",
-      name: "pages",
-      component: FanpageView,
-      meta: { tab: "pages" }
-    },
-    {
-      path: "/admin/:section(users|sessions|api)?",
-      name: "admin",
-      component: AdminView,
-      meta: { tab: "admin" }
-    },
+    { path: "/page", name: "workspace", component: Empty },
+    { path: "/compose/:mode?", redirect: keepQuery("/page") },
+    { path: "/:old(schedule|schedules|reels|posts|comments)", redirect: keepQuery("/page") },
+    { path: "/analytics", name: "analytics", component: Empty, alias: ["/insights"] },
+    { path: "/pages/:section(accounts)?", name: "pages", component: Empty },
+    { path: "/admin/:section(users|sessions|api)?", name: "admin", component: Empty },
     { path: "/:pathMatch(.*)*", redirect: "/page" }
   ]
 });
-
-export const TAB_PATHS: Record<AppTab, string> = {
-  compose: "/compose/single",
-  schedule: "/schedule",
-  analytics: "/analytics",
-  pages: "/pages",
-  admin: "/admin"
-};

@@ -1,10 +1,10 @@
 <template>
-  <div class="h-full flex flex-col lg:flex-row gap-4 p-4 lg:p-6 overflow-y-auto select-none">
+  <div class="h-full flex flex-col lg:flex-row gap-3 p-3 lg:p-4 overflow-y-auto lg:overflow-hidden select-none">
     <!-- LEFT: Step 1 (shared time) + Step 2 (pages) -->
-    <div class="w-full lg:w-72 flex flex-col gap-4 flex-shrink-0 lg:max-h-[85vh]">
+    <div class="w-full lg:w-72 flex flex-col gap-3 flex-shrink-0 lg:min-h-0 lg:h-full">
       <!-- Step 1: shared publish time -->
-      <div class="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
-        <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2 mb-3">
+      <div class="bg-white rounded-2xl border border-slate-200/80 p-3 shadow-xs shrink-0">
+        <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2 mb-2">
           <span class="w-5 h-5 rounded-full bg-blue-600 text-white text-[11px] font-extrabold flex items-center justify-center">1</span>
           <span>Thời gian đăng chung</span>
         </h3>
@@ -24,7 +24,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
           </svg>
         </button>
-        <p class="mt-2 text-[11px]" :class="slotAllowed ? 'text-slate-400' : 'text-rose-600 font-medium'">
+        <p class="mt-1.5 text-[11px]" :class="slotAllowed ? 'text-slate-400 lg:hidden' : 'text-rose-600 font-medium'">
           {{ slotAllowed ? "Áp dụng cho tất cả Fanpage bên dưới (GMT+7)." : "Thời gian này đã qua. Vui lòng chọn giờ mới." }}
         </p>
       </div>
@@ -45,7 +45,7 @@
     </div>
 
     <!-- RIGHT: Step 3, one row per selected page -->
-    <div class="flex-1 min-w-0 bg-white rounded-2xl border border-slate-200/80 shadow-xs flex flex-col min-h-[350px] lg:max-h-[85vh]">
+    <div class="flex-1 min-w-0 bg-white rounded-2xl border border-slate-200/80 shadow-xs flex flex-col min-h-[350px] lg:min-h-0 lg:h-full">
       <div class="flex flex-wrap items-center justify-between gap-3 p-3.5 border-b border-slate-100">
         <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2">
           <span class="w-5 h-5 rounded-full bg-blue-600 text-white text-[11px] font-extrabold flex items-center justify-center">3</span>

@@ -350,13 +350,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { usePages } from "../../composables/usePages";
 import type { FacebookAccount, FacebookPageRecord } from "@shared/types";
 
 defineEmits<{ (e: "open-connect", accountId: string | null): void }>();
 
-const { pages, accounts, isLoading, syncPages, deleteAccount, deletePages, pagesViewTab, missingPagesNotice } = usePages();
+const { pages, accounts, isLoading, syncPages, deleteAccount, deletePages, pagesViewTab, missingPagesNotice, loadPages, wantPageCounts } = usePages();
+
+// Số bài chờ / đã đăng / lỗi của từng Page chỉ tải khi mở màn hình này (tốn lượt đọc DB)
+onMounted(() => {
+  wantPageCounts.value = true;
+  loadPages(true);
+});
+onUnmounted(() => {
+  wantPageCounts.value = false;
+});
 
 const tabs = computed(() => [
   { key: "pages" as const, label: "Fanpage", count: pages.value.length },
