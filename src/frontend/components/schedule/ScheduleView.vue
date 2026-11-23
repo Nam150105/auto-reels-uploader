@@ -1,5 +1,5 @@
 <template>
-  <div ref="scrollerRef" class="h-full flex flex-col px-4 lg:px-6 pb-6 overflow-y-auto select-none" @scroll.passive="onScroll">
+  <div class="flex flex-col px-4 lg:px-6 pb-6 select-none">
     <!-- Thanh lọc cố định khi cuộn: tìm kiếm, khung giờ, thao tác hàng loạt -->
     <div class="sticky top-0 z-10 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-4 pb-3 bg-[#f8fafc]/95 backdrop-blur-sm space-y-2">
       <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-white p-2.5 rounded-2xl border border-slate-200/80 shadow-xs">
@@ -291,19 +291,6 @@
       </div>
     </div>
 
-    <!-- Nút lên đầu trang: hiện khi đã cuộn xuống sâu -->
-    <button
-      v-if="showBackToTop"
-      type="button"
-      class="fixed bottom-6 right-6 z-10 w-11 h-11 rounded-full bg-slate-900/85 hover:bg-slate-900 text-white shadow-lg flex items-center justify-center transition"
-      title="Lên đầu trang"
-      @click="scrollToTop"
-    >
-      <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
-      </svg>
-    </button>
-
     <!-- Edit Task Modal -->
     <EditTaskModal
       :isOpen="isEditModalOpen"
@@ -365,14 +352,6 @@ const allVisibleSelected = computed(
 const toggleSelectAllVisible = () => {
   selectedTaskIds.value = allVisibleSelected.value ? [] : visibleTasks.value.map((t) => t.id);
 };
-
-// Nút lên đầu trang
-const scrollerRef = ref<HTMLElement | null>(null);
-const showBackToTop = ref(false);
-const onScroll = () => {
-  showBackToTop.value = (scrollerRef.value?.scrollTop || 0) > 400;
-};
-const scrollToTop = () => scrollerRef.value?.scrollTo({ top: 0, behavior: "smooth" });
 
 const formatClock = (ms: number) =>
   new Date(ms).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", hour12: false });
