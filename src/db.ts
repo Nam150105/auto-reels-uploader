@@ -29,7 +29,9 @@ import { parseVnScheduleToUtc, formatUtcToVn, nowUtcSeconds } from "./utils/time
 import { sanitizeSensitiveText } from "./utils/sanitize.ts";
 
 let schemaInitialized = false;
-let schemaInitPromise: Promise<void> | null = null;
+// Không dùng chung Promise khởi tạo giữa các request: trên Workers, Promise do một request tạo ra
+// sẽ treo vĩnh viễn nếu request đó kết thúc trước (handle_cross_request_promise_resolution),
+// làm mọi request sau trong cùng isolate lỗi 503. Mỗi request tự chạy (lệnh DDL đều IF NOT EXISTS).
 
 export class TaskLockError extends Error {
   public readonly code: string;
@@ -487,9 +489,8 @@ export async function ensureDatabaseInitialized(
   encryptionKey: string
 ): Promise<void> {
   if (schemaInitialized) return;
-  if (schemaInitPromise) return schemaInitPromise;
 
-  schemaInitPromise = (async () => {
+  await (async () => {
     try {
       const fastCheck = await db
         .prepare("SELECT id FROM users WHERE username = ? LIMIT 1")
@@ -805,12 +806,6 @@ export async function ensureDatabaseInitialized(
 
   schemaInitialized = true;
   })();
-
-  try {
-    await schemaInitPromise;
-  } finally {
-    schemaInitPromise = null;
-  }
 }
 
 // ==========================================
